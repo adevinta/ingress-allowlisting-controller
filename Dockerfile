@@ -5,14 +5,13 @@ WORKDIR /workspace
 # Copy the Go Modules manifests
 COPY go.mod go.mod
 COPY go.sum go.sum
-COPY vendor/ vendor/
 
 # Copy the go source
 COPY cmd/ cmd/
 COPY pkg/ pkg/
 
 # Build
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -mod=vendor -a -o manager cmd/ingress-allowlisting-controller/main.go
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=amd64 GO111MODULE=on go build -a -o manager cmd/ingress-allowlisting-controller/main.go
 
 FROM ubuntu as ca-certificates
 
