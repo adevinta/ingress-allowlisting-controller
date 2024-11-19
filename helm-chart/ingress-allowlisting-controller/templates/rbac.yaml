@@ -1,0 +1,58 @@
+apiVersion: rbac.authorization.k8s.io/v1 
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-admin: "true" 
+    rbac.authorization.k8s.io/aggregate-to-edit: "true" 
+rules:
+- apiGroups: 
+  - "ipam.adevinta.com"
+{{ if .Values.legacyGroupVersion }}
+  - {{ splitList "/" .Values.legacyGroupVersion | first | quote }}
+{{ end }}
+  resources:
+  - "cidrs"
+  - "clustercidrs"
+  - "cidrs/status"
+  - "clustercidrs/status"
+  verbs: ["get", "list", "watch", "create", "update", "patch"]
+- apiGroups: ["extensions"]
+  resources: ["ingresses"]
+  verbs: ["list","get", "update", "watch"]
+- apiGroups: ["networking.k8s.io"]
+  resources: ["ingresses"]
+  verbs: ["list","get", "update", "watch"]
+- apiGroups: [""]
+  resources: ["events"]
+  verbs: ["list","get", "update", "create", "watch"]
+- apiGroups: [""]
+  resources: ["secrets", "configmaps"]
+  verbs: ["get", "watch", "list"]
+{{- if .Values.gateway.enabled }}
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways"]
+  verbs: ["list","get", "watch"]
+- apiGroups: ["security.istio.io"]
+  resources: ["authorizationpolicies"]
+  verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
+{{- end }}
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+    name: {{ .Release.Name }}
+roleRef:
+    apiGroup: rbac.authorization.k8s.io
+    kind: ClusterRole
+    name: {{ .Release.Name }}
+subjects:
+- kind: ServiceAccount
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
