@@ -1,0 +1,21 @@
+replicaCount: 1
+image:
+  fullyQualifiedURL: IMG
+
+pullPolicy: IfNotPresent
+resources:
+  limits:
+    cpu: 100m
+    memory: 128Mi
+  requests:
+    cpu: 100m
+    memory: 128Mi
+
+gateway:
+  enabled: false
+
+podMonitor:
+  additionalLabels: {}
+
+legacyGroupVersion: "ipam.legacy.com/v1alpha1"
+annotationPrefix: "ipam.adevinta.com"

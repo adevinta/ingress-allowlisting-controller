@@ -1,0 +1,23 @@
+{{ if .Capabilities.APIVersions.Has "monitoring.coreos.com/v1/PodMonitor" }}
+apiVersion: monitoring.coreos.com/v1
+kind: PodMonitor
+metadata:
+  labels:
+    app.kubernetes.io/name: "{{ .Release.Name }}"
+    {{- with .Values.podMonitor.additionalLabels }}
+    {{ toYaml . | indent 4 }}
+    {{- end }}
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+spec:
+  namespaceSelector:
+    matchNames:
+      - "{{ .Release.Namespace }}"
+  podMetricsEndpoints:
+    - honorLabels: true
+      interval: 30s
+      path: /metrics
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Release.Name }}"
+{{ end }}
