@@ -1,0 +1,127 @@
+---
+apiVersion: apiextensions.k8s.io/v1
+kind: CustomResourceDefinition
+metadata:
+  annotations:
+    controller-gen.kubebuilder.io/version: v0.16.4
+  name: clustercidrs.ipam.adevinta.com
+spec:
+  group: ipam.adevinta.com
+  names:
+    kind: ClusterCIDRs
+    listKind: ClusterCIDRsList
+    plural: clustercidrs
+    singular: clustercidrs
+  scope: Cluster
+  versions:
+  - name: v1alpha1
+    schema:
+      openAPIV3Schema:
+        description: ClusterCIDRs is the Schema for the ClusterCIDRs API
+        properties:
+          apiVersion:
+            description: |-
+              APIVersion defines the versioned schema of this representation of an object.
+              Servers should convert recognized schemas to the latest internal value, and
+              may reject unrecognized values.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#resources
+            type: string
+          kind:
+            description: |-
+              Kind is a string value representing the REST resource this object represents.
+              Servers may infer this from the endpoint the client submits requests to.
+              Cannot be updated.
+              In CamelCase.
+              More info: https://git.k8s.io/community/contributors/devel/sig-architecture/api-conventions.md#types-kinds
+            type: string
+          metadata:
+            type: object
+          spec:
+            description: CIDRsSpec defines the desired state of CIDRs
+            properties:
+              cidrs:
+                items:
+                  type: string
+                type: array
+              location:
+                properties:
+                  headersFrom:
+                    description: HeadersFrom holds the names of secrets where the
+                      headers should be pulled from
+                    items:
+                      properties:
+                        configMapRef:
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          required:
+                          - name
+                          - namespace
+                          type: object
+                        secretRef:
+                          properties:
+                            name:
+                              type: string
+                            namespace:
+                              type: string
+                          required:
+                          - name
+                          - namespace
+                          type: object
+                      type: object
+                    type: array
+                  jsonPath:
+                    description: |-
+                      JSONPath is an expression to convert the response to a list of CIDR string
+                      as expected by the CIDRs status
+                    type: string
+                  uri:
+                    description: |-
+                      URI should be a URL to fetch the CIDRs from
+                      remote services.
+                      The response should be a JSON array of strings, or transformable to a JSON array of strings
+                      through JSONPath.
+                      The response status code must be 200.
+                    type: string
+                type: object
+              requeueAfter:
+                type: string
+            type: object
+          status:
+            description: CIDRsStatus defines the observed state of CIDRs
+            properties:
+              cidrs:
+                items:
+                  type: string
+                type: array
+              conditions:
+                items:
+                  properties:
+                    lastTransitionTime:
+                      format: date-time
+                      type: string
+                    message:
+                      type: string
+                    status:
+                      type: string
+                    type:
+                      type: string
+                  required:
+                  - lastTransitionTime
+                  - message
+                  - type
+                  type: object
+                type: array
+              lastUpdate:
+                format: date-time
+                type: string
+              state:
+                type: string
+            type: object
+        type: object
+    served: true
+    storage: true
+    subresources:
+      status: {}
