@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  fullyQualifiedURL: IMG
+  fullyQualifiedURL: ghcr.io/adevinta/ingress-allowlisting-controller:de26113a795d2b7b4f9011ebf2c68a08117b613e
 
 pullPolicy: IfNotPresent
 resources:
@@ -17,5 +17,6 @@ gateway:
 podMonitor:
   additionalLabels: {}
 
-legacyGroupVersion: "ipam.legacy.com/v1alpha1"
+# legacyGroupVersion: "ipam.legacy.com/v1alpha1"
+legacyGroupVersion: ""
 annotationPrefix: "ipam.adevinta.com"
