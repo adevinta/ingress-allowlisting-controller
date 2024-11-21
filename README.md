@@ -1,10 +1,43 @@
-# ingress-allowlisting-controller
-A k8s controller that configures ingress allowlisting based on a custom CRD
+# Ingress Allowlisting Controller
+The Ingress Allowlisting Controller is a Kubernetes controller designed to manage allowlisting rules for Kubernetes Ingress resources. It ensures that only trusted IPs or ranges can access specific ingress endpoints, enhancing security and compliance.
+This k8s controller configures ingress allowlisting based on a custom CRD
 
-## Sample annotation
+## Installation 
+
+### Helm Installation (Using Local Chart)
+To install the ingress-allowlisting-controller using the Helm chart provided in the repository, follow these steps:
+
+1. Clone the Repository
+Clone the repository to your local machine:
+```bash
+git clone https://github.com/adevinta/ingress-allowlisting-controller.git
+cd ingress-allowlisting-controller/helm-charts/ingress-allowlisting-controller
+```
+2. Install the Chart
+Install the controller using the local Helm chart. Customize the installation by specifying the namespace and configuration if needed:
+
+```bash
+helm install ingress-allowlisting-controller ./ --namespace ingress-allowlisting --create-namespace
+```
+3. Verify the Installation
+Ensure the controller is running in your cluster:
+
+```bash
+kubectl get pods -n ingress-allowlisting
+```
+You should see a pod named ingress-allowlisting-controller running.
+
+## Usage
+
+Once installed, the ingress-allowlisting-controller will monitor and apply allowlisting rules to Kubernetes Ingress resources.
+
+### Example Ingress Resource
+Below are examples of an Ingress resource with allowlisting annotations, using both the namespace level CIDR CRD as well
+as the cluster level CRD
+
 Namespaced version of CIDRs object
 ```yaml
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
@@ -14,7 +47,7 @@ metadata:
 Cluster version of the CIDRs object
 
 ```yaml
-apiVersion: extensions/v1beta1
+apiVersion: networking.k8s.io/v1
 kind: Ingress
 metadata:
   annotations:
@@ -25,7 +58,8 @@ The content of the annotations can be a comma-separated list:
 
 `MyCidrsObject,MyCidrsObject2,MyCidrsObject3`
 
-## Sample CRD object
+### Example CIDR and ClusterCIDR CRDs
+
 ```yaml
 apiVersion: ipam.adevinta.com/v1alpha1
 kind: CIDRs
@@ -49,7 +83,7 @@ spec:
     - 180.163.57.128/26
 ```
 
-## Fetching CIDRs from remote sources
+### Fetching CIDRs from remote sources
 
 Ingress-allowlister supports synchronizing CIDRs from remote http sources.
 To use this feature, configure the CIDRs or ClusterCIDRs object as follows
@@ -92,7 +126,7 @@ data:
   Authentication: $(echo "Bearer $token" | base64)
 ```
 
-### Fetching CIDRs from github
+#### Fetching CIDRs from github
 
 To fetch CIDRs stored in github repositories, you can use the github API endpoint:
 
