@@ -16,6 +16,18 @@ spec:
       labels:
         app.kubernetes.io/name: "{{ .Release.Name }}"
     spec:
+{{- with .Values.tolerations }}
+      tolerations:
+{{ toYaml . | indent 6 }}
+{{- end }}
+{{- with .Values.nodeSelector }}
+      nodeSelector:
+{{ toYaml . | indent 8 }}
+{{- end }}
+{{- with .Values.affinity }}
+      affinity:
+{{ toYaml . | indent 8 }}
+{{- end }}
       serviceAccountName: {{ .Release.Name }}
       containers:
       - name: {{ .Chart.Name }}
