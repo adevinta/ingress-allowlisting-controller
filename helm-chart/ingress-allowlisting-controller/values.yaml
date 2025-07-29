@@ -1,6 +1,6 @@
 replicaCount: 1
 image:
-  fullyQualifiedURL: ghcr.io/adevinta/ingress-allowlisting-controller:de26113a795d2b7b4f9011ebf2c68a08117b613e
+  fullyQualifiedURL: ghcr.io/adevinta/ingress-allowlisting-controller:latest
 
 pullPolicy: IfNotPresent
 resources:
