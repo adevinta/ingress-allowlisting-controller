@@ -100,7 +100,7 @@ func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nameP
 			&ipamv1alpha1.ClusterCIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
 	if namePrefix != "" {
-		build = build.Named(namePrefix + "-gaetway")
+		build = build.Named(namePrefix + "-gateway")
 	}
 	if r.LegacyGroupVersion != "" {
 		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
