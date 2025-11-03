@@ -58,6 +58,59 @@ The content of the annotations can be a comma-separated list:
 
 `MyCidrsObject,MyCidrsObject2,MyCidrsObject3`
 
+### Example NetworkPolicy Resource
+Below are examples of NetworkPolicy resources with different `policyTypes` (Ingress or Egress).
+
+NetworkPolicy with `ingress` with namespaced version of CIDRs object
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: ingress-allow-myips
+  annotations:
+    ipam.adevinta.com/allowlist-group: MyCidrsObject
+spec:
+  podSelector: {} # Applies to all pods in namespace
+  policyTypes:
+  - Ingress
+# Controller will populate spec.ingress[] with ipBlock rules here
+```
+
+NetworkPolicy with `egress` using a cluster-scoped CIDRs object:
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: egress-allow-dynamodb
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: aws-dynamodb
+spec:
+  podSelector: {} # Applies to all pods in namespace
+  policyTypes:
+  - Egress
+# Controller will populate spec.egress[] with ipBlock rules here
+```
+
+##### Key Points:
+
+* You define: `podSelector` and `policyTypes`
+* Controller manages: Automatically populates and maintains the `spec.ingress` or `spec.egress` sections with `ipBlock` rules
+* Overwrite behavior: Any existing `ipBlock` rules in these sections will be overwritten by the controller
+* Dual policyTypes: If both `Ingress` and `Egress` are specified, the controller will populate both sections
+
+```yaml
+spec:
+  ingress:        # For Ingress policies
+  - from:
+    - ipBlock:
+        cidr: x.x.x.x/y
+  egress:         # For Egress policies  
+  - to:
+    - ipBlock:
+        cidr: x.x.x.x/y
+```
+
 ### Example CIDR and ClusterCIDR CRDs
 
 ```yaml

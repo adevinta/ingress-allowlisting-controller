@@ -21,7 +21,11 @@ rules:
   resources: ["ingresses"]
   verbs: ["list","get", "update", "watch"]
 - apiGroups: ["networking.k8s.io"]
-  resources: ["ingresses"]
+  resources:
+  - "ingresses"
+{{- if .Values.networkpolicy.enabled }}
+  - "networkpolicies"
+{{- end }}
   verbs: ["list","get", "update", "watch"]
 - apiGroups: [""]
   resources: ["events"]

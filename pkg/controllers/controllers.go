@@ -28,7 +28,7 @@ func (e *setupError) Log(logger logr.Logger) {
 	logger.Error(e, "unable to create controller", "controller", "Ingress")
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
+func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
 	if err := (&IngressReconciler{
@@ -80,6 +80,17 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, l
 			CidrResolver:       cidrResolver,
 		}
 		if err := gatewayReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+			return &setupError{error: err, controllerType: "Gateway"}
+		}
+	}
+	if networkPolicySupportEnabled {
+		networkPolicyReconciler := NetworkPolicyReconciler{
+			Client:             mgr.GetClient(),
+			Scheme:             mgr.GetScheme(),
+			LegacyGroupVersion: legacyGroupVersion,
+			CidrResolver:       cidrResolver,
+		}
+		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
 		}
 	}
