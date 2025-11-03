@@ -37,6 +37,9 @@ spec:
 {{- if .Values.gateway.enabled }}
         - "--gateway-support-enabled"
 {{- end }}
+{{- if .Values.networkpolicy.enabled }}
+        - "--networkpolicy-support-enabled"
+{{- end }}
 {{ with .Values.legacyGroupVersion }}
         - "--legacy-group-version={{ . }}"
 {{- end }}
