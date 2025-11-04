@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -109,7 +108,6 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).
 		For(&netv1.NetworkPolicy{}).
-		Owns(&istiosecurityv1.AuthorizationPolicy{}).
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newNetworkPoliciesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).
