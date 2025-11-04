@@ -51,6 +51,9 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	updatedNetworkPolicy, err := r.reconcileNetworkPolicy(ctx, networkpolicy)
 	if err != nil {
+		if err == r.CidrResolver.AnnotationNotFoundError() {
+			return ctrl.Result{}, nil
+		}
 		log.Error(err, "Error creating or updating networkpolicy")
 		return ctrl.Result{}, err
 	}
