@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/json"
@@ -103,18 +104,71 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
-func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	if processing.JSONPath != "" {
+// trimSpaces removes leading and trailing spaces from each string in the slice
+func trimSpaces(values []string) []string {
+	result := make([]string, 0, len(values))
+	for _, v := range values {
+		trimmed := strings.TrimSpace(v)
+		if trimmed != "" {
+			result = append(result, trimmed)
+		}
+	}
+	return result
+}
 
+func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	// Default to YAML format if not specified (backward compatibility)
+	format := processing.Format
+	if format == "" {
+		format = ipamv1alpha1.YAML
+	}
+
+	// Handle simple text formats (CSV and LSV)
+	switch format {
+	case ipamv1alpha1.CommaSeparatedValues:
+		data, err := io.ReadAll(reader)
+		if err != nil {
+			return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
+		}
+		return trimSpaces(strings.Split(string(data), ",")), nil
+
+	case ipamv1alpha1.LineSeparatedValues:
+		var values []string
+		scanner := bufio.NewScanner(reader)
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
+				values = append(values, line)
+			}
+		}
+		if err := scanner.Err(); err != nil {
+			return nil, fmt.Errorf("failed to read line-separated values: %w", err)
+		}
+		return values, nil
+
+	case ipamv1alpha1.YAML:
+		// Process YAML format (existing logic)
+		return processYAMLFormat(reader, processing)
+
+	default:
+		return nil, fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+// processYAMLFormat handles YAML processing with optional JSONPath
+func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	// If JSONPath is specified, use it to extract data
+	if processing.JSONPath != "" {
 		parser := jsonpath.New("cidrs")
 		err := parser.Parse(processing.JSONPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
 		}
+
 		var data interface{}
 		err = yaml.NewDecoder(reader).Decode(&data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode json: %w", err)
+			return nil, fmt.Errorf("failed to decode yaml: %w", err)
 		}
 
 		parser.AllowMissingKeys(true)
@@ -122,6 +176,7 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 		if err != nil {
 			return nil, fmt.Errorf("failed to find results: %w", err)
 		}
+
 		cidrValues := []string{}
 		for _, result := range results {
 			for _, value := range result {
@@ -149,10 +204,11 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 		return cidrValues, nil
 	}
 
+	// Default YAML decoding (expecting a list of strings)
 	cidrValues := []string{}
 	err := yaml.NewDecoder(reader).Decode(&cidrValues)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode json CIDRs: %w", err)
+		return nil, fmt.Errorf("failed to decode yaml CIDRs: %w", err)
 	}
 	return cidrValues, nil
 }

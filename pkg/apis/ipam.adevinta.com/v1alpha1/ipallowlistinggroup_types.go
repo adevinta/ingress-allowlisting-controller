@@ -41,6 +41,10 @@ type Processing struct {
 	// as expected by the CIDRs status
 	// +kubebuilder:validation:Optional
 	JSONPath string `json:"jsonPath,omitempty" yaml:"jsonPath,omitempty"`
+	// Format specifies the format of the data
+	// +kubebuilder:default=YAML
+	// +optional
+	Format Format `json:"format,omitempty"`
 }
 
 type CIDRsSource struct {
