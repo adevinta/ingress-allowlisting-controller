@@ -222,7 +222,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, "", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, "", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -294,7 +294,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, "", t.Name(), "legacy.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, "", t.Name(), "legacy.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -363,7 +363,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -448,7 +448,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
