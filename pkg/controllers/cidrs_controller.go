@@ -128,84 +128,92 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 	switch format {
 	// Handle simple text formats CSV
 	case ipamv1alpha1.CommaSeparatedValues:
-		data := csv.NewReader(reader)
-		records, err := data.Read()
-		if err != nil {
-			return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
-		}
-		return trimSpaces(records), nil
-
+		return processCSV(reader, processing)
 	// Handle simple text formats LSV
 	case ipamv1alpha1.LineSeparatedValues:
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, fmt.Errorf("failed to read line-separated values: %w", err)
-		}
-
-		lines := trimSpaces(strings.Split(string(data), "\n"))
-
-		var values []string
-		for _, line := range lines {
-			if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
-				values = append(values, line)
-			}
-		}
-
-		return values, nil
-
+		return processLSV(reader, processing)
 	// Handle complex text formats
 	// * combined - when CVS contains coma and lines and descriptions
 	// * simple text between html/xml code
 	// * buffered so slower - not recommended, only edge cases
 	case ipamv1alpha1.CombinedSeparatedValues:
-		var values []string
-		var cidrs []string
-
-		tags := regexp.MustCompile(`<[^>]*>`)
-		separators := ",;-| "
-
-		// 1. Read all data from reader
-		data, err := io.ReadAll(reader)
-		if err != nil {
-			return nil, fmt.Errorf("Fail to read whole stream: %w", err)
-		}
-		wholePage := string(data)
-
-		// 2. Remove HTML/XML tags (replace with newline)
-		cleanWholePage := tags.ReplaceAllLiteral([]byte(wholePage), []byte("\n"))
-
-		// 3. Create a new scanner over the cleaned data and split words in line
-		scanner := bufio.NewScanner(bytes.NewReader(cleanWholePage))
-		for scanner.Scan() {
-			line := strings.TrimSpace(scanner.Text())
-			if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
-				result := strings.FieldsFunc(line, func(r rune) bool {
-					return strings.ContainsRune(separators, r)
-				})
-				values = append(values, trimSpaces(result)...)
-			}
-		}
-		if err := scanner.Err(); err != nil {
-			return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
-		}
-
-		// 4. try to extract only cidrs
-		for _, cidr := range values {
-			_, _, err := net.ParseCIDR(cidr)
-			if err == nil {
-				cidrs = append(cidrs, cidr)
-			}
-		}
-
-		return cidrs, nil
-
+		return processCombinedSV(reader, processing)
+	// Handle YAML format (existing logic)
 	case ipamv1alpha1.YAML:
-		// Process YAML format (existing logic)
 		return processYAMLFormat(reader, processing)
-
 	default:
 		return nil, fmt.Errorf("unsupported format: %s", format)
 	}
+}
+
+func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	data := csv.NewReader(reader)
+	records, err := data.Read()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
+	}
+	return trimSpaces(records), nil
+}
+
+func processLSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("failed to read line-separated values: %w", err)
+	}
+
+	lines := trimSpaces(strings.Split(string(data), "\n"))
+
+	var values []string
+	for _, line := range lines {
+		if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
+			values = append(values, line)
+		}
+	}
+
+	return values, nil
+}
+
+func processCombinedSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	var values []string
+	var cidrs []string
+
+	tags := regexp.MustCompile(`<[^>]*>`)
+	separators := ",;-| "
+
+	// 1. Read all data from reader
+	data, err := io.ReadAll(reader)
+	if err != nil {
+		return nil, fmt.Errorf("Fail to read whole stream: %w", err)
+	}
+	wholePage := string(data)
+
+	// 2. Remove HTML/XML tags (replace with newline)
+	cleanWholePage := tags.ReplaceAllLiteral([]byte(wholePage), []byte("\n"))
+
+	// 3. Create a new scanner over the cleaned data and split words in line
+	scanner := bufio.NewScanner(bytes.NewReader(cleanWholePage))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
+			result := strings.FieldsFunc(line, func(r rune) bool {
+				return strings.ContainsRune(separators, r)
+			})
+			values = append(values, trimSpaces(result)...)
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
+	}
+
+	// 4. try to extract only cidrs
+	for _, cidr := range values {
+		_, _, err := net.ParseCIDR(cidr)
+		if err == nil {
+			cidrs = append(cidrs, cidr)
+		}
+	}
+
+	return cidrs, nil
 }
 
 // processYAMLFormat handles YAML processing with optional JSONPath
