@@ -1,8 +1,6 @@
 package controllers
 
 import (
-	"bufio"
-	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
@@ -106,18 +104,6 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	return ctrl.Result{}, nil
 }
 
-// trimSpaces removes leading and trailing spaces from each string in the slice
-func trimSpaces(values []string) []string {
-	result := make([]string, 0, len(values))
-	for _, v := range values {
-		trimmed := strings.TrimSpace(v)
-		if trimmed != "" {
-			result = append(result, trimmed)
-		}
-	}
-	return result
-}
-
 func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
 	// Default to YAML format if not specified (backward compatibility)
 	format := processing.Format
@@ -126,18 +112,9 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 	}
 
 	switch format {
-	// Handle simple text formats CSV
+	// Handle simple text formats CSV/LVS
 	case ipamv1alpha1.CommaSeparatedValues:
 		return processCSV(reader, processing)
-	// Handle simple text formats LSV
-	case ipamv1alpha1.LineSeparatedValues:
-		return processLSV(reader, processing)
-	// Handle complex text formats
-	// * combined - when CVS contains coma and lines and descriptions
-	// * simple text between html/xml code
-	// * buffered so slower - not recommended, only edge cases
-	case ipamv1alpha1.CombinedSeparatedValues:
-		return processCombinedSV(reader, processing)
 	// Handle YAML format (existing logic)
 	case ipamv1alpha1.YAML:
 		return processYAMLFormat(reader, processing)
@@ -148,68 +125,25 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 
 func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
 	data := csv.NewReader(reader)
-	records, err := data.Read()
+	data.Comment = '#'        // Ignore comments
+	data.FieldsPerRecord = -1 // Disable strict field count checking
+	data.LazyQuotes = true    // Allow unescaped quotes inside fields
+	data.TrimLeadingSpace = true
+	csvArray, err := data.ReadAll()
 	if err != nil {
 		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
 	}
-	return trimSpaces(records), nil
-}
 
-func processLSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("failed to read line-separated values: %w", err)
-	}
-
-	lines := trimSpaces(strings.Split(string(data), "\n"))
-
-	var values []string
-	for _, line := range lines {
-		if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
-			values = append(values, line)
-		}
-	}
-
-	return values, nil
-}
-
-func processCombinedSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	var values []string
 	var cidrs []string
-
-	tags := regexp.MustCompile(`<[^>]*>`)
-	separators := ",;-| "
-
-	// 1. Read all data from reader
-	data, err := io.ReadAll(reader)
-	if err != nil {
-		return nil, fmt.Errorf("Fail to read whole stream: %w", err)
-	}
-	wholePage := string(data)
-
-	// 2. Remove HTML/XML tags (replace with newline)
-	cleanWholePage := tags.ReplaceAllLiteral([]byte(wholePage), []byte("\n"))
-
-	// 3. Create a new scanner over the cleaned data and split words in line
-	scanner := bufio.NewScanner(bytes.NewReader(cleanWholePage))
-	for scanner.Scan() {
-		line := strings.TrimSpace(scanner.Text())
-		if line != "" && !strings.HasPrefix(line, "#") { // Skip empty lines and comments
-			result := strings.FieldsFunc(line, func(r rune) bool {
-				return strings.ContainsRune(separators, r)
-			})
-			values = append(values, trimSpaces(result)...)
-		}
-	}
-	if err := scanner.Err(); err != nil {
-		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
-	}
-
-	// 4. try to extract only cidrs
-	for _, cidr := range values {
-		_, _, err := net.ParseCIDR(cidr)
-		if err == nil {
-			cidrs = append(cidrs, cidr)
+	for _, records := range csvArray {
+		for _, record := range records {
+			if record != "" {
+				cidr := strings.TrimSpace(record)
+				_, _, err := net.ParseCIDR(cidr)
+				if err == nil {
+					cidrs = append(cidrs, cidr)
+				}
+			}
 		}
 	}
 

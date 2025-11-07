@@ -9,7 +9,7 @@ import (
 type (
 	CIDRsStatusConditionType string
 	CIDRsState               string
-	// +kubebuilder:validation:Enum=CommaSeparatedValues;LineSeparatedValues;CombinedSeparatedValues;YAML
+	// +kubebuilder:validation:Enum=CommaSeparatedValues;YAML
 	Format string
 )
 
@@ -18,14 +18,8 @@ const (
 	CIDRsStateReady                  CIDRsState               = "Ready"
 	CIDRsStateUpdateFailed           CIDRsState               = "UpdateFailed"
 
-	// CommaSeparatedValues indicates data is comma-separated
+	// CommaSeparatedValues indicates data is comma-separated or line-separated
 	CommaSeparatedValues Format = "CommaSeparatedValues"
-
-	// LineSeparatedValues indicates data is line-separated (newline delimited)
-	LineSeparatedValues Format = "LineSeparatedValues"
-
-	// CombinedSeparatedValues indicates data is line and some other known chars separated (combination of line ande separators delimited)
-	CombinedSeparatedValues Format = "CombinedSeparatedValues"
 
 	// YAML indicates data is in YAML format (default for backward compatibility)
 	// it supports JSON as well  (YAML being a superset of JSON)

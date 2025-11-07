@@ -417,7 +417,7 @@ func TestCIDRsReconcileFromCommaSeparatedValues(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("10.0.0.0/8,192.168.0.0/16,,8.8.8.0/24"))
+		w.Write([]byte("10.0.0.0/8,192.168.0.0/16,,8.8.8.0/24\n8.8.8.8/24\n#1.1.1.1/24"))
 	}))
 	defer server.Close()
 
@@ -445,7 +445,7 @@ func TestCIDRsReconcileFromCommaSeparatedValues(t *testing.T) {
 
 	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
 
-	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16", "8.8.8.0/24"}, cidrs.GetStatus().CIDRs)
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16", "8.8.8.0/24", "8.8.8.8/24"}, cidrs.GetStatus().CIDRs)
 }
 
 func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
@@ -457,7 +457,7 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("200.1.1.1/24\r\n10.0.0.1/24\n\n#8.8.8.8/32\n1.1.1.1/32 \n\n10.0.0.1/24\r\n\n"))
+		w.Write([]byte("200.1.1.1/24\r\n10.0.0.1/24\n\n#8.8.8.8/32\n 1.1.1.1/32 \n\n10.0.0.1/24\r\n\n"))
 	}))
 	defer server.Close()
 
@@ -467,7 +467,7 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "LineSeparatedValues",
+					Format: "CommaSeparatedValues",
 				},
 			},
 		}},
@@ -507,7 +507,7 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CombinedSeparatedValues",
+					Format: "CommaSeparatedValues",
 				},
 			},
 		}},
@@ -547,47 +547,7 @@ func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CombinedSeparatedValues",
-				},
-			},
-		}},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
-	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
-	}
-
-	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
-	require.NoError(t, err)
-	require.Equal(t, result, reconcile.Result{})
-
-	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
-
-	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16", "8.8.8.0/24"}, cidrs.GetStatus().CIDRs)
-}
-
-func TestCIDRsReconcileFromCombinedHTMLSeparatedValues(t *testing.T) {
-	ctx := context.TODO()
-	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
-	require.NoError(t, err)
-
-	// Mock HTTP server
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("<HTML>List of networks:<br>10.0.0.0/8,we love that network<br>192.168.0.0/16, reminds us playing games locally<br>8.8.8.0/24 we dont trust that one</HTML>"))
-	}))
-	defer server.Close()
-
-	cidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
-		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
-			Location: ipamv1alpha1.CIDRsLocation{
-				URI: server.URL,
-				Processing: ipamv1alpha1.Processing{
-					Format: "CombinedSeparatedValues",
+					Format: "CommaSeparatedValues",
 				},
 			},
 		}},

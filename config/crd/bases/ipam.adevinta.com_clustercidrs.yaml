@@ -50,8 +50,6 @@ spec:
                     description: Format specifies the format of the data
                     enum:
                     - CommaSeparatedValues
-                    - LineSeparatedValues
-                    - CombinedSeparatedValues
                     - YAML
                     type: string
                   headersFrom:
