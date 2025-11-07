@@ -28,6 +28,7 @@ const (
 	CombinedSeparatedValues Format = "CombinedSeparatedValues"
 
 	// YAML indicates data is in YAML format (default for backward compatibility)
+	// it supports JSON as well  (YAML being a superset of JSON)
 	YAML Format = "YAML"
 )
 
