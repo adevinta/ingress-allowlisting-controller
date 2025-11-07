@@ -18,7 +18,7 @@ const (
 	CIDRsStateReady                  CIDRsState               = "Ready"
 	CIDRsStateUpdateFailed           CIDRsState               = "UpdateFailed"
 
-	// CommaSeparatedValues indicates data is comma-separated or line-separated
+	// CommaSeparatedValues indicates data is multi-line comma-separated
 	CommaSeparatedValues Format = "CommaSeparatedValues"
 
 	// YAML indicates data is in YAML format (default for backward compatibility)
