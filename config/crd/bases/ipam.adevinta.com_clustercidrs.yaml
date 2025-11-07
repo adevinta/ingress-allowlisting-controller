@@ -51,6 +51,7 @@ spec:
                     enum:
                     - CommaSeparatedValues
                     - LineSeparatedValues
+                    - CombinedSeparatedValues
                     - YAML
                     type: string
                   headersFrom:

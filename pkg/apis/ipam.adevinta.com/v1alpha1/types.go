@@ -1,7 +1,7 @@
 package v1alpha1
 
 // Format defines the format of the data returned by the HTTP source
-// +kubebuilder:validation:Enum=CommaSeparatedValues;LineSeparatedValues;YAML
+// +kubebuilder:validation:Enum=CommaSeparatedValues;LineSeparatedValues;CombinedSeparatedValues;YAML
 type Format string
 
 const (
@@ -10,6 +10,9 @@ const (
 
 	// LineSeparatedValues indicates data is line-separated (newline delimited)
 	LineSeparatedValues Format = "LineSeparatedValues"
+
+	// CombinedSeparatedValues indicates data is line and some other known chars separated (combination of line ande separators delimited)
+	CombinedSeparatedValues Format = "CombinedSeparatedValues"
 
 	// YAML indicates data is in YAML format (default for backward compatibility)
 	YAML Format = "YAML"
