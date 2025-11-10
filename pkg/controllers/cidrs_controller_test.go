@@ -408,7 +408,7 @@ func TestCIDRsReconcileFromGitHubPlainTextHTTPResponse(t *testing.T) {
 	assert.Equal(t, []string{"1.1.1.1/32", "10.0.0.1/24", "200.1.1.1/24"}, cidrs.GetStatus().CIDRs)
 }
 
-func TestCIDRsReconcileFromCommaSeparatedValues(t *testing.T) {
+func TestCIDRsReconcileFromCSV(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
 	scheme, err := Scheme("")
@@ -427,7 +427,7 @@ func TestCIDRsReconcileFromCommaSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CommaSeparatedValues",
+					Format: "CSV",
 				},
 			},
 		}},
@@ -467,7 +467,7 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CommaSeparatedValues",
+					Format: "CSV",
 				},
 			},
 		}},
@@ -507,7 +507,7 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CommaSeparatedValues",
+					Format: "CSV",
 				},
 			},
 		}},
@@ -547,7 +547,7 @@ func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: server.URL,
 				Processing: ipamv1alpha1.Processing{
-					Format: "CommaSeparatedValues",
+					Format: "CSV",
 				},
 			},
 		}},

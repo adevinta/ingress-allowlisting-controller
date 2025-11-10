@@ -49,7 +49,7 @@ spec:
                     default: YAML
                     description: Format specifies the format of the data
                     enum:
-                    - CommaSeparatedValues
+                    - CSV
                     - YAML
                     type: string
                   headersFrom:

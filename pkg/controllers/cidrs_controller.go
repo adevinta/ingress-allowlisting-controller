@@ -113,7 +113,7 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 
 	switch format {
 	// Handle simple text formats CSV/LVS
-	case ipamv1alpha1.CommaSeparatedValues:
+	case ipamv1alpha1.CSV:
 		return processCSV(reader, processing)
 	// Handle YAML format (existing logic)
 	case ipamv1alpha1.YAML:
