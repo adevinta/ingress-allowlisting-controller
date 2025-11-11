@@ -31,6 +31,7 @@ rules:
   - networking
   resources:
   - ingresses
+  - networkpolicies
   verbs:
   - create
   - delete
@@ -47,18 +48,6 @@ rules:
   - get
   - patch
   - update
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - networkpolicies
-  verbs:
-  - create
-  - delete
-  - get
-  - list
-  - patch
-  - update
-  - watch
 - apiGroups:
   - security.istio.io
   resources:
