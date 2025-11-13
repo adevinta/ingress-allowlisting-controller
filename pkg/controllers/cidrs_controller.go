@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"encoding/base64"
+	"encoding/csv"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -104,17 +105,65 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	if processing.JSONPath != "" {
+	// Default to YAML format if not specified (backward compatibility)
+	format := processing.Format
+	if format == "" {
+		format = ipamv1alpha1.YAML
+	}
 
+	switch format {
+	// Handle simple text formats CSV/LVS
+	case ipamv1alpha1.CSV:
+		return processCSV(reader, processing)
+	// Handle YAML format (existing logic)
+	case ipamv1alpha1.YAML:
+		return processYAMLFormat(reader, processing)
+	default:
+		return nil, fmt.Errorf("unsupported format: %s", format)
+	}
+}
+
+func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	data := csv.NewReader(reader)
+	data.Comment = '#'        // Ignore comments
+	data.FieldsPerRecord = -1 // Disable strict field count checking
+	data.LazyQuotes = true    // Allow unescaped quotes inside fields
+	data.TrimLeadingSpace = true
+	csvArray, err := data.ReadAll()
+	if err != nil {
+		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
+	}
+
+	var cidrs []string
+	for _, records := range csvArray {
+		for _, record := range records {
+			if record != "" {
+				cidr := strings.TrimSpace(record)
+				_, _, err := net.ParseCIDR(cidr)
+				if err == nil {
+					cidrs = append(cidrs, cidr)
+				}
+			}
+		}
+	}
+
+	return cidrs, nil
+}
+
+// processYAMLFormat handles YAML processing with optional JSONPath
+func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	// If JSONPath is specified, use it to extract data
+	if processing.JSONPath != "" {
 		parser := jsonpath.New("cidrs")
 		err := parser.Parse(processing.JSONPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
 		}
+
 		var data interface{}
 		err = yaml.NewDecoder(reader).Decode(&data)
 		if err != nil {
-			return nil, fmt.Errorf("failed to decode json: %w", err)
+			return nil, fmt.Errorf("failed to decode yaml: %w", err)
 		}
 
 		parser.AllowMissingKeys(true)
@@ -122,6 +171,7 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 		if err != nil {
 			return nil, fmt.Errorf("failed to find results: %w", err)
 		}
+
 		cidrValues := []string{}
 		for _, result := range results {
 			for _, value := range result {
@@ -149,10 +199,11 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 		return cidrValues, nil
 	}
 
+	// Default YAML decoding (expecting a list of strings)
 	cidrValues := []string{}
 	err := yaml.NewDecoder(reader).Decode(&cidrValues)
 	if err != nil {
-		return nil, fmt.Errorf("failed to decode json CIDRs: %w", err)
+		return nil, fmt.Errorf("failed to decode yaml CIDRs: %w", err)
 	}
 	return cidrValues, nil
 }

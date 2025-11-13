@@ -408,6 +408,166 @@ func TestCIDRsReconcileFromGitHubPlainTextHTTPResponse(t *testing.T) {
 	assert.Equal(t, []string{"1.1.1.1/32", "10.0.0.1/24", "200.1.1.1/24"}, cidrs.GetStatus().CIDRs)
 }
 
+func TestCIDRsReconcileFromCSV(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	// Mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("10.0.0.0/8,192.168.0.0/16,,8.8.8.0/24\n8.8.8.8/24\n#1.1.1.1/24"))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				Processing: ipamv1alpha1.Processing{
+					Format: "CSV",
+				},
+			},
+		}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:     &ipamv1alpha1.CIDRs{},
+		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:    fakeClient,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16", "8.8.8.0/24", "8.8.8.8/24"}, cidrs.GetStatus().CIDRs)
+}
+
+func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	// Mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("200.1.1.1/24\r\n10.0.0.1/24\n\n#8.8.8.8/32\n 1.1.1.1/32 \n\n10.0.0.1/24\r\n\n"))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				Processing: ipamv1alpha1.Processing{
+					Format: "CSV",
+				},
+			},
+		}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:     &ipamv1alpha1.CIDRs{},
+		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:    fakeClient,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+
+	assert.Equal(t, []string{"1.1.1.1/32", "10.0.0.1/24", "200.1.1.1/24"}, cidrs.GetStatus().CIDRs)
+}
+
+func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	// Mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("200.1.1.1/24\r\n10.1.0.0/24,10.2.0.0/24\n\n#8.8.8.8/32\n1.1.1.1/32 \n\n10.3.0.0/24,10.2.0.0/24\r\n\n10.4.0.0/24"))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				Processing: ipamv1alpha1.Processing{
+					Format: "CSV",
+				},
+			},
+		}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:     &ipamv1alpha1.CIDRs{},
+		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:    fakeClient,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+
+	assert.Equal(t, []string{"1.1.1.1/32", "10.1.0.0/24", "10.2.0.0/24", "10.3.0.0/24", "10.4.0.0/24", "200.1.1.1/24"}, cidrs.GetStatus().CIDRs)
+}
+
+func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	// Mock HTTP server
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("Line,Network,Description\r\n1,10.0.0.0/8,Private RFC1918 Range\r\n2,192.168.0.0/16,Private RFC1918 Range\r\n3,8.8.8.0/24,Google DNS"))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				Processing: ipamv1alpha1.Processing{
+					Format: "CSV",
+				},
+			},
+		}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:     &ipamv1alpha1.CIDRs{},
+		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:    fakeClient,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+
+	assert.Equal(t, []string{"10.0.0.0/8", "192.168.0.0/16", "8.8.8.0/24"}, cidrs.GetStatus().CIDRs)
+}
+
 func TestCIDRsReconcileFromGitHubInvalidEncodingHTTPResponse(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"

@@ -9,12 +9,21 @@ import (
 type (
 	CIDRsStatusConditionType string
 	CIDRsState               string
+	// +kubebuilder:validation:Enum=CSV;YAML
+	Format string
 )
 
 const (
 	CIDRsStatusConditionTypeUpToDate CIDRsStatusConditionType = "UpToDate"
 	CIDRsStateReady                  CIDRsState               = "Ready"
 	CIDRsStateUpdateFailed           CIDRsState               = "UpdateFailed"
+
+	// CSV indicates data is multi-line comma-separated
+	CSV Format = "CSV"
+
+	// YAML indicates data is in YAML format (default for backward compatibility)
+	// it supports JSON as well  (YAML being a superset of JSON)
+	YAML Format = "YAML"
 )
 
 // EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
@@ -41,6 +50,10 @@ type Processing struct {
 	// as expected by the CIDRs status
 	// +kubebuilder:validation:Optional
 	JSONPath string `json:"jsonPath,omitempty" yaml:"jsonPath,omitempty"`
+	// Format specifies the format of the data
+	// +kubebuilder:default=YAML
+	// +optional
+	Format Format `json:"format,omitempty"`
 }
 
 type CIDRsSource struct {

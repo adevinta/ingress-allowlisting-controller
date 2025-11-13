@@ -45,6 +45,13 @@ spec:
                 type: array
               location:
                 properties:
+                  format:
+                    default: YAML
+                    description: Format specifies the format of the data
+                    enum:
+                    - CSV
+                    - YAML
+                    type: string
                   headersFrom:
                     description: HeadersFrom holds the names of secrets where the
                       headers should be pulled from
