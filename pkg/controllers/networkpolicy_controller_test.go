@@ -10,8 +10,10 @@ import (
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
+	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -396,6 +398,71 @@ func TestReconcileNetworkPolicyOverwriteExistingRules(t *testing.T) {
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.False(t, cidrsFound["1.1.1.1/32"]) // Old rule should be gone
+}
+
+func TestReconcileNetworkPolicyOverwriteExistingRulesWithPort(t *testing.T) {
+
+	port := intstr.FromInt(443)
+	proto := corev1.ProtocolTCP
+
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12"}},
+	}
+
+	existingPeer := netv1.NetworkPolicyPeer{
+		IPBlock: &netv1.IPBlock{CIDR: "1.1.1.1/32"},
+	}
+
+	networkPolicy := &netv1.NetworkPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-policy",
+			Namespace: "mynamespace",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "localnet",
+			},
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+			Egress: []netv1.NetworkPolicyEgressRule{
+				{
+					To: []netv1.NetworkPolicyPeer{existingPeer},
+					Ports: []netv1.NetworkPolicyPort{
+						{
+							Protocol: &proto,
+							Port:     &port,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, networkPolicy).Build()
+	reconciler := newNetworkPolicyReconciler(t, k8sClient)
+
+	result, err := reconciler.reconcileNetworkPolicy(context.Background(), *networkPolicy)
+
+	assert.NoError(t, err)
+	assert.NotNil(t, result.Spec.Egress)
+	assert.Len(t, result.Spec.Egress, 1)
+	assert.Len(t, result.Spec.Egress[0].To, 2)
+
+	// Verify existing rules were overwritten
+	cidrsFound := extractCIDRs(result.Spec.Egress)
+	assert.True(t, cidrsFound["192.168.0.0/16"])
+	assert.True(t, cidrsFound["172.16.0.0/12"])
+	assert.False(t, cidrsFound["1.1.1.1/32"]) // Old rule should be gone
+
+	assert.NotNil(t, result.Spec.Egress[0].Ports)
+	assert.NotNil(t, result.Spec.Egress[0].Ports[0].Port)
+
+	portVal := result.Spec.Egress[0].Ports[0].Port
+	portProto := result.Spec.Egress[0].Ports[0].Protocol
+	assert.Equal(t, intstr.Int, portVal.Type)
+	assert.Equal(t, 443, int(portVal.IntVal))
+	assert.Equal(t, "TCP", string(*portProto))
+
 }
 
 func TestReconcileNetworkPolicyApiError(t *testing.T) {
