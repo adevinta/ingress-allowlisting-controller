@@ -82,6 +82,19 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 	if len(policyTypes) == 0 {
 		policyTypes = []netv1.PolicyType{netv1.PolicyTypeEgress}
 	}
+
+	// Preserve existing ports before recreating networkPolicy
+	var existingEgressPorts []netv1.NetworkPolicyPort
+	var existingIngressPorts []netv1.NetworkPolicyPort
+
+	if len(networkPolicy.Spec.Egress) > 0 {
+		existingEgressPorts = networkPolicy.Spec.Egress[0].Ports
+	}
+
+	if len(networkPolicy.Spec.Ingress) > 0 {
+		existingIngressPorts = networkPolicy.Spec.Ingress[0].Ports
+	}
+
 	networkPolicy.Spec.PolicyTypes = policyTypes
 	networkPolicy.Spec.Egress = nil
 	networkPolicy.Spec.Ingress = nil
@@ -90,11 +103,17 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 		switch t {
 		case netv1.PolicyTypeEgress:
 			networkPolicy.Spec.Egress = []netv1.NetworkPolicyEgressRule{
-				{To: peers},
+				{
+					To:    peers,
+					Ports: existingEgressPorts,
+				},
 			}
 		case netv1.PolicyTypeIngress:
 			networkPolicy.Spec.Ingress = []netv1.NetworkPolicyIngressRule{
-				{From: peers},
+				{
+					From:  peers,
+					Ports: existingIngressPorts,
+				},
 			}
 		}
 	}
