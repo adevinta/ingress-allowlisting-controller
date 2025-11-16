@@ -44,6 +44,13 @@ func newIngressReconciler(t *testing.T, k8sClient client.Client) *IngressReconci
 	return &IngressReconciler{Client: k8sClient, CidrResolver: resolver}
 }
 
+// removeHashAnnotation removes the hash annotation from ObjectMeta for testing purposes
+func removeHashAnnotation(meta *v1.ObjectMeta) {
+	if meta.Annotations != nil {
+		delete(meta.Annotations, "ipam.adevinta.com/hash")
+	}
+}
+
 // cases:
 // v - ingress has annotations and ipamv1alpha1.CIDRs exists and has a valid format.
 // v - ingress has no annotation
@@ -94,6 +101,7 @@ func TestReconcileIngress(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -127,6 +135,49 @@ func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/cluster-allowlist-group":          "globalnet,anotherglobalnet",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,15.13.12.0/24",
+			},
+		},
+	}
+
+	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
+
+	assert.NoError(t, err)
+	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
+
+	events := &corev1.EventList{}
+	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
+	assert.Empty(t, events.Items)
+}
+
+func TestReconcileIngressHashWithClusterCIDR(t *testing.T) {
+	globalNet := &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
+	}
+	anotherGlobalNet := &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "anotherglobalnet"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
+	}
+	ingress := &netv1.Ingress{
+		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
+			"ipam.adevinta.com/cluster-allowlist-group": "globalnet,anotherglobalnet",
+		}},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress, globalNet, anotherGlobalNet).Build()
+	reconciler := newIngressReconciler(t, k8sClient)
+
+	expectedIngress := netv1.Ingress{
+		ObjectMeta: v1.ObjectMeta{
+			Namespace: "mynamespace",
+			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
+			ResourceVersion: "999",
+			// generate hash like:
+			// python3 -c 'import fnvhash; h = fnvhash.fnv1a_64(b"10.0.0.0/815.13.12.0/24172.16.0.0/12192.168.0.0/16"); print(format(h, "x"))'
+			Annotations: map[string]string{
+				"ipam.adevinta.com/cluster-allowlist-group":          "globalnet,anotherglobalnet",
+				"ipam.adevinta.com/hash":                             "f07a15127fe06c87",
 				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,15.13.12.0/24",
 			},
 		},
@@ -184,6 +235,7 @@ func TestReconcileIngressPartialNotFound(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -217,6 +269,7 @@ func TestReconcileIngressWithInvalidCIDRIpsNoError(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -248,6 +301,7 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		}
 
 		result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+		removeHashAnnotation(&result.ObjectMeta)
 
 		assert.NoError(t, err)
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -293,6 +347,7 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		}
 
 		result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+		removeHashAnnotation(&result.ObjectMeta)
 
 		assert.NoError(t, err)
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -353,6 +408,7 @@ func TestReconcileIngressOverwriteAllowlist(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -416,6 +472,7 @@ func TestReconcileIngressInvalidAnnotationFormat(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
@@ -449,6 +506,7 @@ func TestReconcileIngressV1(t *testing.T) {
 	}
 
 	result, err := reconciler.reconcileIngress(context.Background(), *ingress)
+	removeHashAnnotation(&result.ObjectMeta)
 
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)

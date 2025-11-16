@@ -51,7 +51,7 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	updatedIngress, err := r.reconcileIngress(ctx, netV1Ingress)
 	if err != nil {
-		if err == r.CidrResolver.AnnotationNotFoundError() {
+		if err == r.CidrResolver.AnnotationNotFoundError() || err == r.CidrResolver.HashAlreadyMatchError() {
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Error creating or updating allowlist")
@@ -79,6 +79,16 @@ func (r *IngressReconciler) reconcileIngress(ctx context.Context, ingressMeta ne
 	if err != nil {
 		return netv1.Ingress{}, err
 	}
+
+	// calculate new hash from while comparing hashes
+	// hash is generated based on cidrs only
+	newHash, err := r.CidrResolver.CompareHashWithObject(ctx, &ingressMeta, allowedIps)
+	if err == r.CidrResolver.HashAlreadyMatchError() {
+		// bingo, we dont have to do anything
+		return ingressMeta, err
+	}
+	// inject hash annotation
+	ingressMeta.Annotations[r.CidrResolver.Hash()] = newHash
 
 	ipCsv := strings.Join(allowedIps, ",")
 	ingressMeta.Annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] = ipCsv

@@ -462,6 +462,34 @@ func TestReconcileNetworkPolicyInvalidAnnotationFormat(t *testing.T) {
 	assert.True(t, cidrsFound["1.1.1.1/32"])
 }
 
+func TestReconcileNetworkPolicyHashMatch(t *testing.T) {
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"127.0.0.2/32"}},
+	}
+	networkPolicy := &netv1.NetworkPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-policy",
+			Namespace: "mynamespace",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "localnet,localnet", // duplicate object to test uniq
+				"ipam.adevinta.com/hash":            "2a4a836c6dd59f86",  // python3 -c 'import fnvhash; h = fnvhash.fnv1a_64(b"127.0.0.2/32Egress"); print(format(h, "x"))'
+			},
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, networkPolicy).Build()
+	reconciler := newNetworkPolicyReconciler(t, k8sClient)
+
+	result, err := reconciler.reconcileNetworkPolicy(context.Background(), *networkPolicy)
+	assert.ErrorIs(t, err, reconciler.CidrResolver.HashAlreadyMatchError())
+	assert.Nil(t, result.Spec.Egress)
+
+}
+
 func TestNetworkPolicyToNetworkPoliciesMapper(t *testing.T) {
 	t.Run("CIDR is being used in the NetworkPolicy, should return the NetworkPolicy", func(t *testing.T) {
 		networkPolicy := &netv1.NetworkPolicy{

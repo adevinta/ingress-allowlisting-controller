@@ -13,6 +13,7 @@ import (
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	generate "github.com/adevinta/ingress-allowlisting-controller/pkg/hash"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -31,12 +32,23 @@ func (r *CidrResolver) AnnotationNotFoundError() error {
 	return r.annotationNotFoundError
 }
 
+func (r *CidrResolver) HashAlreadyMatchError() error {
+	if r.hashAlreadyMatchError == nil {
+		r.hashAlreadyMatchError = errors.New("Calculated hash match the annotation hash")
+	}
+	return r.hashAlreadyMatchError
+}
+
 func (r *CidrResolver) ClusterAnnotation() string {
 	return r.AnnotationPrefix + "/cluster-allowlist-group"
 }
 
 func (r *CidrResolver) Annotation() string {
 	return r.AnnotationPrefix + "/allowlist-group"
+}
+
+func (r *CidrResolver) Hash() string {
+	return r.AnnotationPrefix + "/hash"
 }
 
 type cidrResolver interface {
@@ -176,6 +188,7 @@ type CidrResolver struct {
 	Client                  client.Client
 	AnnotationPrefix        string
 	annotationNotFoundError error
+	hashAlreadyMatchError   error
 }
 
 func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Object) ([]string, error) {
@@ -205,4 +218,18 @@ func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Obj
 		allowedIps = append(allowedIps, allowedClusterIps...)
 	}
 	return allowedIps, nil
+}
+
+func (r *CidrResolver) CompareHashWithObject(ctx context.Context, object client.Object, allValues ...any) (string, error) {
+	log := log.DefaultLogger.WithContext(ctx)
+	newHash := generate.GenerateCIDRsHash(allValues)
+	oldHash, ok := object.GetAnnotations()[r.Hash()]
+	if ok {
+		if oldHash == newHash {
+			// bingo, we dont have to do anything
+			return "", r.HashAlreadyMatchError()
+		}
+	}
+	log.Info(object.GetObjectKind().GroupVersionKind().Kind, " fresh object, no hash yet in ", object.GetName(), "namespace", object.GetNamespace())
+	return newHash, nil
 }

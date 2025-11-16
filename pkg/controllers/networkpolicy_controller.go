@@ -50,7 +50,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	updatedNetworkPolicy, err := r.reconcileNetworkPolicy(ctx, networkpolicy)
 	if err != nil {
-		if err == r.CidrResolver.AnnotationNotFoundError() {
+		if err == r.CidrResolver.AnnotationNotFoundError() || err == r.CidrResolver.HashAlreadyMatchError() {
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Error creating or updating networkpolicy")
@@ -72,16 +72,28 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 	if err != nil {
 		return netv1.NetworkPolicy{}, err
 	}
+
+	policyTypes := networkPolicy.Spec.PolicyTypes
+	if len(policyTypes) == 0 {
+		policyTypes = []netv1.PolicyType{netv1.PolicyTypeEgress}
+	}
+
+	// calculate new hash from while comparing hashes
+	// hash is generated based on cidrs and PolicyTypes (while type is changed hash must be changed too)
+	newHash, err := r.CidrResolver.CompareHashWithObject(ctx, &networkPolicy, cidrs, policyTypes)
+	if err == r.CidrResolver.HashAlreadyMatchError() {
+		// bingo, we dont have to do anything
+		return networkPolicy, err
+	}
+	// inject new hash annotation
+	networkPolicy.ObjectMeta.Annotations[r.CidrResolver.Hash()] = newHash
+
 	var peers []netv1.NetworkPolicyPeer
 	for _, cidr := range cidrs {
 		block := netv1.IPBlock{CIDR: cidr}
 		peers = append(peers, netv1.NetworkPolicyPeer{IPBlock: &block})
 	}
 
-	policyTypes := networkPolicy.Spec.PolicyTypes
-	if len(policyTypes) == 0 {
-		policyTypes = []netv1.PolicyType{netv1.PolicyTypeEgress}
-	}
 	networkPolicy.Spec.PolicyTypes = policyTypes
 	networkPolicy.Spec.Egress = nil
 	networkPolicy.Spec.Ingress = nil
