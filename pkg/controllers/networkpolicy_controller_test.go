@@ -465,6 +465,62 @@ func TestReconcileNetworkPolicyOverwriteExistingRulesWithPort(t *testing.T) {
 
 }
 
+func TestReconcileNetworkPolicyOverwriteExistingRulesWithPortsBadSpec(t *testing.T) {
+
+	port := intstr.FromInt(443)
+	proto := corev1.ProtocolTCP
+
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12"}},
+	}
+
+	existingPeer := netv1.NetworkPolicyPeer{
+		IPBlock: &netv1.IPBlock{CIDR: "1.1.1.1/32"},
+	}
+
+	networkPolicy := &netv1.NetworkPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-policy",
+			Namespace: "mynamespace",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "localnet",
+			},
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+			Egress: []netv1.NetworkPolicyEgressRule{
+				{
+					To: []netv1.NetworkPolicyPeer{existingPeer},
+					Ports: []netv1.NetworkPolicyPort{
+						{
+							Protocol: &proto,
+							Port:     &port,
+						},
+					},
+				},
+				{
+					To: []netv1.NetworkPolicyPeer{existingPeer},
+					Ports: []netv1.NetworkPolicyPort{
+						{
+							Protocol: &proto,
+							Port:     &port,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, networkPolicy).Build()
+	reconciler := newNetworkPolicyReconciler(t, k8sClient)
+
+	_, err := reconciler.reconcileNetworkPolicy(context.Background(), *networkPolicy)
+
+	assert.Error(t, err)
+
+}
+
 func TestReconcileNetworkPolicyApiError(t *testing.T) {
 	k8sClient := &testfunc{WithWatch: fake.NewClientBuilder().WithScheme(extendedScheme).Build()}
 	k8sClient.getfunc = func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
