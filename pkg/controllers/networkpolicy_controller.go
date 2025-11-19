@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	netv1 "k8s.io/api/networking/v1"
@@ -26,6 +27,8 @@ type NetworkPolicyReconciler struct {
 	LegacyGroupVersion string
 	CidrResolver       resolvers.CidrResolver
 }
+
+var ErrMultipleRulesNotSupported = errors.New("Networkpolicy with multiple egress or ingress rules is not supported")
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
@@ -53,6 +56,10 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if err == r.CidrResolver.AnnotationNotFoundError() {
 			return ctrl.Result{}, nil
 		}
+		if err == ErrMultipleRulesNotSupported {
+			log.Error(ErrMultipleRulesNotSupported)
+			return ctrl.Result{}, err
+		}
 		log.Error(err, "Error creating or updating networkpolicy")
 		return ctrl.Result{}, err
 	}
@@ -72,6 +79,10 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 	if err != nil {
 		return netv1.NetworkPolicy{}, err
 	}
+	if len(networkPolicy.Spec.Egress) > 1 || len(networkPolicy.Spec.Ingress) > 1 {
+		return networkPolicy, ErrMultipleRulesNotSupported
+	}
+
 	var peers []netv1.NetworkPolicyPeer
 	for _, cidr := range cidrs {
 		block := netv1.IPBlock{CIDR: cidr}
@@ -82,6 +93,19 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 	if len(policyTypes) == 0 {
 		policyTypes = []netv1.PolicyType{netv1.PolicyTypeEgress}
 	}
+
+	// Preserve existing ports before recreating networkPolicy
+	var existingEgressPorts []netv1.NetworkPolicyPort
+	var existingIngressPorts []netv1.NetworkPolicyPort
+
+	if len(networkPolicy.Spec.Egress) == 1 {
+		existingEgressPorts = networkPolicy.Spec.Egress[0].Ports
+	}
+
+	if len(networkPolicy.Spec.Ingress) == 1 {
+		existingIngressPorts = networkPolicy.Spec.Ingress[0].Ports
+	}
+
 	networkPolicy.Spec.PolicyTypes = policyTypes
 	networkPolicy.Spec.Egress = nil
 	networkPolicy.Spec.Ingress = nil
@@ -90,11 +114,17 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 		switch t {
 		case netv1.PolicyTypeEgress:
 			networkPolicy.Spec.Egress = []netv1.NetworkPolicyEgressRule{
-				{To: peers},
+				{
+					To:    peers,
+					Ports: existingEgressPorts,
+				},
 			}
 		case netv1.PolicyTypeIngress:
 			networkPolicy.Spec.Ingress = []netv1.NetworkPolicyIngressRule{
-				{From: peers},
+				{
+					From:  peers,
+					Ports: existingIngressPorts,
+				},
 			}
 		}
 	}

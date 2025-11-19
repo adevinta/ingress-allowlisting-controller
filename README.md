@@ -73,23 +73,26 @@ spec:
   podSelector: {} # Applies to all pods in namespace
   policyTypes:
   - Ingress
-# Controller will populate spec.ingress[] with ipBlock rules here
+# Controller will populate spec.ingress[0] with ipBlock rules here
 ```
-
-NetworkPolicy with `egress` using a cluster-scoped CIDRs object:
+NetworkPolicy with `egress` using a cluster-scoped CIDRs object and predefined ports:
 
 ```yaml
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: egress-allow-dynamodb
+  name: egress-allow-http
   annotations:
-    ipam.adevinta.com/cluster-allowlist-group: aws-dynamodb
+    ipam.adevinta.com/cluster-allowlist-group: http-allowed
 spec:
   podSelector: {} # Applies to all pods in namespace
   policyTypes:
   - Egress
-# Controller will populate spec.egress[] with ipBlock rules here
+# Controller will populate spec.egress[0] with ipBlock rules here respecting the ports
+  egress:
+  - ports:
+    - port: 443
+    - port: 80
 ```
 
 ##### Key Points:
