@@ -634,7 +634,7 @@ func TestCIDRsReconcileFromAWSRules(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: "https://ip-ranges.amazonaws.com/ip-ranges.json",
 				Processing: ipamv1alpha1.Processing{
-					JSONPath: "{.prefixes[?(@.service == 'EC2')].ip_prefix}",
+					JSONPath: "{.prefixes[?(@.service == 'EC2' && (@.region == 'eu-central-1' || @.region == 'GLOBAL'))].ip_prefix}",
 				},
 			},
 		}},

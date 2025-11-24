@@ -14,9 +14,9 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/ohler55/ojg/jp"
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/core/v1"
-	"k8s.io/client-go/util/jsonpath"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -154,8 +154,7 @@ func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string,
 func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
 	// If JSONPath is specified, use it to extract data
 	if processing.JSONPath != "" {
-		parser := jsonpath.New("cidrs")
-		err := parser.Parse(processing.JSONPath)
+		parser, err := jp.ParseString(strings.Trim(processing.JSONPath, "{}"))
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
 		}
@@ -166,34 +165,27 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]
 			return nil, fmt.Errorf("failed to decode yaml: %w", err)
 		}
 
-		parser.AllowMissingKeys(true)
-		results, err := parser.FindResults(data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to find results: %w", err)
+		results := parser.Get(data)
+		if len(results) == 0 {
+			return []string{}, nil
 		}
-
 		cidrValues := []string{}
-		for _, result := range results {
-			for _, value := range result {
-				if !value.CanInterface() {
-					return nil, fmt.Errorf("unexpected value type %T", value.Kind())
-				}
-				switch v := value.Interface().(type) {
-				case []any:
-					for _, item := range v {
-						cidr, ok := item.(string)
-						if !ok {
-							return nil, fmt.Errorf("unexpected value type %T for %v", item, item)
-						}
-						cidrValues = append(cidrValues, cidr)
+		for _, value := range results {
+			switch v := value.(type) {
+			case []any:
+				for _, item := range v {
+					cidr, ok := item.(string)
+					if !ok {
+						return nil, fmt.Errorf("unexpected value type %T for %v", item, item)
 					}
-				case []string:
-					cidrValues = append(cidrValues, v...)
-				case string:
-					cidrValues = append(cidrValues, v)
-				default:
-					return nil, fmt.Errorf("unexpected value type %T for %v", v, v)
+					cidrValues = append(cidrValues, cidr)
 				}
+			case []string:
+				cidrValues = append(cidrValues, v...)
+			case string:
+				cidrValues = append(cidrValues, v)
+			default:
+				return nil, fmt.Errorf("unexpected value type %T for %v", v, v)
 			}
 		}
 		return cidrValues, nil

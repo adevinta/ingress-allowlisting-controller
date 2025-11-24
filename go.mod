@@ -26,6 +26,7 @@ require (
 	github.com/gorilla/websocket v1.5.1 // indirect
 	github.com/moby/spdystream v0.4.0 // indirect
 	github.com/mxk/go-flowrate v0.0.0-20140419014527-cca7078d478f // indirect
+	github.com/ohler55/ojg v1.27.0 // indirect
 	github.com/sirupsen/logrus v1.9.3 // indirect
 	github.com/vladimirvivien/gexe v0.3.0 // indirect
 	github.com/x448/float16 v0.8.4 // indirect
