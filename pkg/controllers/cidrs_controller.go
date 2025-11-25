@@ -154,7 +154,14 @@ func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string,
 func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
 	// If JSONPath is specified, use it to extract data
 	if processing.JSONPath != "" {
-		parser, err := jp.ParseString(strings.Trim(processing.JSONPath, "{}"))
+		jsonPath := processing.JSONPath
+		// Normalize path, remove outer brackets
+		if strings.HasPrefix(jsonPath, "{") && strings.HasSuffix(jsonPath, "}") {
+			jsonPath = strings.TrimPrefix(jsonPath, "{")
+			jsonPath = strings.TrimSuffix(jsonPath, "}")
+		}
+
+		parser, err := jp.ParseString(jsonPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
 		}
