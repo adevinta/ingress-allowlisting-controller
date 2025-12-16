@@ -14,6 +14,10 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/google/cel-go/cel"
+	"github.com/google/cel-go/common/types"
+	"github.com/google/cel-go/common/types/ref"
+	"github.com/google/cel-go/common/types/traits"
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/jsonpath"
@@ -150,20 +154,65 @@ func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string,
 	return cidrs, nil
 }
 
-// processYAMLFormat handles YAML processing with optional JSONPath
+// processYAMLFormat handles YAML processing with optional CEL expression or JSONPath
 func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	// If JSONPath is specified, use it to extract data
+	var data interface{}
+	err := yaml.NewDecoder(reader).Decode(&data)
+	if err != nil {
+		return nil, fmt.Errorf("failed to decode yaml: %w", err)
+	}
+
+	// Prefer CEL if both are specified
+	if processing.CEL != "" {
+		// Convert Go data to CEL value
+		celData := convertToCELValue(data)
+
+		// Determine the type based on the data structure
+		var varType *cel.Type
+		if _, isList := celData.([]interface{}); isList {
+			varType = cel.ListType(cel.AnyType)
+		} else {
+			varType = cel.AnyType
+		}
+
+		// Create CEL environment
+		env, err := cel.NewEnv(
+			cel.Variable("data", varType),
+		)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL environment: %w", err)
+		}
+
+		// Parse and type-check the expression
+		ast, issues := env.Compile(processing.CEL)
+		if issues != nil && issues.Err() != nil {
+			return nil, fmt.Errorf("failed to compile CEL expression: %w", issues.Err())
+		}
+
+		// Create the program
+		prg, err := env.Program(ast)
+		if err != nil {
+			return nil, fmt.Errorf("failed to create CEL program: %w", err)
+		}
+
+		// Evaluate the expression
+		out, _, err := prg.Eval(map[string]interface{}{
+			"data": celData,
+		})
+		if err != nil {
+			return nil, fmt.Errorf("failed to evaluate CEL expression: %w", err)
+		}
+
+		// Convert CEL result to list of strings
+		return extractCIDRsFromCELValue(out)
+	}
+
+	// Fall back to JSONPath for backward compatibility
 	if processing.JSONPath != "" {
 		parser := jsonpath.New("cidrs")
 		err := parser.Parse(processing.JSONPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
-		}
-
-		var data interface{}
-		err = yaml.NewDecoder(reader).Decode(&data)
-		if err != nil {
-			return nil, fmt.Errorf("failed to decode yaml: %w", err)
 		}
 
 		parser.AllowMissingKeys(true)
@@ -200,12 +249,107 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]
 	}
 
 	// Default YAML decoding (expecting a list of strings)
-	cidrValues := []string{}
-	err := yaml.NewDecoder(reader).Decode(&cidrValues)
-	if err != nil {
-		return nil, fmt.Errorf("failed to decode yaml CIDRs: %w", err)
+	// Decode directly from the data we already have
+	if strSlice, ok := data.([]string); ok {
+		return strSlice, nil
 	}
-	return cidrValues, nil
+	if strSlice, ok := data.([]interface{}); ok {
+		result := []string{}
+		for _, item := range strSlice {
+			if str, ok := item.(string); ok {
+				result = append(result, str)
+			}
+		}
+		return result, nil
+	}
+	return nil, fmt.Errorf("failed to decode yaml CIDRs: expected list of strings")
+}
+
+// convertToCELValue converts Go interface{} to CEL-compatible value
+func convertToCELValue(v interface{}) interface{} {
+	switch val := v.(type) {
+	case map[interface{}]interface{}:
+		// YAML maps are map[interface{}]interface{}, convert to map[string]interface{}
+		result := make(map[string]interface{})
+		for k, v := range val {
+			key, ok := k.(string)
+			if !ok {
+				key = fmt.Sprintf("%v", k)
+			}
+			result[key] = convertToCELValue(v)
+		}
+		return result
+	case []interface{}:
+		result := make([]interface{}, len(val))
+		for i, item := range val {
+			result[i] = convertToCELValue(item)
+		}
+		return result
+	default:
+		return v
+	}
+}
+
+// extractCIDRsFromCELValue extracts CIDR strings from a CEL value
+func extractCIDRsFromCELValue(val ref.Val) ([]string, error) {
+	cidrValues := []string{}
+
+	// Check if it's a string
+	if strVal, ok := val.(types.String); ok {
+		return []string{string(strVal)}, nil
+	}
+
+	// Check if it's a list/lister
+	if lister, ok := val.(traits.Lister); ok {
+		iter := lister.Iterator()
+		for iter.HasNext() == types.True {
+			item := iter.Next()
+			// Check if item is a string
+			if strVal, ok := item.(types.String); ok {
+				cidrValues = append(cidrValues, string(strVal))
+			} else {
+				// Try to get underlying Go value
+				goItemVal := item.Value()
+				if str, ok := goItemVal.(string); ok {
+					cidrValues = append(cidrValues, str)
+				} else {
+					// Non-string value - this is an error
+					return nil, fmt.Errorf("unexpected value type %T for %v", goItemVal, goItemVal)
+				}
+			}
+		}
+		return cidrValues, nil
+	}
+
+	// Try to get the underlying Go value
+	goVal := val.Value()
+	if goVal == nil {
+		return nil, fmt.Errorf("CEL value is nil")
+	}
+
+	// Handle Go native types
+	switch v := goVal.(type) {
+	case string:
+		return []string{v}, nil
+	case []string:
+		return v, nil
+	case []interface{}:
+		for _, item := range v {
+			if str, ok := item.(string); ok {
+				cidrValues = append(cidrValues, str)
+			} else {
+				// Non-string value - this is an error
+				return nil, fmt.Errorf("unexpected value type %T for %v", item, item)
+			}
+		}
+		return cidrValues, nil
+	default:
+		// Try to convert to string
+		if strVal, ok := val.ConvertToType(types.StringType).(types.String); ok {
+			return []string{string(strVal)}, nil
+		}
+		return nil, fmt.Errorf("unexpected CEL value type %T: %v (Go value: %T: %v)", val, val, goVal, goVal)
+	}
 }
 
 func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) error {

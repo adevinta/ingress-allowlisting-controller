@@ -33,7 +33,7 @@ type CIDRsLocation struct {
 	// URI should be a URL to fetch the CIDRs from
 	// remote services.
 	// The response should be a JSON array of strings, or transformable to a JSON array of strings
-	// through JSONPath.
+	// through CEL (Common Expression Language).
 	// The response status code must be 200.
 	// +kubebuilder:validation:Optional
 	URI string `json:"uri,omitempty" yaml:"uri,omitempty"`
@@ -46,8 +46,20 @@ type CIDRsLocation struct {
 }
 
 type Processing struct {
-	// JSONPath is an expression to convert the response to a list of CIDR string
-	// as expected by the CIDRs status
+	// CEL is a Common Expression Language expression to convert the response to a list of CIDR string
+	// as expected by the CIDRs status. The expression should evaluate to a list of strings or a single string.
+	// The input data is available as the variable 'data' in the CEL expression.
+	// Examples:
+	//   - data.ips (access a field)
+	//   - data.prefixes.filter(p, p.service == 'EC2').map(p, p.ip_prefix) (filter and map)
+	//   - data (return the data as-is if it's already a list of strings)
+	// If both CEL and JSONPath are specified, CEL takes precedence.
+	// +kubebuilder:validation:Optional
+	CEL string `json:"cel,omitempty" yaml:"cel,omitempty"`
+	// JSONPath is a JSONPath expression to convert the response to a list of CIDR string
+	// as expected by the CIDRs status. This is deprecated in favor of CEL but kept for backward compatibility.
+	// Note: JSONPath has limited support for complex expressions (e.g., && operator may not work).
+	// For complex filtering, use CEL instead.
 	// +kubebuilder:validation:Optional
 	JSONPath string `json:"jsonPath,omitempty" yaml:"jsonPath,omitempty"`
 	// Format specifies the format of the data
