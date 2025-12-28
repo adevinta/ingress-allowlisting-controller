@@ -118,7 +118,7 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: "{.ips}",
+			CEL: "data.ips",
 		})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"127.0.0.1/32", "10.0.0.0/16"}, cidrs)
@@ -131,7 +131,7 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: "{.ips}",
+			CEL: "data.ips",
 		})
 	assert.Error(t, err)
 
@@ -143,7 +143,7 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: "{.ips[*]}",
+			CEL: "data.ips",
 		})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"127.0.0.1/32", "10.0.0.0/16"}, cidrs)
@@ -157,7 +157,7 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: `{$[?(@.key=="value")].ip}`,
+			CEL: `data.filter(d, has(d.key) && d.key == "value").map(d, d.ip)`,
 		})
 	require.NoError(t, err)
 	assert.Equal(t, []string{"10.0.0.0/16"}, cidrs)
@@ -186,7 +186,7 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: "{$.prefixes[?(@.service == 'my-service')].ip_prefix}",
+			CEL: `data.prefixes.filter(p, p.service == "my-service" && has(p.ip_prefix)).map(p, p.ip_prefix)`,
 		},
 	)
 	require.NoError(t, err)
@@ -205,12 +205,137 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 			},
 		),
 		ipamv1alpha1.Processing{
-			JSONPath: "{$.prefixes[?(@.service == 'my-service')].ip_prefix}",
+			CEL: `data.prefixes.filter(p, p.service == "my-service" && has(p.ip_prefix)).map(p, p.ip_prefix)`,
 		},
 	)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "42")
 	assert.Contains(t, err.Error(), "unexpected value type")
+}
+
+func TestApplyProcessorComplexFiltering(t *testing.T) {
+	// Test case for issue #15: Complex filtering with AND/OR logic that JSONPath couldn't handle
+	// JSONPath: "{.prefixes[?(@.service == 'EC2' && (@.region == 'eu-central-1' || @.region == 'GLOBAL'))].ip_prefix}"
+	// This was failing with JSONPath due to unsupported && operator
+	t.Run("Complex filtering with AND/OR logic", func(t *testing.T) {
+		testComplexFiltering(t, toJsonReader)
+	})
+	t.Run("Complex filtering with AND/OR logic (YAML)", func(t *testing.T) {
+		testComplexFiltering(t, toYamlReader)
+	})
+}
+
+func testComplexFiltering(t *testing.T, serialize func(*testing.T, any) io.Reader) {
+	t.Helper()
+
+	// Test data similar to AWS IP ranges structure
+	data := map[string]interface{}{
+		"prefixes": []map[string]interface{}{
+			{
+				"service":   "EC2",
+				"region":    "us-east-1",
+				"ip_prefix": "10.0.0.1/32",
+			},
+			{
+				"service":   "EC2",
+				"region":    "eu-central-1",
+				"ip_prefix": "10.0.0.2/32",
+			},
+			{
+				"service":   "EC2",
+				"region":    "GLOBAL",
+				"ip_prefix": "10.0.0.3/32",
+			},
+			{
+				"service":   "S3",
+				"region":    "eu-central-1",
+				"ip_prefix": "10.0.0.4/32",
+			},
+			{
+				"service":   "EC2",
+				"region":    "ap-southeast-1",
+				"ip_prefix": "10.0.0.5/32",
+			},
+		},
+	}
+
+	// CEL expression equivalent to the JSONPath that was failing:
+	// Filter prefixes where service == "EC2" AND (region == "eu-central-1" OR region == "GLOBAL")
+	cidrs, err := applyProcessor(
+		serialize(t, data),
+		ipamv1alpha1.Processing{
+			CEL: `data.prefixes.filter(p, p.service == "EC2" && (p.region == "eu-central-1" || p.region == "GLOBAL") && has(p.ip_prefix)).map(p, p.ip_prefix)`,
+		},
+	)
+	require.NoError(t, err, "CEL expression should handle complex AND/OR logic without errors")
+	assert.Equal(t, []string{"10.0.0.2/32", "10.0.0.3/32"}, cidrs, "Should only return EC2 prefixes from eu-central-1 or GLOBAL regions")
+}
+
+func TestApplyProcessorJSONPathBackwardCompatibility(t *testing.T) {
+	// Test JSONPath backward compatibility - ensure existing JSONPath expressions still work
+	t.Run("JSONPath backward compatibility", func(t *testing.T) {
+		testJSONPathBackwardCompatibility(t, toJsonReader)
+	})
+	t.Run("JSONPath backward compatibility (YAML)", func(t *testing.T) {
+		testJSONPathBackwardCompatibility(t, toYamlReader)
+	})
+}
+
+func testJSONPathBackwardCompatibility(t *testing.T, serialize func(*testing.T, any) io.Reader) {
+	t.Helper()
+
+	// Test simple JSONPath expression
+	cidrs, err := applyProcessor(
+		serialize(
+			t,
+			map[string][]string{
+				"ips": {"127.0.0.1/32", "10.0.0.0/16"},
+			},
+		),
+		ipamv1alpha1.Processing{
+			JSONPath: "{.ips}",
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"127.0.0.1/32", "10.0.0.0/16"}, cidrs)
+
+	// Test JSONPath with array access
+	cidrs, err = applyProcessor(
+		serialize(
+			t,
+			map[string]interface{}{
+				"prefixes": []map[string]interface{}{
+					{
+						"service":   "EC2",
+						"ip_prefix": "10.0.0.1/32",
+					},
+					{
+						"service":   "S3",
+						"ip_prefix": "10.0.0.2/32",
+					},
+				},
+			},
+		),
+		ipamv1alpha1.Processing{
+			JSONPath: "{$.prefixes[*].ip_prefix}",
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.1/32", "10.0.0.2/32"}, cidrs)
+
+	// Test that CEL takes precedence when both are specified
+	cidrs, err = applyProcessor(
+		serialize(
+			t,
+			map[string][]string{
+				"ips":   {"127.0.0.1/32"},
+				"other": {"10.0.0.0/16"},
+			},
+		),
+		ipamv1alpha1.Processing{
+			CEL:      "data.other",
+			JSONPath: "{.ips}",
+		})
+	require.NoError(t, err)
+	assert.Equal(t, []string{"10.0.0.0/16"}, cidrs, "CEL should take precedence over JSONPath")
 }
 
 func TestCIDRsReconcileFromHTTP(t *testing.T) {
@@ -634,7 +759,7 @@ func TestCIDRsReconcileFromAWSRules(t *testing.T) {
 			Location: ipamv1alpha1.CIDRsLocation{
 				URI: "https://ip-ranges.amazonaws.com/ip-ranges.json",
 				Processing: ipamv1alpha1.Processing{
-					JSONPath: "{.prefixes[?(@.service == 'EC2')].ip_prefix}",
+					CEL: `data.prefixes.filter(p, p.service == "EC2").map(p, p.ip_prefix)`,
 				},
 			},
 		}},

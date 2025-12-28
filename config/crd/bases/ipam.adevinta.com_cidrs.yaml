@@ -45,6 +45,17 @@ spec:
                 type: array
               location:
                 properties:
+                  cel:
+                    description: |-
+                      CEL is a Common Expression Language expression to convert the response to a list of CIDR string
+                      as expected by the CIDRs status. The expression should evaluate to a list of strings or a single string.
+                      The input data is available as the variable 'data' in the CEL expression.
+                      Examples:
+                        - data.ips (access a field)
+                        - data.prefixes.filter(p, p.service == 'EC2').map(p, p.ip_prefix) (filter and map)
+                        - data (return the data as-is if it's already a list of strings)
+                      If both CEL and JSONPath are specified, CEL takes precedence.
+                    type: string
                   format:
                     default: YAML
                     description: Format specifies the format of the data
@@ -81,15 +92,17 @@ spec:
                     type: array
                   jsonPath:
                     description: |-
-                      JSONPath is an expression to convert the response to a list of CIDR string
-                      as expected by the CIDRs status
+                      JSONPath is a JSONPath expression to convert the response to a list of CIDR string
+                      as expected by the CIDRs status. This is deprecated in favor of CEL but kept for backward compatibility.
+                      Note: JSONPath has limited support for complex expressions (e.g., && operator may not work).
+                      For complex filtering, use CEL instead.
                     type: string
                   uri:
                     description: |-
                       URI should be a URL to fetch the CIDRs from
                       remote services.
                       The response should be a JSON array of strings, or transformable to a JSON array of strings
-                      through JSONPath.
+                      through CEL (Common Expression Language).
                       The response status code must be 200.
                     type: string
                 type: object

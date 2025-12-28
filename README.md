@@ -153,7 +153,7 @@ metadata:
 spec:
   requeueAfter: 30m # Re-evaluate the remote URL every 30 minutes
   location:
-    jsonPath: "{.prefixes[?(@.service == 'EC2')].ip_prefix}" # transform the AWS response into a list of strings, json format
+    cel: 'data.prefixes.filter(p, p.service == "EC2" && has(p.ip_prefix)).map(p, p.ip_prefix)' # transform the AWS response into a list of strings using CEL expression
     uri: https://ip-ranges.amazonaws.com/ip-ranges.json # the remote URL responding all IPs
     headersFrom: # optional: inject CIDRs to the HTTP request (if the request needs to be authenticated)
       secretRef: # optional: inject all keys

@@ -141,7 +141,7 @@ func TestDockerImage(t *testing.T) {
 					// use https to ensure ca-certificates are available and working
 					URI: "https://ip-ranges.amazonaws.com/ip-ranges.json",
 					Processing: ipamv1alpha1.Processing{
-						JSONPath: "{.prefixes[?(@.service == 'EC2')].ip_prefix}",
+						CEL: `data.prefixes.filter(p, p.service == "EC2").map(p, p.ip_prefix)`,
 					},
 				},
 			},
