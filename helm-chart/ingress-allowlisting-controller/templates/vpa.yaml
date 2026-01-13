@@ -9,14 +9,11 @@ spec:
     kind: Deployment
     name: {{ .Release.Name }}
   updatePolicy:
-    updateMode: "Auto"
+    updateMode: {{ .Values.vpa.updateMode }}
   resourcePolicy:
     containerPolicies:
     - containerName: {{ .Chart.Name }}
-      minAllowed:
-        cpu: 100m
-        memory: 128M
-      maxAllowed:
-        memory: "1Gi"
-        cpu: "1"
+    {{- with .Values.vpa.containerPolicy }}
+    {{- toYaml . | nindent 6 }}
+    {{- end }}
 {{ end }}
