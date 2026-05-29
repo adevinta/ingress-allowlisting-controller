@@ -5,6 +5,9 @@ import (
 	"errors"
 	"testing"
 
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
+
 	istioApiSecurityV1 "istio.io/api/security/v1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
@@ -376,6 +379,93 @@ func TestCidrToHTTPRouteMapper(t *testing.T) {
 		requests := newHTTPRoutesFromCIDRFuncMap(k8sClient, cidrResolver.Annotation())(context.Background(), &cidr)
 		assert.Len(t, requests, 1)
 		assert.Equal(t, "test2", requests[0].Name)
+	})
+}
+
+func TestHasAllowlistAnnotation(t *testing.T) {
+	const prefix = "ipam.adevinta.com"
+
+	tests := []struct {
+		name        string
+		annotations map[string]string
+		want        bool
+	}{
+		{
+			name:        "local allowlist-group",
+			annotations: map[string]string{prefix + "/allowlist-group": "localnet"},
+			want:        true,
+		},
+		{
+			name:        "cluster-allowlist-group",
+			annotations: map[string]string{prefix + "/cluster-allowlist-group": "globalnet"},
+			want:        true,
+		},
+		{
+			name:        "both annotations",
+			annotations: map[string]string{prefix + "/allowlist-group": "localnet", prefix + "/cluster-allowlist-group": "globalnet"},
+			want:        true,
+		},
+		{
+			name:        "unrelated annotation only",
+			annotations: map[string]string{prefix + "/gateway": "my-gateway"},
+			want:        false,
+		},
+		{
+			name:        "no annotations",
+			annotations: nil,
+			want:        false,
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			obj := &gatewayApiv1.HTTPRoute{ObjectMeta: v1.ObjectMeta{Annotations: tc.annotations}}
+			assert.Equal(t, tc.want, hasAllowlistAnnotation(prefix, obj))
+		})
+	}
+}
+
+func TestAnnotationPredicate(t *testing.T) {
+	const prefix = "ipam.adevinta.com"
+	withAnnotation := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Annotations: map[string]string{prefix + "/allowlist-group": "localnet"}},
+	}
+	withoutAnnotation := &gatewayApiv1.HTTPRoute{ObjectMeta: v1.ObjectMeta{}}
+
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		CidrResolver: resolvers.CidrResolver{AnnotationPrefix: prefix},
+	}
+	// build the predicate the same way SetupWithManager does
+	p := predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return hasAllowlistAnnotation(prefix, e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return hasAllowlistAnnotation(prefix, e.Object) },
+		GenericFunc: func(e event.GenericEvent) bool { return hasAllowlistAnnotation(prefix, e.Object) },
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return hasAllowlistAnnotation(reconciler.CidrResolver.AnnotationPrefix, e.ObjectNew) ||
+				hasAllowlistAnnotation(reconciler.CidrResolver.AnnotationPrefix, e.ObjectOld)
+		},
+	}
+
+	t.Run("Create with annotation passes", func(t *testing.T) {
+		assert.True(t, p.Create(event.CreateEvent{Object: withAnnotation}))
+	})
+	t.Run("Create without annotation filtered", func(t *testing.T) {
+		assert.False(t, p.Create(event.CreateEvent{Object: withoutAnnotation}))
+	})
+	t.Run("Delete with annotation passes", func(t *testing.T) {
+		assert.True(t, p.Delete(event.DeleteEvent{Object: withAnnotation}))
+	})
+	t.Run("Delete without annotation filtered", func(t *testing.T) {
+		assert.False(t, p.Delete(event.DeleteEvent{Object: withoutAnnotation}))
+	})
+	t.Run("Update annotation added passes", func(t *testing.T) {
+		assert.True(t, p.Update(event.UpdateEvent{ObjectOld: withoutAnnotation, ObjectNew: withAnnotation}))
+	})
+	t.Run("Update annotation removed passes (cleanup)", func(t *testing.T) {
+		assert.True(t, p.Update(event.UpdateEvent{ObjectOld: withAnnotation, ObjectNew: withoutAnnotation}))
+	})
+	t.Run("Update no annotation on either filtered", func(t *testing.T) {
+		assert.False(t, p.Update(event.UpdateEvent{ObjectOld: withoutAnnotation, ObjectNew: withoutAnnotation}))
 	})
 }
 

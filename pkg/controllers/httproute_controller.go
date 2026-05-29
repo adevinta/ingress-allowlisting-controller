@@ -8,8 +8,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
@@ -127,9 +130,26 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	return ctrl.Result{}, nil
 }
 
+func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
+	a := obj.GetAnnotations()
+	_, hasLocal := a[annotationPrefix+"/allowlist-group"]
+	_, hasCluster := a[annotationPrefix+"/cluster-allowlist-group"]
+	return hasLocal || hasCluster
+}
+
 func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
+	annotationPredicate := predicate.Funcs{
+		CreateFunc:  func(e event.CreateEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
+		DeleteFunc:  func(e event.DeleteEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
+		GenericFunc: func(e event.GenericEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
+		// Check both old and new: annotation removal must trigger reconcile to clean up the AuthorizationPolicy.
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectNew) || hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectOld)
+		},
+	}
+
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayApiv1.HTTPRoute{}).
+		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate)).
 		Owns(&istiosecurityv1.AuthorizationPolicy{}).
 		Watches(
 			&ipamv1alpha1.CIDRs{},
