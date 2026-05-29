@@ -28,7 +28,7 @@ func (e *setupError) Log(logger logr.Logger) {
 	logger.Error(e, "unable to create controller", "controller", "Ingress")
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
+func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
 	if err := (&IngressReconciler{
@@ -92,6 +92,18 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 		}
 		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
+		}
+	}
+
+	if httpRouteSupportEnabled {
+		httpRouteReconciler := HTTPRouteAllowlistingReconciler{
+			Client:             mgr.GetClient(),
+			Scheme:             mgr.GetScheme(),
+			LegacyGroupVersion: legacyGroupVersion,
+			CidrResolver:       cidrResolver,
+		}
+		if err := httpRouteReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+			return &setupError{error: err, controllerType: "HTTPRoute"}
 		}
 	}
 

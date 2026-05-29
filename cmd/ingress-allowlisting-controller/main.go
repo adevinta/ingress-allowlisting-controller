@@ -43,6 +43,7 @@ func main() {
 	var enableLeaderElection bool
 	var gatewaySupportEnabled bool
 	var networkPolicySupportEnabled bool
+	var httpRouteSupportEnabled bool
 	var as string
 	var annotationPrefix string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
@@ -51,6 +52,7 @@ func main() {
 			"Enabling this will ensure there is only one active controller manager.")
 	flag.BoolVar(&gatewaySupportEnabled, "gateway-support-enabled", false, "Enable gateway support for the controller")
 	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
+	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
 	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
@@ -81,7 +83,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, legacyGroupVersion, "", annotationPrefix); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 

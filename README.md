@@ -58,6 +58,82 @@ The content of the annotations can be a comma-separated list:
 
 `MyCidrsObject,MyCidrsObject2,MyCidrsObject3`
 
+### Example HTTPRoute Resource
+
+The controller can also watch `HTTPRoute` resources and create an `AuthorizationPolicy` targeting the associated Istio Gateway.
+
+Enable the feature with the `--httproute-support-enabled` flag.
+
+Required annotations:
+- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` — same as for Ingress
+- `ipam.adevinta.com/gateway` — name of the Istio Gateway to target
+
+**Simple case** — `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-route
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+    ipam.adevinta.com/gateway: my-gateway
+spec:
+  hostnames:
+    - app.example.com
+  rules:
+    - matches:
+        - path:
+            type: PathPrefix
+            value: /
+```
+
+The controller generates the following `AuthorizationPolicy` in `my-app`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: my-route
+  namespace: my-app
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+          - 10.0.0.0/8
+          - 192.168.0.0/16
+    to:
+    - operation:
+        hosts:
+          - app.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
+```
+
+**Sophisticated case** — `AuthorizationPolicy` is created in a different namespace (e.g. where the Gateway lives) using the optional `ipam.adevinta.com/namespace` annotation:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-route
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+    ipam.adevinta.com/gateway: my-gateway
+    ipam.adevinta.com/namespace: gateway-namespace
+spec:
+  hostnames:
+    - app.example.com
+```
+
+The controller generates the same `AuthorizationPolicy` structure but in `gateway-namespace` instead of `my-app`.
+
 ### Example NetworkPolicy Resource
 Below are examples of NetworkPolicy resources with different `policyTypes` (Ingress or Egress).
 
