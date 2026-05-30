@@ -62,13 +62,20 @@ The content of the annotations can be a comma-separated list:
 
 The controller can also watch `HTTPRoute` resources and create an `AuthorizationPolicy` targeting the associated Istio Gateway.
 
-Enable the feature with the `--httproute-support-enabled` flag.
+Enable the feature via Helm:
+```yaml
+httproute:
+  enabled: true
+```
+
+Or directly with the flag: `--httproute-support-enabled`.
 
 Required annotations:
 - `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` — same as for Ingress
-- `ipam.adevinta.com/gateway` — name of the Istio Gateway to target
 
-**Simple case** — `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
+The gateway name, gateway namespace, and target namespace for the `AuthorizationPolicy` are all derived automatically from `spec.parentRefs` — no extra annotations needed.
+
+**Same-namespace case** — parentRef has no `namespace`, so the `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -78,44 +85,45 @@ metadata:
   namespace: my-app
   annotations:
     ipam.adevinta.com/cluster-allowlist-group: office-ips
-    ipam.adevinta.com/gateway: my-gateway
 spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
   hostnames:
-    - app.example.com
-  rules:
-    - matches:
-        - path:
-            type: PathPrefix
-            value: /
+  - app.example.com
 ```
 
-The controller generates the following `AuthorizationPolicy` in `my-app`:
+The controller generates in `my-app`:
 
 ```yaml
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: my-route
+  name: my-route          # httproute name
   namespace: my-app
+  ownerReferences:        # automatically garbage-collected when the HTTPRoute is deleted
+  - kind: HTTPRoute
+    name: my-route
 spec:
   action: ALLOW
   rules:
   - from:
     - source:
         remoteIpBlocks:
-          - 10.0.0.0/8
-          - 192.168.0.0/16
+        - 10.0.0.0/8
+        - 192.168.0.0/16
     to:
     - operation:
         hosts:
-          - app.example.com
+        - app.example.com
   targetRefs:
   - group: gateway.networking.k8s.io
     kind: Gateway
     name: my-gateway
 ```
 
-**Sophisticated case** — `AuthorizationPolicy` is created in a different namespace (e.g. where the Gateway lives) using the optional `ipam.adevinta.com/namespace` annotation:
+**Cross-namespace case** — parentRef has a `namespace` that differs from the HTTPRoute namespace. The `AuthorizationPolicy` is created in the gateway namespace:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -125,14 +133,143 @@ metadata:
   namespace: my-app
   annotations:
     ipam.adevinta.com/cluster-allowlist-group: office-ips
-    ipam.adevinta.com/gateway: my-gateway
-    ipam.adevinta.com/namespace: gateway-namespace
 spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+    namespace: infra          # different from HTTPRoute namespace
   hostnames:
-    - app.example.com
+  - app.example.com
 ```
 
-The controller generates the same `AuthorizationPolicy` structure but in `gateway-namespace` instead of `my-app`.
+The controller generates in `infra`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: my-app-my-route   # <httproute-namespace>-<httproute-name>
+  namespace: infra
+  # no ownerReference — cross-namespace owner references are not supported by Kubernetes
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+    to:
+    - operation:
+        hosts:
+        - app.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+```
+
+> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted, because Kubernetes does not support cross-namespace owner references. They must be cleaned up manually.
+
+**Multiple gateways** — an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway. The first gets no index suffix; subsequent ones get `-1`, `-2`, etc.:
+
+```yaml
+spec:
+  parentRefs:
+  - name: internal-gateway           # → AuthorizationPolicy: my-route (or my-app-my-route)
+  - name: external-gateway           # → AuthorizationPolicy: my-route-1 (or my-app-my-route-1)
+```
+
+**Performance tuning** — if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
+
+```yaml
+httproute:
+  enabled: true
+  labelSelector: "ipam.adevinta.com/allowlisting=enabled"
+```
+
+Or via flag: `--httproute-label-selector=ipam.adevinta.com/allowlisting=enabled`.
+
+This filters at the API server level, reducing both memory usage and reconcile load.
+
+**Merge mode** — for staging environments where the same application is deployed across multiple namespaces (e.g. `ns-staging00`, `ns-staging01`, ...) and all point to a shared cross-namespace gateway, you can set `ipam.adevinta.com/merge` to a shared policy name to produce a single `AuthorizationPolicy` that covers all of them.
+
+The annotation value is both the **merge key** (which routes belong together) and the **name of the generated `AuthorizationPolicy`**. HTTPRoute names can be anything — typically they are hostname-based — and do not need to match.
+
+```yaml
+# In namespace ns-staging00:
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chaos-monkey.public.ns-staging00.example.com
+  namespace: ns-staging00
+  annotations:
+    ipam.adevinta.com/allowlist-group: allowlist
+    ipam.adevinta.com/merge: chaos-monkey   # merge key = AP name
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+    namespace: ns-infra
+  hostnames:
+  - chaos-monkey.public.ns-staging00.example.com
+---
+# In namespace ns-staging01:
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chaos-monkey.public.ns-staging01.example.com
+  namespace: ns-staging01
+  annotations:
+    ipam.adevinta.com/allowlist-group: allowlist
+    ipam.adevinta.com/merge: chaos-monkey   # same merge key → same AP
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+    namespace: ns-infra
+  hostnames:
+  - chaos-monkey.public.ns-staging01.example.com
+```
+
+The controller generates a **single** `AuthorizationPolicy` in `ns-infra`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: chaos-monkey      # = the merge key (first gateway, no suffix; second would be chaos-monkey-1)
+  namespace: ns-infra
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 1.2.3.4/32       # union of all sibling CIDRs
+        - 5.6.7.8/32
+    to:
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging00.example.com
+        - chaos-monkey.public.ns-staging01.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+```
+
+Merge rules:
+- All HTTPRoutes with the **same annotation value** and the **same target gateway** are merged together, regardless of their `metadata.name`.
+- CIDRs and hostnames are deduplicated across all siblings.
+- Reconciling any one sibling rebuilds the full merged policy.
+
+> **Security warning:** Merge mode is **not recommended for production** environments. Any namespace in the cluster that sets the same merge key and points to the same gateway will be pulled into the same `AuthorizationPolicy`. This means a team controlling a different namespace could add their application's hostnames and CIDRs to your policy, potentially opening access to their service through your allowlist — or having their service inadvertently protected by your rules.
+>
+> Merge mode is designed for **staging environments** where multiple namespace-isolated instances of the same application exist under the same team's control and share a single gateway.
 
 ### Example NetworkPolicy Resource
 Below are examples of NetworkPolicy resources with different `policyTypes` (Ingress or Egress).

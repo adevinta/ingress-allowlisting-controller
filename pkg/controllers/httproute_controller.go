@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -38,12 +40,50 @@ type HTTPRouteAllowlistingReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 
-func (r *HTTPRouteAllowlistingReconciler) gatewayAnnotation() string {
-	return r.CidrResolver.AnnotationPrefix + "/gateway"
+// gatewayParentRefs returns all parentRefs that target a Gateway.
+func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentReference {
+	var refs []gatewayApiv1.ParentReference
+	for _, ref := range httproute.Spec.ParentRefs {
+		if ref.Kind != nil && *ref.Kind != "Gateway" {
+			continue
+		}
+		if ref.Group != nil && *ref.Group != "gateway.networking.k8s.io" {
+			continue
+		}
+		refs = append(refs, ref)
+	}
+	return refs
 }
 
-func (r *HTTPRouteAllowlistingReconciler) namespaceAnnotation() string {
-	return r.CidrResolver.AnnotationPrefix + "/namespace"
+func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
+	return r.CidrResolver.AnnotationPrefix + "/merge"
+}
+
+func (r *HTTPRouteAllowlistingReconciler) managedByValue() string {
+	if r.Prefix != "" {
+		return r.Prefix + "-ingress-allowlisting-controller"
+	}
+	return "ingress-allowlisting-controller"
+}
+
+// invalidLabelValue matches characters not allowed in k8s label values: (([A-Za-z0-9][-A-Za-z0-9_.]*)?[A-Za-z0-9])?
+var invalidLabelValue = regexp.MustCompile(`[^-A-Za-z0-9_.]`)
+
+func labelSafe(s string) string {
+	v := invalidLabelValue.ReplaceAllString(s, "_")
+	if len(v) > 63 {
+		v = v[:63]
+	}
+	return v
+}
+
+func (r *HTTPRouteAllowlistingReconciler) applyLabels(policy *istiosecurityv1.AuthorizationPolicy, ownerNamespace, ownerName string) {
+	if policy.Labels == nil {
+		policy.Labels = map[string]string{}
+	}
+	policy.Labels["app.kubernetes.io/managed-by"] = r.managedByValue()
+	policy.Labels[r.CidrResolver.AnnotationPrefix+"/owner-namespace"] = labelSafe(ownerNamespace)
+	policy.Labels[r.CidrResolver.AnnotationPrefix+"/owner-name"] = labelSafe(ownerName)
 }
 
 func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -54,6 +94,26 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	}
 	log.Infof("HTTPRoute %s being reconciled. Creating/updating allowlist...", httproute.GetName())
 
+	parentRefs := gatewayParentRefs(&httproute)
+	if len(parentRefs) == 0 {
+		log.Infof("HTTPRoute %s has no Gateway parentRefs, skipping", httproute.GetName())
+		return ctrl.Result{}, nil
+	}
+
+	if mergeKey := httproute.Annotations[r.mergeAnnotation()]; mergeKey != "" {
+		i := 0
+		for _, ref := range parentRefs {
+			if ref.Namespace == nil || string(*ref.Namespace) == httproute.Namespace {
+				continue // merge only applies to cross-namespace refs
+			}
+			if err := r.reconcileMergedGateway(ctx, &httproute, ref, mergeKey, i); err != nil {
+				return ctrl.Result{}, err
+			}
+			i++
+		}
+		return ctrl.Result{}, nil
+	}
+
 	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
 	if err == r.CidrResolver.AnnotationNotFoundError() {
 		return ctrl.Result{}, nil
@@ -62,72 +122,164 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		return ctrl.Result{}, err
 	}
 
-	annotations := httproute.GetAnnotations()
-	gatewayName, ok := annotations[r.gatewayAnnotation()]
-	if !ok || gatewayName == "" {
-		log.Infof("HTTPRoute %s has no %s annotation, skipping", httproute.GetName(), r.gatewayAnnotation())
-		return ctrl.Result{}, nil
-	}
-
-	targetNamespace := httproute.Namespace
-	if ns, ok := annotations[r.namespaceAnnotation()]; ok && ns != "" {
-		targetNamespace = ns
-	}
-
 	var hostnames []string
 	for _, h := range httproute.Spec.Hostnames {
 		hostnames = append(hostnames, string(h))
 	}
 
-	policyName := httproute.Name
-	generatedAuthorizationPolicy := &istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      policyName,
-			Namespace: targetNamespace,
-		},
-	}
+	rules := buildAuthorizationRules(allowedIps, hostnames)
 
-	rules := []*istioApiSecurityV1.Rule{
-		{
-			From: []*istioApiSecurityV1.Rule_From{
-				{
-					Source: &istioApiSecurityV1.Source{
-						RemoteIpBlocks: allowedIps,
+	for i, ref := range parentRefs {
+		gatewayName := string(ref.Name)
+		targetNamespace := httproute.Namespace
+		crossNamespace := ref.Namespace != nil && string(*ref.Namespace) != httproute.Namespace
+
+		baseName := httproute.Name
+		if crossNamespace {
+			targetNamespace = string(*ref.Namespace)
+			baseName = httproute.Namespace + "-" + httproute.Name
+		}
+		policyName := baseName
+		if i > 0 {
+			policyName = fmt.Sprintf("%s-%d", baseName, i)
+		}
+
+		policy := &istiosecurityv1.AuthorizationPolicy{
+			ObjectMeta: metav1.ObjectMeta{
+				Name:      policyName,
+				Namespace: targetNamespace,
+			},
+		}
+		_, err = ctrl.CreateOrUpdate(ctx, r.Client, policy, func() error {
+			if !crossNamespace {
+				// Same-namespace: owner reference enables automatic GC when the HTTPRoute is deleted.
+				// Cross-namespace owner references are silently stripped by the API server; controller-runtime
+				// rejects them early, so we skip the call entirely.
+				if err := ctrl.SetControllerReference(&httproute, policy, r.Scheme); err != nil {
+					return err
+				}
+			}
+			r.applyLabels(policy, httproute.Namespace, httproute.Name)
+			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
+				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
+				Rules:  rules,
+				TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
+					{
+						Name:  gatewayName,
+						Kind:  "Gateway",
+						Group: "gateway.networking.k8s.io",
 					},
 				},
-			},
-		},
+			}
+			return nil
+		})
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		log.Infof("AuthorizationPolicy %s/%s created/updated for HTTPRoute %s", targetNamespace, policyName, httproute.GetName())
 	}
-	if len(hostnames) > 0 {
-		rules[0].To = []*istioApiSecurityV1.Rule_To{
-			{
-				Operation: &istioApiSecurityV1.Operation{
-					Hosts: hostnames,
-				},
-			},
+
+	return ctrl.Result{}, nil
+}
+
+func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, mergeKey string, i int) error {
+	log := log.DefaultLogger.WithContext(ctx)
+	gatewayName := string(ref.Name)
+	gatewayNamespace := string(*ref.Namespace)
+
+	allRoutes := &gatewayApiv1.HTTPRouteList{}
+	if err := r.List(ctx, allRoutes); err != nil {
+		return err
+	}
+
+	seenIPs := map[string]struct{}{}
+	seenHosts := map[string]struct{}{}
+	var mergedIPs, mergedHosts []string
+
+	for i := range allRoutes.Items {
+		sibling := &allRoutes.Items[i]
+		if sibling.Annotations[r.mergeAnnotation()] != mergeKey {
+			continue
+		}
+		if !httproutePointsToGateway(sibling, gatewayName, gatewayNamespace) {
+			continue
+		}
+
+		ips, err := r.CidrResolver.GetCidrsFromObject(ctx, sibling)
+		if err == r.CidrResolver.AnnotationNotFoundError() {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		for _, ip := range ips {
+			if _, seen := seenIPs[ip]; !seen {
+				seenIPs[ip] = struct{}{}
+				mergedIPs = append(mergedIPs, ip)
+			}
+		}
+		for _, h := range sibling.Spec.Hostnames {
+			host := string(h)
+			if _, seen := seenHosts[host]; !seen {
+				seenHosts[host] = struct{}{}
+				mergedHosts = append(mergedHosts, host)
+			}
 		}
 	}
 
-	_, err = ctrl.CreateOrUpdate(ctx, r.Client, generatedAuthorizationPolicy, func() error {
-		generatedAuthorizationPolicy.Spec = istioApiSecurityV1.AuthorizationPolicy{
+	if len(mergedIPs) == 0 {
+		log.Infof("No CIDRs found for merge group %q → gateway %s/%s, skipping", mergeKey, gatewayNamespace, gatewayName)
+		return nil
+	}
+
+	policyName := mergeKey
+	if i > 0 {
+		policyName = fmt.Sprintf("%s-%d", mergeKey, i)
+	}
+	policy := &istiosecurityv1.AuthorizationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: policyName, Namespace: gatewayNamespace},
+	}
+	_, err := ctrl.CreateOrUpdate(ctx, r.Client, policy, func() error {
+		r.applyLabels(policy, "merged", mergeKey)
+		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
-			Rules:  rules,
+			Rules:  buildAuthorizationRules(mergedIPs, mergedHosts),
 			TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
-				{
-					Name:  gatewayName,
-					Kind:  "Gateway",
-					Group: "gateway.networking.k8s.io",
-				},
+				{Name: gatewayName, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
 			},
 		}
 		return nil
 	})
 	if err != nil {
-		return ctrl.Result{}, err
+		return err
 	}
-	log.Infof("AuthorizationPolicy %s/%s created/updated for HTTPRoute %s", targetNamespace, policyName, httproute.GetName())
+	log.Infof("Merged AuthorizationPolicy %s/%s created/updated for merge group %q", gatewayNamespace, policyName, mergeKey)
+	return nil
+}
 
-	return ctrl.Result{}, nil
+func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
+	for _, ref := range gatewayParentRefs(httproute) {
+		if string(ref.Name) == gatewayName && ref.Namespace != nil && string(*ref.Namespace) == gatewayNamespace {
+			return true
+		}
+	}
+	return false
+}
+
+func buildAuthorizationRules(allowedIPs, hostnames []string) []*istioApiSecurityV1.Rule {
+	rules := []*istioApiSecurityV1.Rule{
+		{
+			From: []*istioApiSecurityV1.Rule_From{
+				{Source: &istioApiSecurityV1.Source{RemoteIpBlocks: allowedIPs}},
+			},
+		},
+	}
+	if len(hostnames) > 0 {
+		rules[0].To = []*istioApiSecurityV1.Rule_To{
+			{Operation: &istioApiSecurityV1.Operation{Hosts: hostnames}},
+		}
+	}
+	return rules
 }
 
 func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
@@ -138,10 +290,17 @@ func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
 }
 
 func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
+	r.Prefix = namePrefix
 	annotationPredicate := predicate.Funcs{
-		CreateFunc:  func(e event.CreateEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
-		DeleteFunc:  func(e event.DeleteEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
-		GenericFunc: func(e event.GenericEvent) bool { return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object) },
+		CreateFunc: func(e event.CreateEvent) bool {
+			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object)
+		},
+		DeleteFunc: func(e event.DeleteEvent) bool {
+			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object)
+		},
+		GenericFunc: func(e event.GenericEvent) bool {
+			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object)
+		},
 		// Check both old and new: annotation removal must trigger reconcile to clean up the AuthorizationPolicy.
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectNew) || hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectOld)
