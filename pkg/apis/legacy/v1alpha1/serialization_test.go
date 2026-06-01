@@ -49,7 +49,7 @@ func TestCIDRsSerialization(t *testing.T) {
 		nil,
 	).Encode(&cidr, buffer))
 
-	assert.JSONEq(t, `{"kind":"CIDRs","apiVersion":"ipam.example.com/v1alpha1","metadata":{"creationTimestamp":null},"spec":{"location":{},"cidrs":["127.0.0.1/24"]}, "status":{"lastUpdate":null}}`, buffer.String())
+	assert.JSONEq(t, `{"kind":"CIDRs","apiVersion":"ipam.example.com/v1alpha1","metadata":{},"spec":{"location":{},"cidrs":["127.0.0.1/24"]}, "status":{"lastUpdate":null}}`, buffer.String())
 }
 
 func TestCIDRsDeserialization(t *testing.T) {
@@ -113,7 +113,7 @@ func TestClusterCIDRsSerialization(t *testing.T) {
 		nil,
 	).Encode(&cidr, buffer))
 
-	assert.JSONEq(t, `{"kind":"ClusterCIDRs","apiVersion":"ipam.example.com/v1alpha1","metadata":{"creationTimestamp":null},"spec":{"location":{},"cidrs":["127.0.0.1/24"]}, "status":{"lastUpdate":null}}`, buffer.String())
+	assert.JSONEq(t, `{"kind":"ClusterCIDRs","apiVersion":"ipam.example.com/v1alpha1","metadata":{},"spec":{"location":{},"cidrs":["127.0.0.1/24"]}, "status":{"lastUpdate":null}}`, buffer.String())
 }
 
 func TestClusterCIDRsDeserialization(t *testing.T) {

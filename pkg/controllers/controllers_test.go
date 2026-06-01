@@ -38,6 +38,20 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
+type testHandlerRegistration struct{}
+
+func (r *testHandlerRegistration) HasSynced() bool { return true }
+func (r *testHandlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
+	ch := make(chan struct{})
+	close(ch)
+	return &testDoneChecker{ch: ch}
+}
+
+type testDoneChecker struct{ ch chan struct{} }
+
+func (d *testDoneChecker) Name() string         { return "testInformer" }
+func (d *testDoneChecker) Done() <-chan struct{} { return d.ch }
+
 type testInformer struct {
 	handlers []toolscache.ResourceEventHandler
 }
@@ -46,34 +60,39 @@ var _ cache.Informer = &testInformer{}
 
 func (i *testInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
 	i.handlers = append(i.handlers, handler)
-	return nil, nil
+	return &testHandlerRegistration{}, nil
 }
 
 func (i *testInformer) RemoveEventHandler(handler toolscache.ResourceEventHandlerRegistration) error {
 	return nil
 }
 
-// AddEventHandlerWithResyncPeriod adds an event handler to the shared informer using the
-// specified resync period.  Events to a single handler are delivered sequentially, but there is
-// no coordination between different handlers.
 func (i *testInformer) AddEventHandlerWithResyncPeriod(handler toolscache.ResourceEventHandler, resyncPeriod time.Duration) (toolscache.ResourceEventHandlerRegistration, error) {
 	i.handlers = append(i.handlers, handler)
-	return nil, nil
+	return &testHandlerRegistration{}, nil
+}
+
+func (i *testInformer) AddEventHandlerWithOptions(handler toolscache.ResourceEventHandler, options toolscache.HandlerOptions) (toolscache.ResourceEventHandlerRegistration, error) {
+	i.handlers = append(i.handlers, handler)
+	return &testHandlerRegistration{}, nil
 }
 
 func (i *testInformer) IsStopped() bool {
 	return false
 }
 
-// AddIndexers adds more indexers to this store.  If you call this after you already have data
-// in the store, the results are undefined.
 func (i *testInformer) AddIndexers(indexers toolscache.Indexers) error {
 	return nil
 }
 
-// HasSynced return true if the informers underlying store has synced
 func (i *testInformer) HasSynced() bool {
 	return true
+}
+
+func (i *testInformer) HasSyncedChecker() toolscache.DoneChecker {
+	ch := make(chan struct{})
+	close(ch)
+	return &testDoneChecker{ch: ch}
 }
 
 type testCache struct {
@@ -398,7 +417,12 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		func() bool {
 			generatedAuthorizationPolicy := &istiosecurityv1.AuthorizationPolicy{}
 			err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: currentNamespaceName}, generatedAuthorizationPolicy)
-			assert.NoError(t, err)
+			if err != nil {
+				return false
+			}
+			if len(generatedAuthorizationPolicy.Spec.Rules) == 0 {
+				return false
+			}
 			actual := generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks
 			expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}
 			return reflect.DeepEqual(actual, expected)
@@ -483,7 +507,12 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		func() bool {
 			generatedAuthorizationPolicy := &istiosecurityv1.AuthorizationPolicy{}
 			err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: currentNamespaceName}, generatedAuthorizationPolicy)
-			assert.NoError(t, err)
+			if err != nil {
+				return false
+			}
+			if len(generatedAuthorizationPolicy.Spec.Rules) == 0 {
+				return false
+			}
 			actual := generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks
 			expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}
 			return reflect.DeepEqual(actual, expected)
