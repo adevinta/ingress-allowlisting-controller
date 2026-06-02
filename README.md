@@ -58,6 +58,55 @@ The content of the annotations can be a comma-separated list:
 
 `MyCidrsObject,MyCidrsObject2,MyCidrsObject3`
 
+### Example Gateway Resource
+
+The controller can watch `Gateway` resources and create an `AuthorizationPolicy` in the same namespace targeting the gateway itself.
+
+Enable the feature via Helm:
+```yaml
+gateway:
+  enabled: true
+```
+
+Or directly with the flag: `--gateway-support-enabled`.
+
+Required annotations:
+- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` - same as for Ingress
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+```
+
+The controller generates in `my-app`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: my-gateway      # same as the Gateway name
+  namespace: my-app
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
+```
+
+The `AuthorizationPolicy` is created in the same namespace as the `Gateway` and uses `targetRef` (singular) pointing directly at the gateway - no cross-namespace support, no hostnames, no merge mode. The AP is owned by the `Gateway` resource and garbage-collected automatically when the `Gateway` is deleted.
+
 ### Example HTTPRoute Resource
 
 The controller can also watch `HTTPRoute` resources and create an `AuthorizationPolicy` targeting the associated Istio Gateway.
@@ -71,11 +120,11 @@ httproute:
 Or directly with the flag: `--httproute-support-enabled`.
 
 Required annotations:
-- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` — same as for Ingress
+- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` - same as for Ingress
 
-The gateway name, gateway namespace, and target namespace for the `AuthorizationPolicy` are all derived automatically from `spec.parentRefs` — no extra annotations needed.
+The gateway name, gateway namespace, and target namespace for the `AuthorizationPolicy` are all derived automatically from `spec.parentRefs` - no extra annotations needed.
 
-**Same-namespace case** — parentRef has no `namespace`, so the `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
+**Same-namespace case** - parentRef has no `namespace`, so the `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -123,7 +172,7 @@ spec:
     name: my-gateway
 ```
 
-**Cross-namespace case** — parentRef has a `namespace` that differs from the HTTPRoute namespace. The `AuthorizationPolicy` is created in the gateway namespace:
+**Cross-namespace case** - parentRef has a `namespace` that differs from the HTTPRoute namespace. The `AuthorizationPolicy` is created in the gateway namespace:
 
 ```yaml
 apiVersion: gateway.networking.k8s.io/v1
@@ -151,7 +200,7 @@ kind: AuthorizationPolicy
 metadata:
   name: my-app-my-route   # <httproute-namespace>-<httproute-name>
   namespace: infra
-  # no ownerReference — cross-namespace owner references are not supported by Kubernetes
+  # no ownerReference - cross-namespace owner references are not supported by Kubernetes
 spec:
   action: ALLOW
   rules:
@@ -170,7 +219,7 @@ spec:
     name: cross-namespace-gateway
 ```
 
-> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted. Kubernetes does not support cross-namespace owner references, so the controller cannot set one — the API server would silently strip it anyway. This means stale APs can accumulate when routes are deleted, have their `parentRefs` changed, or switch between normal and merge mode.
+> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted. Kubernetes does not support cross-namespace owner references, so the controller cannot set one - the API server would silently strip it anyway. This means stale APs can accumulate when routes are deleted, have their `parentRefs` changed, or switch between normal and merge mode.
 >
 > **Automatic cleanup on restart:** every time the controller starts, it runs a one-time sweep over all `AuthorizationPolicy` resources it owns (identified by the `app.kubernetes.io/managed-by=ingress-allowlisting-controller` label). Any AP whose owner `HTTPRoute` no longer exists, or that the current route configuration would no longer produce, is deleted. Restarting the controller is therefore sufficient to clean up any accumulated orphans.
 >
@@ -181,7 +230,7 @@ spec:
 > kubectl rollout restart deployment/ingress-allowlisting-controller -n <namespace>
 > ```
 
-**Multiple gateways** — an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway. The first gets no index suffix; subsequent ones get `-1`, `-2`, etc.:
+**Multiple gateways** - an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway. The first gets no index suffix; subsequent ones get `-1`, `-2`, etc.:
 
 ```yaml
 spec:
@@ -190,7 +239,7 @@ spec:
   - name: external-gateway           # → AuthorizationPolicy: my-route-1 (or my-app-my-route-1)
 ```
 
-**Performance tuning** — if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
+**Performance tuning** - if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
 
 ```yaml
 httproute:
@@ -202,9 +251,9 @@ Or via flag: `--httproute-label-selector=ipam.adevinta.com/allowlisting=enabled`
 
 This filters at the API server level, reducing both memory usage and reconcile load.
 
-**Merge mode** — for staging environments where the same application is deployed across multiple namespaces (e.g. `ns-staging00`, `ns-staging01`, ...) and all point to a shared cross-namespace gateway, you can set `ipam.adevinta.com/merge` to a shared policy name to produce a single `AuthorizationPolicy` that covers all of them.
+**Merge mode** - for staging environments where the same application is deployed across multiple namespaces (e.g. `ns-staging00`, `ns-staging01`, ...) and all point to a shared cross-namespace gateway, you can set `ipam.adevinta.com/merge` to a shared policy name to produce a single `AuthorizationPolicy` that covers all of them.
 
-The annotation value is both the **merge key** (which routes belong together) and the **name of the generated `AuthorizationPolicy`**. HTTPRoute names can be anything — typically they are hostname-based — and do not need to match.
+The annotation value is both the **merge key** (which routes belong together) and the **name of the generated `AuthorizationPolicy`**. HTTPRoute names can be anything - typically they are hostname-based - and do not need to match.
 
 ```yaml
 # In namespace ns-staging00:
@@ -276,7 +325,7 @@ Merge rules:
 - CIDRs and hostnames are deduplicated across all siblings.
 - Reconciling any one sibling rebuilds the full merged policy.
 
-> **Security warning:** Merge mode is **not recommended for production** environments. Any namespace in the cluster that sets the same merge key and points to the same gateway will be pulled into the same `AuthorizationPolicy`. This means a team controlling a different namespace could add their application's hostnames and CIDRs to your policy, potentially opening access to their service through your allowlist — or having their service inadvertently protected by your rules.
+> **Security warning:** Merge mode is **not recommended for production** environments. Any namespace in the cluster that sets the same merge key and points to the same gateway will be pulled into the same `AuthorizationPolicy`. This means a team controlling a different namespace could add their application's hostnames and CIDRs to your policy, potentially opening access to their service through your allowlist - or having their service inadvertently protected by your rules.
 >
 > Merge mode is designed for **staging environments** where multiple namespace-isolated instances of the same application exist under the same team's control and share a single gateway.
 
