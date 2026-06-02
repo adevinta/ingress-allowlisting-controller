@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
+	"sync"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -34,11 +35,48 @@ type HTTPRouteAllowlistingReconciler struct {
 	LegacyGroupVersion string
 	Prefix             string
 	CidrResolver       resolvers.CidrResolver
+	startupCleanupOnce sync.Once
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
+
+type policyTarget struct {
+	namespace      string
+	name           string
+	gatewayName    string
+	crossNamespace bool
+	ref            gatewayApiv1.ParentReference
+}
+
+// policyTargets computes the complete set of AuthorizationPolicies that the non-merge
+// reconcile path would produce for route: one per Gateway parentRef, with namespace and
+// name derived from the cross-namespace flag and index. Single source of truth for AP naming.
+func policyTargets(route *gatewayApiv1.HTTPRoute) []policyTarget {
+	var targets []policyTarget
+	for i, ref := range gatewayParentRefs(route) {
+		crossNamespace := ref.Namespace != nil && string(*ref.Namespace) != route.Namespace
+		targetNamespace := route.Namespace
+		baseName := route.Name
+		if crossNamespace {
+			targetNamespace = string(*ref.Namespace)
+			baseName = route.Namespace + "-" + route.Name
+		}
+		name := baseName
+		if i > 0 {
+			name = fmt.Sprintf("%s-%d", baseName, i)
+		}
+		targets = append(targets, policyTarget{
+			namespace:      targetNamespace,
+			name:           name,
+			gatewayName:    string(ref.Name),
+			crossNamespace: crossNamespace,
+			ref:            ref,
+		})
+	}
+	return targets
+}
 
 // gatewayParentRefs returns all parentRefs that target a Gateway.
 func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentReference {
@@ -111,6 +149,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			}
 			i++
 		}
+		r.runStartupCleanup(ctx)
 		return ctrl.Result{}, nil
 	}
 
@@ -129,29 +168,12 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 	rules := buildAuthorizationRules(allowedIps, hostnames)
 
-	for i, ref := range parentRefs {
-		gatewayName := string(ref.Name)
-		targetNamespace := httproute.Namespace
-		crossNamespace := ref.Namespace != nil && string(*ref.Namespace) != httproute.Namespace
-
-		baseName := httproute.Name
-		if crossNamespace {
-			targetNamespace = string(*ref.Namespace)
-			baseName = httproute.Namespace + "-" + httproute.Name
-		}
-		policyName := baseName
-		if i > 0 {
-			policyName = fmt.Sprintf("%s-%d", baseName, i)
-		}
-
+	for _, pt := range policyTargets(&httproute) {
 		policy := &istiosecurityv1.AuthorizationPolicy{
-			ObjectMeta: metav1.ObjectMeta{
-				Name:      policyName,
-				Namespace: targetNamespace,
-			},
+			ObjectMeta: metav1.ObjectMeta{Name: pt.name, Namespace: pt.namespace},
 		}
 		_, err = ctrl.CreateOrUpdate(ctx, r.Client, policy, func() error {
-			if !crossNamespace {
+			if !pt.crossNamespace {
 				// Same-namespace: owner reference enables automatic GC when the HTTPRoute is deleted.
 				// Cross-namespace owner references are silently stripped by the API server; controller-runtime
 				// rejects them early, so we skip the call entirely.
@@ -164,11 +186,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 				Rules:  rules,
 				TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
-					{
-						Name:  gatewayName,
-						Kind:  "Gateway",
-						Group: "gateway.networking.k8s.io",
-					},
+					{Name: pt.gatewayName, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
 				},
 			}
 			return nil
@@ -176,10 +194,77 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		if err != nil {
 			return ctrl.Result{}, err
 		}
-		log.Infof("AuthorizationPolicy %s/%s created/updated for HTTPRoute %s", targetNamespace, policyName, httproute.GetName())
+		log.Infof("AuthorizationPolicy %s/%s created/updated for HTTPRoute %s", pt.namespace, pt.name, httproute.GetName())
 	}
 
+	r.runStartupCleanup(ctx)
+
 	return ctrl.Result{}, nil
+}
+
+// runStartupCleanup runs once after the first reconcile completes. It lists all APs managed by this
+// controller, checks whether the owning HTTPRoute still exists and would still produce that AP,
+// and deletes any that are orphaned. This handles APs left behind by previous controller runs.
+func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context) {
+	r.startupCleanupOnce.Do(func() {
+		log := log.DefaultLogger.WithContext(ctx)
+		log.Infof("Running post-startup orphan cleanup for managed AuthorizationPolicies")
+
+		existing := &istiosecurityv1.AuthorizationPolicyList{}
+		if err := r.List(ctx, existing, client.MatchingLabels{
+			"app.kubernetes.io/managed-by": r.managedByValue(),
+		}); err != nil {
+			log.Errorf("startup cleanup: failed to list AuthorizationPolicies: %v", err)
+			return
+		}
+
+		for _, ap := range existing.Items {
+			ap := ap
+			ownerNS := ap.Labels[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
+			ownerName := ap.Labels[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+
+			if ownerNS == "merged" {
+				// Merge-mode AP: orphaned if no HTTPRoute with merge=<ownerName> pointing to any gateway exists
+				routes := &gatewayApiv1.HTTPRouteList{}
+				if err := r.List(ctx, routes); err != nil {
+					log.Errorf("startup cleanup: failed to list HTTPRoutes: %v", err)
+					return
+				}
+				found := false
+				for i := range routes.Items {
+					if routes.Items[i].Annotations[r.mergeAnnotation()] == ownerName {
+						found = true
+						break
+					}
+				}
+				if found {
+					continue
+				}
+			} else {
+				// Normal AP: orphaned if owner HTTPRoute no longer exists, or has since switched to merge mode,
+				// or no longer produces an AP at this exact {namespace, name}.
+				route := &gatewayApiv1.HTTPRoute{}
+				err := r.Get(ctx, types.NamespacedName{Namespace: ownerNS, Name: ownerName}, route)
+				if client.IgnoreNotFound(err) != nil {
+					log.Errorf("startup cleanup: failed to get HTTPRoute %s/%s: %v", ownerNS, ownerName, err)
+					return
+				}
+				if err == nil && route.Annotations[r.mergeAnnotation()] == "" {
+					// Route still exists and is not in merge mode — check it still produces this AP
+					if routeProducesPolicy(route, ap.Namespace, ap.Name) {
+						continue
+					}
+				}
+				// Falls through if: route not found, route switched to merge, or route no longer produces this AP
+			}
+
+			if err := r.Delete(ctx, ap); client.IgnoreNotFound(err) != nil {
+				log.Errorf("startup cleanup: failed to delete orphaned AP %s/%s: %v", ap.Namespace, ap.Name, err)
+				return
+			}
+			log.Infof("Startup cleanup: deleted orphaned AuthorizationPolicy %s/%s (owner: %s/%s)", ap.Namespace, ap.Name, ownerNS, ownerName)
+		}
+	})
 }
 
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, mergeKey string, i int) error {
@@ -255,6 +340,19 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 	}
 	log.Infof("Merged AuthorizationPolicy %s/%s created/updated for merge group %q", gatewayNamespace, policyName, mergeKey)
 	return nil
+}
+
+// routeProducesPolicy reports whether the non-merge reconcile path for route would generate
+// an AuthorizationPolicy at the given {namespace, name}. Used by startup cleanup to decide
+// whether an existing AP is still valid or has become orphaned (e.g. parentRef removed,
+// route switched to merge mode, or index shift after reordering parentRefs).
+func routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyName string) bool {
+	for _, pt := range policyTargets(route) {
+		if pt.namespace == policyNamespace && pt.name == policyName {
+			return true
+		}
+	}
+	return false
 }
 
 func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {

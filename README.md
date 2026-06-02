@@ -170,7 +170,16 @@ spec:
     name: cross-namespace-gateway
 ```
 
-> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted, because Kubernetes does not support cross-namespace owner references. They must be cleaned up manually.
+> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted. Kubernetes does not support cross-namespace owner references, so the controller cannot set one — the API server would silently strip it anyway. This means stale APs can accumulate when routes are deleted, have their `parentRefs` changed, or switch between normal and merge mode.
+>
+> **Automatic cleanup on restart:** every time the controller starts, it runs a one-time sweep over all `AuthorizationPolicy` resources it owns (identified by the `app.kubernetes.io/managed-by=ingress-allowlisting-controller` label). Any AP whose owner `HTTPRoute` no longer exists, or that the current route configuration would no longer produce, is deleted. Restarting the controller is therefore sufficient to clean up any accumulated orphans.
+>
+> **Hard reset:** to remove all APs managed by this controller and let it rebuild from scratch:
+> ```bash
+> kubectl delete authorizationpolicies -A -l app.kubernetes.io/managed-by=ingress-allowlisting-controller
+> # then restart the controller
+> kubectl rollout restart deployment/ingress-allowlisting-controller -n <namespace>
+> ```
 
 **Multiple gateways** — an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway. The first gets no index suffix; subsequent ones get `-1`, `-2`, etc.:
 
