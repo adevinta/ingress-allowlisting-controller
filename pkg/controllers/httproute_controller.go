@@ -218,21 +218,29 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			return
 		}
 
+		// Safety check: list all HTTPRoutes once upfront. If the list call fails or returns
+		// empty while we have managed APs, the API server or cache may be in a degraded state.
+		// Abort rather than risk deleting valid APs based on a dirty read.
+		allRoutes := &gatewayApiv1.HTTPRouteList{}
+		if err := r.List(ctx, allRoutes); err != nil {
+			log.Errorf("startup cleanup: failed to list HTTPRoutes, aborting to avoid dirty-read deletions: %v", err)
+			return
+		}
+		if len(allRoutes.Items) == 0 && len(existing.Items) > 0 {
+			log.Infof("startup cleanup: no HTTPRoutes found but managed APs exist — skipping to avoid dirty-read deletions")
+			return
+		}
+
 		for _, ap := range existing.Items {
 			ap := ap
 			ownerNS := ap.Labels[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
 			ownerName := ap.Labels[r.CidrResolver.AnnotationPrefix+"/owner-name"]
 
 			if ownerNS == "merged" {
-				// Merge-mode AP: orphaned if no HTTPRoute with merge=<ownerName> pointing to any gateway exists
-				routes := &gatewayApiv1.HTTPRouteList{}
-				if err := r.List(ctx, routes); err != nil {
-					log.Errorf("startup cleanup: failed to list HTTPRoutes: %v", err)
-					return
-				}
+				// Merge-mode AP: orphaned if no HTTPRoute with merge=<ownerName> exists anywhere
 				found := false
-				for i := range routes.Items {
-					if routes.Items[i].Annotations[r.mergeAnnotation()] == ownerName {
+				for i := range allRoutes.Items {
+					if allRoutes.Items[i].Annotations[r.mergeAnnotation()] == ownerName {
 						found = true
 						break
 					}

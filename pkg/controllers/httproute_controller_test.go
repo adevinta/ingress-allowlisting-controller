@@ -852,6 +852,65 @@ func TestStartupOrphanCleanup(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+func TestStartupCleanupAbortsOnEmptyHTTPRouteList(t *testing.T) {
+	// Scenario: managed APs exist but the HTTPRoute list returns empty (dirty read / cache not synced).
+	// Cleanup must abort rather than delete all APs.
+	existingAP := &istiosecurityv1.AuthorizationPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "some-route", Namespace: "mynamespace",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-namespace": "mynamespace",
+				"ipam.adevinta.com/owner-name":      "some-route",
+			},
+		},
+	}
+	// No HTTPRoutes in the cluster — simulates dirty read
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(existingAP).Build()
+
+	// Trigger cleanup via a fake reconcile request (route not found → IgnoreNotFound → cleanup fires)
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+	// Inject a route that exists so reconcile doesn't short-circuit before cleanup
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "trigger", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "localnet",
+		}},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
+			},
+		},
+	}
+	if err := k8sClient.Create(context.Background(), cidr); err != nil {
+		t.Fatal(err)
+	}
+	if err := k8sClient.Create(context.Background(), httproute); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "trigger", Namespace: "mynamespace"}})
+	assert.NoError(t, err)
+
+	// AP whose owner HTTPRoute doesn't exist should NOT be deleted because
+	// the list returned at least one HTTPRoute (the trigger route), so we're past the empty guard.
+	// This test specifically validates the empty-list guard by checking the AP survives
+	// when the list would have been empty (we use a separate reconciler with no routes pre-loaded).
+	reconciler2 := newHTTPRouteReconciler(t,
+		fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(existingAP).Build(),
+		extendedScheme,
+	)
+	// Reconcile a non-existent route — fires cleanup with empty HTTPRoute list
+	_, _ = reconciler2.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "ghost", Namespace: "mynamespace"}})
+
+	surviving := &istiosecurityv1.AuthorizationPolicy{}
+	err = reconciler2.Get(context.Background(), client.ObjectKey{Name: "some-route", Namespace: "mynamespace"}, surviving)
+	assert.NoError(t, err, "AP should NOT be deleted when HTTPRoute list is empty (dirty-read guard)")
+}
+
 func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 	// Scenario: HTTPRoute was cross-namespace without merge → AP named "mynamespace-test" in "gw-ns".
 	// User later adds merge=myapp → new AP named "myapp" in "gw-ns".
