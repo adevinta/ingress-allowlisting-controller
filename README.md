@@ -235,8 +235,8 @@ spec:
 ```yaml
 spec:
   parentRefs:
-  - name: internal-gateway           # → AuthorizationPolicy: my-route (or my-app-my-route)
-  - name: external-gateway           # → AuthorizationPolicy: my-route-1 (or my-app-my-route-1)
+  - name: internal-gateway           # → AuthorizationPolicy: <httproute-namespace>-<httproute-name>
+  - name: external-gateway           # → AuthorizationPolicy: <httproute-namespace>-<httproute-name>-1
 ```
 
 **Performance tuning** - if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
