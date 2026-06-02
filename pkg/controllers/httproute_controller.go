@@ -31,6 +31,7 @@ import (
 
 type HTTPRouteAllowlistingReconciler struct {
 	client.Client
+	APIReader          client.Reader // bypasses cache — used only by startup cleanup to confirm deletions
 	Scheme             *runtime.Scheme
 	LegacyGroupVersion string
 	Prefix             string
@@ -237,7 +238,8 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			ownerName := ap.Labels[r.CidrResolver.AnnotationPrefix+"/owner-name"]
 
 			if ownerNS == "merged" {
-				// Merge-mode AP: orphaned if no HTTPRoute with merge=<ownerName> exists anywhere
+				// Merge-mode AP: first check the cache (fast path); if not found there, confirm
+				// via direct API server read to rule out label-selector filtering.
 				found := false
 				for i := range allRoutes.Items {
 					if allRoutes.Items[i].Annotations[r.mergeAnnotation()] == ownerName {
@@ -248,9 +250,24 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 				if found {
 					continue
 				}
+				// Cache returned nothing — confirm via API server before deleting
+				directRoutes := &gatewayApiv1.HTTPRouteList{}
+				if err := r.APIReader.List(ctx, directRoutes); err != nil {
+					log.Errorf("startup cleanup: API reader failed to list HTTPRoutes: %v", err)
+					return
+				}
+				for i := range directRoutes.Items {
+					if directRoutes.Items[i].Annotations[r.mergeAnnotation()] == ownerName {
+						found = true
+						break
+					}
+				}
+				if found {
+					continue
+				}
 			} else {
-				// Normal AP: orphaned if owner HTTPRoute no longer exists, or has since switched to merge mode,
-				// or no longer produces an AP at this exact {namespace, name}.
+				// Normal AP: check cache first; if the route is absent from cache, confirm via
+				// direct API server read — it may simply be outside the label selector.
 				route := &gatewayApiv1.HTTPRoute{}
 				err := r.Get(ctx, types.NamespacedName{Namespace: ownerNS, Name: ownerName}, route)
 				if client.IgnoreNotFound(err) != nil {
@@ -258,12 +275,26 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 					return
 				}
 				if err == nil && route.Annotations[r.mergeAnnotation()] == "" {
-					// Route still exists and is not in merge mode — check it still produces this AP
+					// Route is in cache and not in merge mode — check it still produces this AP
 					if routeProducesPolicy(route, ap.Namespace, ap.Name) {
 						continue
 					}
 				}
-				// Falls through if: route not found, route switched to merge, or route no longer produces this AP
+				if err != nil {
+					// Not in cache — confirm via API server before deleting
+					directRoute := &gatewayApiv1.HTTPRoute{}
+					directErr := r.APIReader.Get(ctx, types.NamespacedName{Namespace: ownerNS, Name: ownerName}, directRoute)
+					if client.IgnoreNotFound(directErr) != nil {
+						log.Errorf("startup cleanup: API reader failed to get HTTPRoute %s/%s: %v", ownerNS, ownerName, directErr)
+						return
+					}
+					if directErr == nil {
+						// Route exists on API server but not in cache — outside label selector, keep AP
+						continue
+					}
+					// Confirmed 404 on API server — truly gone, fall through to delete
+				}
+				// Falls through if: confirmed gone, switched to merge, or no longer produces this AP
 			}
 
 			if err := r.Delete(ctx, ap); client.IgnoreNotFound(err) != nil {
@@ -397,6 +428,7 @@ func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
 
 func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	r.Prefix = namePrefix
+	r.APIReader = mgr.GetAPIReader()
 	annotationPredicate := predicate.Funcs{
 		CreateFunc: func(e event.CreateEvent) bool {
 			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.Object)

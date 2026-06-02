@@ -30,7 +30,9 @@ import (
 func newHTTPRouteReconciler(t *testing.T, k8sClient client.Client, scheme *runtime.Scheme) *HTTPRouteAllowlistingReconciler {
 	t.Helper()
 	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
-	return &HTTPRouteAllowlistingReconciler{Client: k8sClient, CidrResolver: resolver, Scheme: scheme}
+	// In tests, APIReader uses the same fake client — no label-selector filtering in tests
+	// so the cache and API reader are equivalent.
+	return &HTTPRouteAllowlistingReconciler{Client: k8sClient, APIReader: k8sClient, CidrResolver: resolver, Scheme: scheme}
 }
 
 // parentRef builds a Gateway ParentReference. Pass ns="" for same-namespace (no Namespace field set).
