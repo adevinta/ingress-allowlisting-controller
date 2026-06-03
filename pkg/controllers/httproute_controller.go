@@ -17,6 +17,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	workqueue "k8s.io/client-go/util/workqueue"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
 	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
@@ -146,13 +147,6 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				continue // merge only applies to cross-namespace refs
 			}
 			if err := r.reconcileMergedGateway(ctx, &httproute, ref, mergeKey, i); err != nil {
-				return ctrl.Result{}, err
-			}
-			// Rebuild APs for all other merge keys pointing to the same gateway.
-			// This handles the case where a sibling left this group (changed its merge key):
-			// the sibling's own reconcile triggered us, but the old group's AP still contains
-			// the sibling's stale data — we must rebuild it now.
-			if err := r.reconcileOtherMergeGroupsForGateway(ctx, &httproute, ref, mergeKey); err != nil {
 				return ctrl.Result{}, err
 			}
 			i++
@@ -313,40 +307,6 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 	})
 }
 
-// reconcileOtherMergeGroupsForGateway rebuilds APs for all merge keys other than currentKey
-// that point to the same gateway. This ensures that when a route changes its merge key, the AP
-// for the group it left is immediately updated to remove its stale data.
-func (r *HTTPRouteAllowlistingReconciler) reconcileOtherMergeGroupsForGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, currentKey string) error {
-	gatewayName := string(ref.Name)
-	gatewayNamespace := string(*ref.Namespace)
-
-	allRoutes := &gatewayApiv1.HTTPRouteList{}
-	if err := r.List(ctx, allRoutes); err != nil {
-		return err
-	}
-
-	// Collect distinct merge keys (excluding current) that point to this gateway
-	otherKeys := map[string]struct{}{}
-	for i := range allRoutes.Items {
-		sibling := &allRoutes.Items[i]
-		key := sibling.Annotations[r.mergeAnnotation()]
-		if key == "" || key == currentKey {
-			continue
-		}
-		if httproutePointsToGateway(sibling, gatewayName, gatewayNamespace) {
-			otherKeys[key] = struct{}{}
-		}
-	}
-
-	// Rebuild the AP for each other merge group
-	for key := range otherKeys {
-		if err := r.reconcileMergedGateway(ctx, httproute, ref, key, 0); err != nil {
-			return err
-		}
-	}
-	return nil
-}
-
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, mergeKey string, i int) error {
 	log := log.DefaultLogger.WithContext(ctx)
 	gatewayName := string(ref.Name)
@@ -435,6 +395,34 @@ func routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyN
 	return false
 }
 
+// mergeSiblingEnqueuer returns an EventHandler that, when an HTTPRoute's merge annotation
+// changes, enqueues all remaining members of the old merge group so they rebuild their AP
+// without the departed route's stale data.
+func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHandler {
+	return handler.Funcs{
+		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			oldKey := e.ObjectOld.GetAnnotations()[r.mergeAnnotation()]
+			newKey := e.ObjectNew.GetAnnotations()[r.mergeAnnotation()]
+			if oldKey == newKey || oldKey == "" {
+				return // no merge key change — nothing to do
+			}
+			// Route left merge group oldKey — enqueue all current members so they rebuild
+			routes := &gatewayApiv1.HTTPRouteList{}
+			if err := r.List(ctx, routes); err != nil {
+				return
+			}
+			for _, route := range routes.Items {
+				if route.Annotations[r.mergeAnnotation()] == oldKey {
+					q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
+						Namespace: route.Namespace,
+						Name:      route.Name,
+					}})
+				}
+			}
+		},
+	}
+}
+
 func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
 	for _, ref := range gatewayParentRefs(httproute) {
 		if string(ref.Name) == gatewayName && ref.Namespace != nil && string(*ref.Namespace) == gatewayNamespace {
@@ -494,7 +482,10 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).
 		Watches(
 			&ipamv1alpha1.ClusterCIDRs{},
-			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
+			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
+		Watches(
+			&gatewayApiv1.HTTPRoute{},
+			r.mergeSiblingEnqueuer())
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-httproute")
 	}

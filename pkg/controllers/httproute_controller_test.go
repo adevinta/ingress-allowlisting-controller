@@ -683,18 +683,29 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	route01.Annotations["ipam.adevinta.com/merge"] = "bar"
 	assert.NoError(t, k8sClient.Update(context.Background(), route01))
 
-	// Only route01 is reconciled (its annotation changed) — route00 is NOT triggered
+	// route01 is reconciled (its annotation changed to merge=bar)
 	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
 		Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
 	}})
 	assert.NoError(t, err)
 
-	// Bug: chaos-monkey AP still contains route01's hostname because route00 was never re-reconciled
+	// The mergeSiblingEnqueuer watches for merge key changes and enqueues siblings.
+	// In unit tests the event machinery doesn't run, so we simulate it:
+	// route01 changed from chaos-monkey → bar, so route00 (still in chaos-monkey) gets enqueued.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
+	}})
+	assert.NoError(t, err)
+
+	// chaos-monkey AP must now only contain route00's hostname
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	assert.NotContains(t, policy.Spec.Rules[0].To[0].Operation.Hosts,
 		"chaos-monkey.public.ns-staging01.example.com",
-		"BUG: route01 left the merge group but its hostname is still in the chaos-monkey AP")
+		"route01 left the merge group — its hostname must not appear in the chaos-monkey AP")
+	assert.Contains(t, policy.Spec.Rules[0].To[0].Operation.Hosts,
+		"chaos-monkey.public.ns-staging00.example.com",
+		"route00 is still in the merge group — its hostname must be present")
 }
 
 func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
