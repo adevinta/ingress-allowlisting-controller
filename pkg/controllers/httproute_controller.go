@@ -485,7 +485,17 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
 		Watches(
 			&gatewayApiv1.HTTPRoute{},
-			r.mergeSiblingEnqueuer())
+			r.mergeSiblingEnqueuer(),
+			builder.WithPredicates(predicate.Funcs{
+				CreateFunc:  func(e event.CreateEvent) bool { return false },
+				DeleteFunc:  func(e event.DeleteEvent) bool { return false },
+				GenericFunc: func(e event.GenericEvent) bool { return false },
+				UpdateFunc: func(e event.UpdateEvent) bool {
+					oldKey := e.ObjectOld.GetAnnotations()[r.mergeAnnotation()]
+					newKey := e.ObjectNew.GetAnnotations()[r.mergeAnnotation()]
+					return oldKey != newKey && oldKey != ""
+				},
+			}))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-httproute")
 	}
