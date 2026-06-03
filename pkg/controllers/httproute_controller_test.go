@@ -611,6 +611,92 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 	assert.Equal(t, "chaos-monkey", policy.Labels["ipam.adevinta.com/owner-name"])
 }
 
+func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
+	// Scenario: two routes both start with merge=chaos-monkey.
+	// Step 1: reconcile both — AP contains both hostnames.
+	// Step 2: route01 changes to merge=bar — only route01 is reconciled (its annotation changed).
+	//         route00 is NOT reconciled because nothing triggered it.
+	// Bug: the chaos-monkey AP still contains route01's hostname because route00 was never re-reconciled.
+	cidrStaging00 := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	cidrStaging01 := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging01"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"5.6.7.8/32"}},
+	}
+	gwNS := gatewayApiv1.Namespace("ns-infra")
+	route00 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "chaos-monkey",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "cross-namespace-public", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"chaos-monkey.public.ns-staging00.example.com"},
+		},
+	}
+	route01 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "chaos-monkey",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "cross-namespace-public", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"chaos-monkey.public.ns-staging01.example.com"},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, route00, route01).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// Step 1: reconcile both routes — AP gets both hostnames
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
+	}})
+	assert.NoError(t, err)
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
+	}})
+	assert.NoError(t, err)
+
+	// Confirm both hosts are present
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []string{
+		"chaos-monkey.public.ns-staging00.example.com",
+		"chaos-monkey.public.ns-staging01.example.com",
+	}, policy.Spec.Rules[0].To[0].Operation.Hosts)
+
+	// Step 2: route01 changes its merge key to "bar"
+	route01.Annotations["ipam.adevinta.com/merge"] = "bar"
+	assert.NoError(t, k8sClient.Update(context.Background(), route01))
+
+	// Only route01 is reconciled (its annotation changed) — route00 is NOT triggered
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
+	}})
+	assert.NoError(t, err)
+
+	// Bug: chaos-monkey AP still contains route01's hostname because route00 was never re-reconciled
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	assert.NoError(t, err)
+	assert.NotContains(t, policy.Spec.Rules[0].To[0].Operation.Hosts,
+		"chaos-monkey.public.ns-staging01.example.com",
+		"BUG: route01 left the merge group but its hostname is still in the chaos-monkey AP")
+}
+
 func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 	sharedCIDR := []string{"1.2.3.4/32", "5.6.7.8/32"}
 	cidrStaging00 := &ipamv1alpha1.CIDRs{

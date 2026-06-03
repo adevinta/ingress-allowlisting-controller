@@ -148,6 +148,13 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			if err := r.reconcileMergedGateway(ctx, &httproute, ref, mergeKey, i); err != nil {
 				return ctrl.Result{}, err
 			}
+			// Rebuild APs for all other merge keys pointing to the same gateway.
+			// This handles the case where a sibling left this group (changed its merge key):
+			// the sibling's own reconcile triggered us, but the old group's AP still contains
+			// the sibling's stale data — we must rebuild it now.
+			if err := r.reconcileOtherMergeGroupsForGateway(ctx, &httproute, ref, mergeKey); err != nil {
+				return ctrl.Result{}, err
+			}
 			i++
 		}
 		r.runStartupCleanup(ctx)
@@ -304,6 +311,40 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			log.Infof("Startup cleanup: deleted orphaned AuthorizationPolicy %s/%s (owner: %s/%s)", ap.Namespace, ap.Name, ownerNS, ownerName)
 		}
 	})
+}
+
+// reconcileOtherMergeGroupsForGateway rebuilds APs for all merge keys other than currentKey
+// that point to the same gateway. This ensures that when a route changes its merge key, the AP
+// for the group it left is immediately updated to remove its stale data.
+func (r *HTTPRouteAllowlistingReconciler) reconcileOtherMergeGroupsForGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, currentKey string) error {
+	gatewayName := string(ref.Name)
+	gatewayNamespace := string(*ref.Namespace)
+
+	allRoutes := &gatewayApiv1.HTTPRouteList{}
+	if err := r.List(ctx, allRoutes); err != nil {
+		return err
+	}
+
+	// Collect distinct merge keys (excluding current) that point to this gateway
+	otherKeys := map[string]struct{}{}
+	for i := range allRoutes.Items {
+		sibling := &allRoutes.Items[i]
+		key := sibling.Annotations[r.mergeAnnotation()]
+		if key == "" || key == currentKey {
+			continue
+		}
+		if httproutePointsToGateway(sibling, gatewayName, gatewayNamespace) {
+			otherKeys[key] = struct{}{}
+		}
+	}
+
+	// Rebuild the AP for each other merge group
+	for key := range otherKeys {
+		if err := r.reconcileMergedGateway(ctx, httproute, ref, key, 0); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, mergeKey string, i int) error {
