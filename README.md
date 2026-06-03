@@ -469,6 +469,93 @@ spec:
     uri: https://api.github.com/repos/my-org/my-repo/contents/path/to/cidrs/file.json
 ```
 
+## Security considerations
+
+### Gateway vs HTTPRoute allowlisting - do not mix
+
+The Gateway controller creates an `AuthorizationPolicy` with `action: ALLOW` targeting the Gateway directly - this is **L4-level** protection (IP-only, no hostname matching).
+
+The HTTPRoute controller creates `AuthorizationPolicy` resources with `action: ALLOW` targeting the same Gateway but scoped per-hostname - this is **L7-level** protection.
+
+**Istio evaluates multiple ALLOW policies with OR logic.** A request is allowed if it matches ANY ALLOW policy targeting that resource. This means:
+
+```
+Request from 5.5.5.5 → app.example.com
+
+Gateway AP:  ALLOW from [10.0.0.0/8]               → ✗ no match
+HTTPRoute AP: ALLOW from [5.5.5.5/32] host app.example.com → ✓ match → ALLOWED
+```
+
+The HTTPRoute AP bypasses the Gateway AP entirely. **Do not use both `allowlist-group` on a Gateway and on its HTTPRoutes simultaneously.** Pick one level:
+
+- Use **Gateway-level** when you want a single uniform allowlist for all traffic through the gateway, regardless of hostname.
+- Use **HTTPRoute-level** when you need per-route control with different CIDRs per service.
+
+---
+
+### Protecting a cross-namespace Gateway with a DENY policy
+
+When using HTTPRoute-level allowlisting on a cross-namespace gateway, each HTTPRoute produces an ALLOW policy scoped to its hostnames. However, any hostname not covered by an ALLOW policy defaults to Istio's implicit deny - **unless another policy creates a gap**.
+
+To explicitly lock down which hostnames are permitted to reach the gateway at all, add a DENY policy that blocks anything not matching your expected hostname patterns:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: protect-gateway-hostnames
+  namespace: infra
+spec:
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        notHosts:
+        - '*.public.ns-staging00.example.com'
+        - '*.public.ns-staging01.example.com'
+        - '*.public.ns-staging02.example.com'
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+```
+
+DENY rules take precedence over all ALLOW rules in Istio - this ensures that even if an ALLOW policy is misconfigured or overly broad, traffic to unexpected hostnames is blocked at the gateway level.
+
+---
+
+### Restricting which namespaces can attach to a cross-namespace Gateway
+
+A cross-namespace Gateway accepting routes from arbitrary namespaces is a lateral movement risk - any team that can create an HTTPRoute can attach to your gateway. Restrict attachment using the Gateway's `allowedRoutes` listener configuration:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cross-namespace-gateway
+  namespace: infra
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            cross-gateway-access: "true"
+```
+
+Only namespaces with the label `cross-gateway-access: "true"` can attach HTTPRoutes to this gateway. All other HTTPRoutes are rejected by the Gateway controller (`Accepted=False`) and no traffic flows for them - regardless of any `AuthorizationPolicy` that may exist.
+
+Combine all three layers for defence in depth:
+
+1. **Namespace label selector** on the Gateway listener - controls who can attach
+2. **HTTPRoute-level ALLOW policies** via this controller - controls which IPs can reach each service
+3. **Gateway-level DENY policy** on unexpected hostnames - prevents gaps from misconfigured or missing ALLOW policies
+
 ## Metrics
 The operator exposes a single metric `namespace_ingress_IpAllowlistingGroup_missing` that, when operated appropiately, it offer several information:
 
