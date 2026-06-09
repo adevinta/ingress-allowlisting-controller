@@ -931,9 +931,11 @@ func TestStartupOrphanCleanup(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, orphan).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
-	// First reconcile triggers the startup cleanup
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
+
+	// Simulate the startup Runnable firing after cache sync
+	reconciler.runStartupCleanup(context.Background())
 
 	// Orphaned AP (owner HTTPRoute gone) should be deleted
 	deleted := &istiosecurityv1.AuthorizationPolicy{}
@@ -943,11 +945,6 @@ func TestStartupOrphanCleanup(t *testing.T) {
 	// Current AP should still exist
 	current := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, current)
-	assert.NoError(t, err)
-
-	// Second reconcile must NOT re-run the cleanup (sync.Once)
-	// We verify this by checking the reconciler's Once is already consumed — indirect proof via no extra deletes
-	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
 }
 
@@ -1002,8 +999,8 @@ func TestStartupCleanupAbortsOnEmptyHTTPRouteList(t *testing.T) {
 		fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(existingAP).Build(),
 		extendedScheme,
 	)
-	// Reconcile a non-existent route — fires cleanup with empty HTTPRoute list
-	_, _ = reconciler2.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "ghost", Namespace: "mynamespace"}})
+	// Directly call cleanup with empty HTTPRoute list (dirty-read guard should abort)
+	reconciler2.runStartupCleanup(context.Background())
 
 	surviving := &istiosecurityv1.AuthorizationPolicy{}
 	err = reconciler2.Get(context.Background(), client.ObjectKey{Name: "some-route", Namespace: "mynamespace"}, surviving)
@@ -1051,6 +1048,9 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
+
+	// Simulate the startup Runnable firing after cache sync
+	reconciler.runStartupCleanup(context.Background())
 
 	// Old cross-namespace AP should be deleted — route now uses merge mode
 	stale := &istiosecurityv1.AuthorizationPolicy{}

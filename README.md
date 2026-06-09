@@ -556,6 +556,30 @@ Combine all three layers for defence in depth:
 2. **HTTPRoute-level ALLOW policies** via this controller - controls which IPs can reach each service
 3. **Gateway-level DENY policy** on unexpected hostnames - prevents gaps from misconfigured or missing ALLOW policies
 
+### AWS: preserving client IP for IP-based filtering
+
+`AuthorizationPolicy` rules match on `remoteIpBlocks` — this requires the **original client IP** to reach the Istio proxy. On AWS, load balancers terminate connections and replace the source IP with the LB's own address unless explicitly configured to propagate it.
+
+Without this configuration, all requests appear to come from the load balancer's IP and no allowlist rule will match correctly — effectively making the allowlist useless.
+
+**Solution: Proxy Protocol**
+
+Use Proxy Protocol to propagate the client IP through the AWS NLB to the Istio gateway:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  annotations:
+    # Tell AWS LB to send Proxy Protocol v2 headers
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: '*'
+    # Tell Istio's Envoy proxy to expect and parse Proxy Protocol
+    proxy.istio.io/config: '{"gatewayTopology": {"proxyProtocol": {}}}'
+```
+
+Both annotations are required — the first enables Proxy Protocol on the AWS side, the second tells Envoy to parse the protocol header and extract the real client IP for use in `remoteIpBlocks` matching.
+
 ## Metrics
 The operator exposes a single metric `namespace_ingress_IpAllowlistingGroup_missing` that, when operated appropiately, it offer several information:
 

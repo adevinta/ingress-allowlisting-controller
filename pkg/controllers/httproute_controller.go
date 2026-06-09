@@ -5,13 +5,12 @@ import (
 	"fmt"
 	"regexp"
 	"strings"
-	"sync"
-
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
+	"sigs.k8s.io/controller-runtime/pkg/manager"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
@@ -37,7 +36,6 @@ type HTTPRouteAllowlistingReconciler struct {
 	LegacyGroupVersion string
 	Prefix             string
 	CidrResolver       resolvers.CidrResolver
-	startupCleanupOnce sync.Once
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
@@ -128,6 +126,7 @@ func (r *HTTPRouteAllowlistingReconciler) applyLabels(policy *istiosecurityv1.Au
 
 func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("httproute", req.NamespacedName)
+
 	httproute := gatewayApiv1.HTTPRoute{}
 	if err := r.Get(ctx, req.NamespacedName, &httproute); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
@@ -151,7 +150,6 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			}
 			i++
 		}
-		r.runStartupCleanup(ctx)
 		return ctrl.Result{}, nil
 	}
 
@@ -199,16 +197,26 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		log.Infof("AuthorizationPolicy %s/%s created/updated for HTTPRoute %s", pt.namespace, pt.name, httproute.GetName())
 	}
 
-	r.runStartupCleanup(ctx)
-
 	return ctrl.Result{}, nil
 }
 
-// runStartupCleanup runs once after the first reconcile completes. It lists all APs managed by this
-// controller, checks whether the owning HTTPRoute still exists and would still produce that AP,
-// and deletes any that are orphaned. This handles APs left behind by previous controller runs.
+// cleanupRunnable returns a manager.Runnable that waits for the cache to sync and then
+// runs orphan cleanup exactly once at startup, independent of the reconcile loop.
+func cleanupRunnable(mgr ctrl.Manager, r *HTTPRouteAllowlistingReconciler) manager.Runnable {
+	return manager.RunnableFunc(func(ctx context.Context) error {
+		if !mgr.GetCache().WaitForCacheSync(ctx) {
+			return nil
+		}
+		r.runStartupCleanup(ctx)
+		return nil
+	})
+}
+
+// runStartupCleanup lists all APs managed by this controller, checks whether the owning
+// HTTPRoute still exists and would still produce that AP, and deletes any that are orphaned.
+// This handles APs left behind by previous controller runs.
 func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context) {
-	r.startupCleanupOnce.Do(func() {
+	{
 		log := log.DefaultLogger.WithContext(ctx)
 		log.Infof("Running post-startup orphan cleanup for managed AuthorizationPolicies")
 
@@ -304,7 +312,7 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			}
 			log.Infof("Startup cleanup: deleted orphaned AuthorizationPolicy %s/%s (owner: %s/%s)", ap.Namespace, ap.Name, ownerNS, ownerName)
 		}
-	})
+	}
 }
 
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, mergeKey string, i int) error {
@@ -472,6 +480,10 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 		UpdateFunc: func(e event.UpdateEvent) bool {
 			return hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectNew) || hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, e.ObjectOld)
 		},
+	}
+
+	if err := mgr.Add(cleanupRunnable(mgr, r)); err != nil {
+		return err
 	}
 
 	build := ctrl.NewControllerManagedBy(mgr).
