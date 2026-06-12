@@ -14,6 +14,7 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -27,12 +28,33 @@ import (
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+// newIstioGatewayClass creates an Istio GatewayClass with the given name.
+func newIstioGatewayClass(name string) *gatewayApiv1.GatewayClass {
+	return &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: name},
+		Spec: gatewayApiv1.GatewayClassSpec{
+			ControllerName: gatewayApiv1.GatewayController(writers.IstioControllerName),
+		},
+	}
+}
+
+// newTestGateway creates a Gateway with the given name, namespace, and GatewayClassName.
+func newTestGateway(name, namespace, className string) *gatewayApiv1.Gateway {
+	return &gatewayApiv1.Gateway{
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: namespace},
+		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: gatewayApiv1.ObjectName(className)},
+	}
+}
+
 func newHTTPRouteReconciler(t *testing.T, k8sClient client.Client, scheme *runtime.Scheme) *HTTPRouteAllowlistingReconciler {
 	t.Helper()
 	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	l7Writers := writers.L7WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+	}
 	// In tests, APIReader uses the same fake client — no label-selector filtering in tests
 	// so the cache and API reader are equivalent.
-	return &HTTPRouteAllowlistingReconciler{Client: k8sClient, APIReader: k8sClient, CidrResolver: resolver, Scheme: scheme}
+	return &HTTPRouteAllowlistingReconciler{Client: k8sClient, APIReader: k8sClient, CidrResolver: resolver, Scheme: scheme, L7Writers: l7Writers}
 }
 
 // parentRef builds a Gateway ParentReference. Pass ns="" for same-namespace (no Namespace field set).
@@ -84,7 +106,9 @@ func TestReconcileHTTPRoute(t *testing.T) {
 			Hostnames: []gatewayApiv1.Hostname{"example.com", "www.example.com"},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, globalCidrs).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, globalCidrs, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -133,7 +157,9 @@ func TestReconcileHTTPRouteNoHostnames(t *testing.T) {
 			// no Hostnames
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -203,7 +229,9 @@ func TestReconcileHTTPRouteCrossNamespace(t *testing.T) {
 			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "gateway-namespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -241,7 +269,9 @@ func TestReconcileHTTPRouteWithClusterCIDR(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute, globalNet, anotherGlobalNet).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute, globalNet, anotherGlobalNet, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -274,7 +304,9 @@ func TestReconcileHTTPRoutePartialCIDRsNotFound(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -300,7 +332,9 @@ func TestReconcileHTTPRouteAllCIDRsNotFound(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -332,7 +366,9 @@ func TestReconcileHTTPRouteTargetRefs(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("specific-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -379,7 +415,9 @@ func TestReconcileHTTPRouteWithAnnotationSpaces(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, httproute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -485,7 +523,10 @@ func TestReconcileHTTPRouteMultipleGateways(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gwInternal := newTestGateway("internal-gateway", "mynamespace", "istio")
+	gwExternal := newTestGateway("external-gateway", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gwInternal, gwExternal).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -524,7 +565,10 @@ func TestReconcileHTTPRouteMultipleGatewaysCrossNamespace(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gwInternal := newTestGateway("internal-gateway", "mynamespace", "istio")
+	gwExternal := newTestGateway("external-gateway", "gateway-namespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gwInternal, gwExternal).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -547,11 +591,11 @@ func TestReconcileHTTPRouteMultipleGatewaysCrossNamespace(t *testing.T) {
 
 func TestReconcileHTTPRouteMerge(t *testing.T) {
 	cidrStaging00 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging00"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
 	}
 	cidrStaging01 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging01"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging01"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"5.6.7.8/32"}},
 	}
 	gwNS := gatewayApiv1.Namespace("ns-infra")
@@ -560,7 +604,7 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "chaos-monkey",
 			},
 		},
@@ -575,7 +619,7 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "chaos-monkey",
 			},
 		},
@@ -587,7 +631,9 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 		},
 	}
 
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, route00, route01).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("cross-namespace-public", "ns-infra", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, route00, route01, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
@@ -618,11 +664,11 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	//         route00 is NOT reconciled because nothing triggered it.
 	// Bug: the chaos-monkey AP still contains route01's hostname because route00 was never re-reconciled.
 	cidrStaging00 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging00"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
 	}
 	cidrStaging01 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging01"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging01"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"5.6.7.8/32"}},
 	}
 	gwNS := gatewayApiv1.Namespace("ns-infra")
@@ -630,7 +676,7 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "chaos-monkey",
 			},
 		},
@@ -645,7 +691,7 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging01.example.com", Namespace: "ns-staging01",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "chaos-monkey",
 			},
 		},
@@ -657,7 +703,9 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 		},
 	}
 
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, route00, route01).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("cross-namespace-public", "ns-infra", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, route00, route01, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	// Step 1: reconcile both routes — AP gets both hostnames
@@ -711,11 +759,11 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 	sharedCIDR := []string{"1.2.3.4/32", "5.6.7.8/32"}
 	cidrStaging00 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging00"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: sharedCIDR},
 	}
 	cidrStaging01 := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging01"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging01"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: sharedCIDR},
 	}
 	gwNS := gatewayApiv1.Namespace("ns-infra")
@@ -724,7 +772,7 @@ func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 			ObjectMeta: v1.ObjectMeta{
 				Name: "chaos-monkey.public." + ns + ".example.com", Namespace: ns,
 				Annotations: map[string]string{
-					"ipam.adevinta.com/allowlist-group": "allowlist",
+					"ipam.adevinta.com/allowlist-group": "writers",
 					"ipam.adevinta.com/merge":           "chaos-monkey",
 				},
 			},
@@ -735,7 +783,9 @@ func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 			},
 		}
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, makeRoute("ns-staging00"), makeRoute("ns-staging01")).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("cross-namespace-public", "ns-infra", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrStaging00, cidrStaging01, makeRoute("ns-staging00"), makeRoute("ns-staging01"), gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
@@ -751,7 +801,7 @@ func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 
 func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 	cidr := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging00"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
 	}
 	gwNS := gatewayApiv1.Namespace("ns-infra")
@@ -759,7 +809,7 @@ func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "chaos-monkey",
 			},
 		},
@@ -775,7 +825,7 @@ func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{
 			Name: "other-service.public.ns-staging00.example.com", Namespace: "ns-staging00",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 				"ipam.adevinta.com/merge":           "other-service",
 			},
 		},
@@ -786,7 +836,9 @@ func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 			Hostnames: []gatewayApiv1.Hostname{"other-service.public.ns-staging00.example.com"},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, otherRoute).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("cross-namespace-public", "ns-infra", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, otherRoute, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
@@ -806,7 +858,7 @@ func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 
 func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T) {
 	cidr := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-staging00"},
+		ObjectMeta: v1.ObjectMeta{Name: "writers", Namespace: "ns-staging00"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
 	}
 	gwNS := gatewayApiv1.Namespace("ns-infra")
@@ -814,7 +866,7 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 		ObjectMeta: v1.ObjectMeta{
 			Name: "chaos-monkey.public.ns-staging00.example.com", Namespace: "ns-staging00",
 			Annotations: map[string]string{
-				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/allowlist-group": "writers",
 			},
 		},
 		Spec: gatewayApiv1.HTTPRouteSpec{
@@ -823,7 +875,9 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 			}},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route).Build()
+	gwClass2 := newIstioGatewayClass("istio")
+	gw2 := newTestGateway("cross-namespace-public", "ns-infra", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, gwClass2, gw2).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
@@ -863,7 +917,9 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 				},
 			},
 		}
-		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute).Build()
+		gwClass := newIstioGatewayClass("istio")
+		gw := newTestGateway("my-gateway", "mynamespace", "istio")
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
 		reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 		_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -889,7 +945,9 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 				},
 			},
 		}
-		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute).Build()
+		gwClass := newIstioGatewayClass("istio")
+		gw := newTestGateway("my-gateway", "gateway-namespace", "istio")
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
 		reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 		_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -928,7 +986,9 @@ func TestStartupOrphanCleanup(t *testing.T) {
 			},
 		},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, orphan).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("gateway-a", "mynamespace", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, orphan, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -1043,7 +1103,9 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 		},
 	}
 
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, oldAP).Build()
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "gw-ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, oldAP, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
@@ -1078,7 +1140,7 @@ func TestLabelSafe(t *testing.T) {
 		{strings.Repeat("a", 70), strings.Repeat("a", 63)},
 	}
 	for _, tc := range tests {
-		assert.Equal(t, tc.want, labelSafe(tc.input), "input: %q", tc.input)
+		assert.Equal(t, tc.want, writers.LabelSafe(tc.input), "input: %q", tc.input)
 	}
 }
 

@@ -10,6 +10,7 @@ import (
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -72,12 +73,25 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 		}
 	}
 
+	managedBy := "ingress-allowlisting-controller"
+	if namePrefix != "" {
+		managedBy = namePrefix + "-ingress-allowlisting-controller"
+	}
+
+	l4Writers := writers.L4WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL4Writer(mgr.GetClient()),
+	}
+	l7Writers := writers.L7WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL7Writer(mgr.GetClient(), managedBy, cidrResolver),
+	}
+
 	if gatewaySupportEnabled {
 		gatewayReconciler := GatewayAllowlistingReconciler{
 			Client:             mgr.GetClient(),
 			Scheme:             mgr.GetScheme(),
 			LegacyGroupVersion: legacyGroupVersion,
 			CidrResolver:       cidrResolver,
+			L4Writers:          l4Writers,
 		}
 		if err := gatewayReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
@@ -101,6 +115,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 			Scheme:             mgr.GetScheme(),
 			LegacyGroupVersion: legacyGroupVersion,
 			CidrResolver:       cidrResolver,
+			L7Writers:          l7Writers,
 		}
 		if err := httpRouteReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "HTTPRoute"}

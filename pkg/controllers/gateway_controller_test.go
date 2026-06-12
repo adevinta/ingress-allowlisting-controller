@@ -10,6 +10,7 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
 	corev1 "k8s.io/api/core/v1"
@@ -32,10 +33,23 @@ func init() {
 	}
 }
 
+// newGatewayClass creates an Istio GatewayClass with the given name.
+func newGatewayClass(name string) *gatewayApiv1.GatewayClass {
+	return &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: name},
+		Spec: gatewayApiv1.GatewayClassSpec{
+			ControllerName: gatewayApiv1.GatewayController(writers.IstioControllerName),
+		},
+	}
+}
+
 func newGatewayReconciler(t *testing.T, k8sClient client.Client, scheme *runtime.Scheme) *GatewayAllowlistingReconciler {
 	t.Helper()
 	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
-	return &GatewayAllowlistingReconciler{Client: k8sClient, CidrResolver: resolver, Scheme: scheme}
+	l4Writers := writers.L4WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL4Writer(k8sClient),
+	}
+	return &GatewayAllowlistingReconciler{Client: k8sClient, CidrResolver: resolver, Scheme: scheme, L4Writers: l4Writers}
 }
 
 // cases:
@@ -65,13 +79,15 @@ func TestReconcileGateway(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
+	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet",
 			"ipam.adevinta.com/allowlist-group":         "localnet,dnssource",
 		}},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, globalCidrs).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, globalCidrs, gwClass).Build()
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
@@ -123,12 +139,14 @@ func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "anotherglobalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
 	}
+	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet,anotherglobalnet",
 		}},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, globalNet, anotherGlobalNet).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, globalNet, anotherGlobalNet, gwClass).Build()
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: v1.ObjectMeta{
@@ -179,6 +197,7 @@ func TestReconcileGatewayNoAnnotations(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
+	// Note: no GatewayClass needed here because the reconciler returns early on AnnotationNotFoundError
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
@@ -197,10 +216,12 @@ func TestReconcileGatewayPartialNotFound(t *testing.T) {
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 
+	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,notexisting"}},
+		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, gateway).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
@@ -250,10 +271,12 @@ func TestReconcileGatewayWithInvalidCIDRIpsNoError(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
+	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
@@ -300,10 +323,12 @@ func TestReconcileGatewayWithInvalidCIDRIpsNoError(t *testing.T) {
 
 func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 	t.Run("Namespace CIDR not found", func(t *testing.T) {
+		gwClass := newGatewayClass("istio")
 		gateway := &gatewayApiv1.Gateway{
 			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting"}},
+			Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 		}
-		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, gwClass).Build()
 		reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 		expectedPolicy := istiosecurityv1.AuthorizationPolicy{
 			ObjectMeta: v1.ObjectMeta{
@@ -362,10 +387,12 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 	})
 
 	t.Run("Cluster CIDR not found", func(t *testing.T) {
+		gwClass := newGatewayClass("istio")
 		gateway := &gatewayApiv1.Gateway{
 			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "notexisting,alsonotexisting"}},
+			Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 		}
-		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, gwClass).Build()
 		reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 		expectedPolicy := istiosecurityv1.AuthorizationPolicy{
 			ObjectMeta: v1.ObjectMeta{
@@ -444,10 +471,12 @@ func TestReconcileGatewayInvalidAnnotationFormat(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
+	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnssource"}},
+		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{

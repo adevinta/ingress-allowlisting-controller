@@ -4,7 +4,6 @@ import (
 	"context"
 	"strings"
 
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -12,14 +11,13 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
-	istioApiSecurityV1 "istio.io/api/security/v1"
-	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
@@ -29,6 +27,7 @@ type GatewayAllowlistingReconciler struct {
 	LegacyGroupVersion string
 	Prefix             string
 	CidrResolver       resolvers.CidrResolver
+	L4Writers          writers.L4WriterRegistry
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
@@ -41,7 +40,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	if err := r.Get(ctx, req.NamespacedName, &gateway); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
-	log.Infof("Gateway %s being reconciled. Creating/updating allowlist...", gateway.GetName())
+	log.Infof("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
 	var allowedIps []string
 	var err error
 	allowedIps, err = r.CidrResolver.GetCidrsFromObject(ctx, &gateway)
@@ -52,39 +51,26 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
-	generatedAuthorizationPolicy := &istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: metav1.ObjectMeta{
-			Name:      gateway.Name,
-			Namespace: gateway.Namespace,
-		},
+	// Resolve GatewayClass to find which writer to use
+	gwClass := &gatewayApiv1.GatewayClass{}
+	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, gwClass); err != nil {
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		log.Infof("GatewayClass %s not found, skipping gateway %s", gateway.Spec.GatewayClassName, gateway.Name)
+		return ctrl.Result{}, nil
 	}
 
-	_, err = ctrl.CreateOrUpdate(ctx, r.Client, generatedAuthorizationPolicy, func() error {
-		generatedAuthorizationPolicy.Spec = istioApiSecurityV1.AuthorizationPolicy{
-			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW, // ALLOW is the default action; somehow, the action field is empty when examining the resource after creation
-			Rules: []*istioApiSecurityV1.Rule{
-				{
-					From: []*istioApiSecurityV1.Rule_From{
-						{
-							Source: &istioApiSecurityV1.Source{
-								RemoteIpBlocks: allowedIps,
-							},
-						},
-					},
-				},
-			},
-			TargetRef: &istioApiTypeV1beta1.PolicyTargetReference{
-				Name:  gateway.Name,
-				Kind:  "Gateway",
-				Group: "gateway.networking.k8s.io",
-			},
-		}
-		return nil
-	})
-	if err != nil {
+	writer, ok := r.L4Writers[string(gwClass.Spec.ControllerName)]
+	if !ok {
+		log.Infof("no L4 writer registered for controller %s, skipping gateway %s", gwClass.Spec.ControllerName, gateway.Name)
+		return ctrl.Result{}, nil
+	}
+
+	if err := writer.Apply(ctx, &gateway, allowedIps); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.Infof("AuthorizationPolicy %s created/updated for gateway %s", generatedAuthorizationPolicy.Name, gateway.GetName())
+	log.Infof("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())
 
 	return ctrl.Result{}, nil
 }
