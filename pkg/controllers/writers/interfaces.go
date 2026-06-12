@@ -10,15 +10,28 @@ import (
 
 const IstioControllerName = "istio.io/gateway-controller"
 
+// Permission represents a single Kubernetes RBAC permission required by a writer.
+type Permission struct {
+	Group    string
+	Resource string
+	Verb     string
+}
+
+// PermissionProvider is an optional interface a writer can implement to declare
+// the RBAC permissions it needs. checkRBAC in main.go uses this for preflight checks.
+type PermissionProvider interface {
+	RequiredPermissions() []Permission
+}
+
 // L4PolicyWriter creates gateway-level (L4) allow policies.
 type L4PolicyWriter interface {
-	Apply(ctx context.Context, gateway *gatewayApiv1.Gateway, ips []string) error
+	Apply(ctx context.Context, scheme *runtime.Scheme, gateway *gatewayApiv1.Gateway, ips []string) error
 	Delete(ctx context.Context, gateway *gatewayApiv1.Gateway) error
 }
 
 // L7PolicyWriter creates route-level (L7) allow policies.
 type L7PolicyWriter interface {
-	Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string, index int) error
+	Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string) error
 	ListManaged(ctx context.Context, managedBy string) ([]client.Object, error)
 	IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool
 	Delete(ctx context.Context, obj client.Object) error
@@ -29,7 +42,7 @@ type L7PolicyWriter interface {
 // Writers that don't support this concept simply don't implement this interface.
 type MergeableL7PolicyWriter interface {
 	L7PolicyWriter
-	ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string, index int) error
+	ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error
 }
 
 // L4WriterRegistry maps GatewayClass controllerName to an L4PolicyWriter.

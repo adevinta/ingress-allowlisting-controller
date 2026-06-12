@@ -4,6 +4,7 @@ import (
 	"context"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -23,8 +24,18 @@ func NewIstioL4Writer(c client.Client) *IstioL4Writer {
 	return &IstioL4Writer{client: c}
 }
 
+// RequiredPermissions returns the RBAC permissions needed by this writer.
+func (w *IstioL4Writer) RequiredPermissions() []Permission {
+	return []Permission{
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "get"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "create"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "update"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "delete"},
+	}
+}
+
 // Apply creates or updates an AuthorizationPolicy for the given Gateway and IPs.
-func (w *IstioL4Writer) Apply(ctx context.Context, gateway *gatewayApiv1.Gateway, ips []string) error {
+func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gateway *gatewayApiv1.Gateway, ips []string) error {
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
 			Name:      gateway.Name,
@@ -32,6 +43,9 @@ func (w *IstioL4Writer) Apply(ctx context.Context, gateway *gatewayApiv1.Gateway
 		},
 	}
 	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
+			return err
+		}
 		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 			Rules: []*istioApiSecurityV1.Rule{

@@ -32,6 +32,7 @@ type GatewayAllowlistingReconciler struct {
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 
 func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
@@ -67,7 +68,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, nil
 	}
 
-	if err := writer.Apply(ctx, &gateway, allowedIps); err != nil {
+	if err := writer.Apply(ctx, r.Scheme, &gateway, allowedIps); err != nil {
 		return ctrl.Result{}, err
 	}
 	log.Infof("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())

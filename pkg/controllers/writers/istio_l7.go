@@ -3,10 +3,14 @@ package writers
 import (
 	"context"
 	"fmt"
+	"hash/fnv"
 	"regexp"
+	"sort"
+	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -58,32 +62,119 @@ func (w *IstioL7Writer) applyLabels(policy *istiosecurityv1.AuthorizationPolicy,
 	policy.Labels[w.annotationPrefix+"/owner-name"] = LabelSafe(ownerName)
 }
 
-// policyName computes the AP name for a given route at the given index.
-// index is the position of this parentRef among Gateway parentRefs (0-based).
-// crossNamespace is true when the gateway is in a different namespace than the route.
-func policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, index int) (name, namespace string, crossNamespace bool) {
+// pathSafe converts a URL path to a safe AP name suffix.
+// Encoding: escape "-" as "--", trim surrounding "/", replace remaining "/" with "-".
+// Returns empty string only for "/" (or equivalent all-slash paths).
+// Examples: /admin/users → admin-users, /admin-users → admin--users, /root → root, / → ""
+func pathSafe(path string) string {
+	escaped := strings.ReplaceAll(path, "-", "--")
+	escaped = strings.Trim(escaped, "/")
+	return strings.ReplaceAll(escaped, "/", "-")
+}
+
+// policyName computes the AP name and namespace for a given route+gateway+paths.
+// Format: {gateway.Name}-{route.Name} (same-namespace)
+//
+//	{gateway.Name}-{route.Namespace}-{route.Name} (cross-namespace, AP lives in gateway's namespace)
+//
+// When paths is non-empty, a path-safe suffix is appended so each HTTPRoute rule gets its own AP.
+func policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, paths []string) (name, namespace string, crossNamespace bool) {
 	crossNamespace = gateway.Namespace != route.Namespace
 	namespace = route.Namespace
-	baseName := route.Name
+	baseName := gateway.Name + "-" + route.Name
 	if crossNamespace {
 		namespace = gateway.Namespace
-		baseName = route.Namespace + "-" + route.Name
+		baseName = gateway.Name + "-" + route.Namespace + "-" + route.Name
 	}
 	name = baseName
-	if index > 0 {
-		name = fmt.Sprintf("%s-%d", baseName, index)
+	if len(paths) == 1 {
+		// Single path: keep the human-readable suffix, no hash needed.
+		safe := pathSafe(paths[0])
+		if safe == "" {
+			safe = "-root"
+		}
+		name = fmt.Sprintf("%s-%s", baseName, safe)
+	} else if len(paths) > 1 {
+		// Multiple paths: first path (readable) + hash of the full sorted set.
+		// e.g. ["/api", "/health"] → "{base}-api-3d2a1f8c"
+		// The hash disambiguates sets sharing the same first path; the readable
+		// prefix lets humans quickly identify the rule without inspecting the AP spec.
+		sorted := make([]string, len(paths))
+		copy(sorted, paths)
+		sort.Strings(sorted)
+		h := fnv.New32a()
+		for _, p := range sorted {
+			_, _ = h.Write([]byte(p))
+		}
+		first := pathSafe(sorted[0])
+		if first == "" {
+			first = "-root"
+		}
+		name = fmt.Sprintf("%s-%s-%08x", baseName, first, h.Sum32())
 	}
+	name = truncateName(name)
 	return name, namespace, crossNamespace
 }
 
-// Apply creates or updates an AuthorizationPolicy for the given HTTPRoute parentRef at the given index.
-func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string, index int) error {
-	apName, apNamespace, crossNamespace := policyName(route, gateway, index)
+// truncateName ensures a Kubernetes resource name stays within the 253-char limit.
+// Names that fit are returned unchanged. Names that overflow are truncated to 244 chars
+// and suffixed with "-{fnv32hex(fullName)}" (9 chars) to keep them collision-resistant.
+func truncateName(name string) string {
+	const maxLen = 253
+	const hashSuffixLen = 9 // "-" + 8 hex chars
+	if len(name) <= maxLen {
+		return name
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(name))
+	return fmt.Sprintf("%s-%08x", name[:maxLen-hashSuffixLen], h.Sum32())
+}
+
+// policyNameSuffix returns the AP name suffix for a given path set, mirroring policyName.
+func policyNameSuffix(paths []string) string {
+	if len(paths) == 1 {
+		safe := pathSafe(paths[0])
+		if safe == "" {
+			safe = "-root"
+		}
+		return "-" + safe
+	}
+	if len(paths) > 1 {
+		sorted := make([]string, len(paths))
+		copy(sorted, paths)
+		sort.Strings(sorted)
+		h := fnv.New32a()
+		for _, p := range sorted {
+			_, _ = h.Write([]byte(p))
+		}
+		first := pathSafe(sorted[0])
+		if first == "" {
+			first = "-root"
+		}
+		return fmt.Sprintf("-%s-%08x", first, h.Sum32())
+	}
+	return ""
+}
+
+// RequiredPermissions returns the RBAC permissions needed by this writer.
+func (w *IstioL7Writer) RequiredPermissions() []Permission {
+	return []Permission{
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "get"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "create"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "update"},
+		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "delete"},
+	}
+}
+
+// Apply creates or updates an AuthorizationPolicy for the given HTTPRoute+gateway+paths combination.
+// When paths is non-empty the AP name includes a path-safe suffix so each rule gets its own AP.
+func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string) error {
+	apName, apNamespace, crossNamespace := policyName(route, gateway, paths)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: apNamespace},
 	}
-	rules := buildAuthorizationRules(ips, hosts)
+	rules := buildAuthorizationRules(ips, hosts, paths)
 	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
 		if !crossNamespace {
 			if err := ctrl.SetControllerReference(route, policy, scheme); err != nil {
@@ -94,62 +185,6 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 			Rules:  rules,
-			TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
-				{Name: gateway.Name, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
-			},
-		}
-		return nil
-	})
-	return err
-}
-
-// ApplyMerged creates or updates a merged AuthorizationPolicy for a merge group.
-// It aggregates IPs and hosts from all sibling HTTPRoutes internally.
-// Path support (granularity=path) is not yet implemented — paths are ignored for now.
-func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string, index int) error {
-	seenIPs := map[string]struct{}{}
-	seenHosts := map[string]struct{}{}
-	var mergedIPs, mergedHosts []string
-
-	for _, sibling := range siblings {
-		ips, err := w.cidrResolver.GetCidrsFromObject(ctx, sibling)
-		if err == w.cidrResolver.AnnotationNotFoundError() {
-			continue
-		}
-		if err != nil {
-			return err
-		}
-		for _, ip := range ips {
-			if _, seen := seenIPs[ip]; !seen {
-				seenIPs[ip] = struct{}{}
-				mergedIPs = append(mergedIPs, ip)
-			}
-		}
-		for _, h := range sibling.Spec.Hostnames {
-			host := string(h)
-			if _, seen := seenHosts[host]; !seen {
-				seenHosts[host] = struct{}{}
-				mergedHosts = append(mergedHosts, host)
-			}
-		}
-	}
-
-	if len(mergedIPs) == 0 {
-		return nil
-	}
-
-	apName := mergeKey
-	if index > 0 {
-		apName = fmt.Sprintf("%s-%d", mergeKey, index)
-	}
-	policy := &istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: gateway.Namespace},
-	}
-	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
-		w.applyLabels(policy, "merged", mergeKey)
-		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
-			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
-			Rules:  buildAuthorizationRules(mergedIPs, mergedHosts),
 			TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
 				{Name: gateway.Name, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
 			},
@@ -180,7 +215,7 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 	ownerName := obj.GetLabels()[w.annotationPrefix+"/owner-name"]
 	mergeAnnotation := w.annotationPrefix + "/merge"
 
-	if ownerNS == "merged" {
+	if ownerNS == "MERGED" {
 		// Merge-mode AP: check if any route still has this merge key
 		for i := range allRoutes {
 			if allRoutes[i].Annotations[mergeAnnotation] == ownerName {
@@ -198,10 +233,9 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 		}
 		// Route exists — check if it's in merge mode now
 		if r.Annotations[mergeAnnotation] != "" {
-			// Route switched to merge mode — old non-merge AP is orphaned
 			return true
 		}
-		// Check if the route still produces this AP
+		// Check if the route still produces this AP (exact or path-suffixed)
 		if routeProducesPolicy(r, obj.GetNamespace(), obj.GetName()) {
 			return false
 		}
@@ -217,39 +251,54 @@ func (w *IstioL7Writer) Delete(ctx context.Context, obj client.Object) error {
 	return client.IgnoreNotFound(w.client.Delete(ctx, obj))
 }
 
-// policyTargets computes the complete set of AuthorizationPolicies that the non-merge
-// reconcile path would produce for route: one per Gateway parentRef.
-// This mirrors the naming convention used in Apply.
+// policyTarget is a single (namespace, name) pair identifying an AuthorizationPolicy.
 type policyTarget struct {
 	namespace string
 	name      string
 }
 
+// policyTargetsForRoute returns the exact set of AP (namespace, name) pairs that the
+// non-merge reconcile path would produce for route — one per rule (with path suffixes),
+// plus the no-path base name for routes with no rules.
+// Used by IsOrphaned for exact matching — no prefix heuristics.
 func policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
 	var targets []policyTarget
-	refs := gatewayParentRefs(route)
-	for i, ref := range refs {
-		crossNamespace := ref.Namespace != nil && string(*ref.Namespace) != route.Namespace
+	for _, ref := range gatewayParentRefs(route) {
+		refNS := route.Namespace
+		if ref.Namespace != nil {
+			refNS = string(*ref.Namespace)
+		}
+		crossNamespace := refNS != route.Namespace
 		targetNamespace := route.Namespace
-		baseName := route.Name
+		gatewayName := string(ref.Name)
+		baseName := gatewayName + "-" + route.Name
 		if crossNamespace {
-			targetNamespace = string(*ref.Namespace)
-			baseName = route.Namespace + "-" + route.Name
+			targetNamespace = refNS
+			baseName = gatewayName + "-" + route.Namespace + "-" + route.Name
 		}
-		name := baseName
-		if i > 0 {
-			name = fmt.Sprintf("%s-%d", baseName, i)
+
+		if len(route.Spec.Rules) == 0 {
+			targets = append(targets, policyTarget{namespace: targetNamespace, name: baseName})
+			continue
 		}
-		targets = append(targets, policyTarget{
-			namespace: targetNamespace,
-			name:      name,
-		})
+		for _, rule := range route.Spec.Rules {
+			var paths []string
+			for _, match := range rule.Matches {
+				if match.Path != nil && match.Path.Value != nil {
+					paths = append(paths, *match.Path.Value)
+				}
+			}
+			targets = append(targets, policyTarget{
+				namespace: targetNamespace,
+				name:      truncateName(baseName + policyNameSuffix(paths)),
+			})
+		}
 	}
 	return targets
 }
 
 // routeProducesPolicy reports whether the non-merge reconcile path for route would generate
-// an AuthorizationPolicy at the given {namespace, name}.
+// an AuthorizationPolicy at the given {namespace, name}. Uses exact matching only.
 func routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyName string) bool {
 	for _, pt := range policyTargetsForRoute(route) {
 		if pt.namespace == policyNamespace && pt.name == policyName {
@@ -275,7 +324,8 @@ func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentR
 }
 
 // buildAuthorizationRules builds the Istio rules for an AuthorizationPolicy.
-func buildAuthorizationRules(allowedIPs, hostnames []string) []*istioApiSecurityV1.Rule {
+// When paths is non-empty, Operation.Paths is set to restrict to those paths.
+func buildAuthorizationRules(allowedIPs, hostnames, paths []string) []*istioApiSecurityV1.Rule {
 	rules := []*istioApiSecurityV1.Rule{
 		{
 			From: []*istioApiSecurityV1.Rule_From{
@@ -283,10 +333,22 @@ func buildAuthorizationRules(allowedIPs, hostnames []string) []*istioApiSecurity
 			},
 		},
 	}
-	if len(hostnames) > 0 {
+	if len(hostnames) > 0 || len(paths) > 0 {
+		op := &istioApiSecurityV1.Operation{}
+		if len(hostnames) > 0 {
+			op.Hosts = hostnames
+		}
+		if len(paths) > 0 {
+			op.Paths = paths
+		}
 		rules[0].To = []*istioApiSecurityV1.Rule_To{
-			{Operation: &istioApiSecurityV1.Operation{Hosts: hostnames}},
+			{Operation: op},
 		}
 	}
 	return rules
+}
+
+// dedupSorted returns a sorted, deduplicated copy of the input slice.
+func dedupSorted(items []string) []string {
+	return sets.List(sets.New[string](items...))
 }

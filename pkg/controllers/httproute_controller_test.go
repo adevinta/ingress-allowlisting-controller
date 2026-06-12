@@ -115,7 +115,7 @@ func TestReconcileHTTPRoute(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 
 	assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_ALLOW, generatedPolicy.Spec.Action)
@@ -166,7 +166,7 @@ func TestReconcileHTTPRouteNoHostnames(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.Nil(t, generatedPolicy.Spec.Rules[0].To, "To rule should be absent when no hostnames")
 }
@@ -237,16 +237,16 @@ func TestReconcileHTTPRouteCrossNamespace(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
 
-	// Policy should be in gateway-namespace with name = <httproute.Namespace>-<httproute.Name> (single parent, no suffix)
+	// Policy should be in gateway-namespace with name = {gateway}-{route.Namespace}-{route.Name}
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "mynamespace-test", Namespace: "gateway-namespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gateway-namespace"}, generatedPolicy)
 	assert.NoError(t, err, "AuthorizationPolicy should be created in cross-namespace")
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 	assert.Equal(t, "my-gateway", generatedPolicy.Spec.TargetRefs[0].Name)
 
 	// Should NOT be in the httproute's namespace
 	notExpectedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "mynamespace-test", Namespace: "mynamespace"}, notExpectedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "mynamespace"}, notExpectedPolicy)
 	assert.True(t, apierrors.IsNotFound(err), "AuthorizationPolicy should NOT be in the HTTPRoute namespace")
 }
 
@@ -278,7 +278,7 @@ func TestReconcileHTTPRouteWithClusterCIDR(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8", "15.13.12.0/24"},
@@ -313,7 +313,7 @@ func TestReconcileHTTPRoutePartialCIDRsNotFound(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"},
@@ -341,7 +341,7 @@ func TestReconcileHTTPRouteAllCIDRsNotFound(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []string{"127.0.0.2/32"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
@@ -375,7 +375,7 @@ func TestReconcileHTTPRouteTargetRefs(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "specific-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.Len(t, generatedPolicy.Spec.TargetRefs, 1)
 	ref := generatedPolicy.Spec.TargetRefs[0]
@@ -424,10 +424,94 @@ func TestReconcileHTTPRouteWithAnnotationSpaces(t *testing.T) {
 	assert.NoError(t, err)
 
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []string{"192.168.0.0/16", "1.1.1.1/32"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 }
+
+func newHTTPRouteWithPaths(name, ns, gwName, granularity string, paths ...string) *gatewayApiv1.HTTPRoute {
+	var rules []gatewayApiv1.HTTPRouteRule
+	for _, p := range paths {
+		p := p
+		pathMatch := gatewayApiv1.PathMatchPathPrefix
+		rules = append(rules, gatewayApiv1.HTTPRouteRule{
+			Matches: []gatewayApiv1.HTTPRouteMatch{{
+				Path: &gatewayApiv1.HTTPPathMatch{Type: &pathMatch, Value: &p},
+			}},
+		})
+	}
+	annotations := map[string]string{
+		"ipam.adevinta.com/allowlist-group": "localnet",
+	}
+	if granularity != "" {
+		annotations["ipam.adevinta.com/granularity"] = granularity
+	}
+	return &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: ns, Annotations: annotations},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{parentRef(gwName, "")},
+			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+			Rules:     rules,
+		},
+	}
+}
+
+func TestGranularityRule(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api", "/admin")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	assert.NoError(t, err)
+
+	// One AP per rule: /api and /admin
+	ap1 := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route-api", Namespace: "ns"}, ap1)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"/api"}, ap1.Spec.Rules[0].To[0].Operation.Paths)
+	assert.ElementsMatch(t, []string{"example.com"}, ap1.Spec.Rules[0].To[0].Operation.Hosts)
+
+	ap2 := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route-admin", Namespace: "ns"}, ap2)
+	assert.NoError(t, err)
+	assert.Equal(t, []string{"/admin"}, ap2.Spec.Rules[0].To[0].Operation.Paths)
+}
+
+func TestGranularityHost(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "host", "/api", "/admin")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	assert.NoError(t, err)
+
+	// Single AP, host matched, no path restriction
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, ap)
+	assert.NoError(t, err)
+	assert.ElementsMatch(t, []string{"example.com"}, ap.Spec.Rules[0].To[0].Operation.Hosts)
+	assert.Nil(t, ap.Spec.Rules[0].To[0].Operation.Paths, "host granularity must not set paths")
+
+	// No per-rule APs created
+	apRule := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route-api", Namespace: "ns"}, apRule)
+	assert.True(t, apierrors.IsNotFound(err), "granularity=host must not create per-rule APs")
+}
+
 
 func TestGatewayParentRefs(t *testing.T) {
 	gwGroup := gatewayApiv1.Group("gateway.networking.k8s.io")
@@ -532,16 +616,16 @@ func TestReconcileHTTPRouteMultipleGateways(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
 
-	// First gateway: no suffix → "test"
+	// First gateway: AP name = {gateway}-{route} = "internal-gateway-test"
 	policy0 := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, policy0)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "internal-gateway-test", Namespace: "mynamespace"}, policy0)
 	assert.NoError(t, err)
 	assert.Equal(t, "internal-gateway", policy0.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, policy0.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
-	// Second gateway: suffix "-1" → "test-1"
+	// Second gateway: AP name = {gateway}-{route} = "external-gateway-test"
 	policy1 := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test-1", Namespace: "mynamespace"}, policy1)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "external-gateway-test", Namespace: "mynamespace"}, policy1)
 	assert.NoError(t, err)
 	assert.Equal(t, "external-gateway", policy1.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, policy1.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
@@ -574,19 +658,81 @@ func TestReconcileHTTPRouteMultipleGatewaysCrossNamespace(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
 
-	// First (same-namespace): no suffix → "test"
+	// First (same-namespace): AP name = "internal-gateway-test"
 	sameNsPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, sameNsPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "internal-gateway-test", Namespace: "mynamespace"}, sameNsPolicy)
 	assert.NoError(t, err)
 	assert.Equal(t, "internal-gateway", sameNsPolicy.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, sameNsPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
-	// Second (cross-namespace): suffix "-1" → "mynamespace-test-1"
+	// Second (cross-namespace): AP name = "external-gateway-mynamespace-test" in gateway-namespace
 	crossNsPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "mynamespace-test-1", Namespace: "gateway-namespace"}, crossNsPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "external-gateway-mynamespace-test", Namespace: "gateway-namespace"}, crossNsPolicy)
 	assert.NoError(t, err)
 	assert.Equal(t, "external-gateway", crossNsPolicy.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, crossNsPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+}
+
+func TestValidateMergeKey(t *testing.T) {
+	valid := []string{
+		"chaos-monkey",
+		"myapp",
+		"a",
+		"a1b2c3",
+		"my-service-v2",
+		"my.app.example.com",
+		"api.service.example.com",
+		strings.Repeat("a", 253),
+	}
+	for _, key := range valid {
+		assert.NoError(t, validateMergeKey(key), "expected %q to be valid", key)
+	}
+
+	invalid := []string{
+		"",
+		"MyApp",          // uppercase
+		"my_app",         // underscore
+		"my/app",         // slash
+		"-myapp",         // leading hyphen
+		"myapp-",         // trailing hyphen
+		"my app",         // space
+		strings.Repeat("a", 254), // too long
+	}
+	for _, key := range invalid {
+		assert.Error(t, validateMergeKey(key), "expected %q to be invalid", key)
+	}
+}
+
+func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
+	// A route with an invalid merge key must return an error — not silently create
+	// an AP with an invalid name that the API server would reject opaquely.
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "INVALID_KEY!", // uppercase + special chars
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "my-gw", Namespace: &gwNS},
+			}},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "gw-ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	assert.Error(t, err, "invalid merge key must return an error")
+	assert.Contains(t, err.Error(), "INVALID_KEY!")
 }
 
 func TestReconcileHTTPRouteMerge(t *testing.T) {
@@ -646,14 +792,24 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err, "merged policy should be created with name = merge key")
 
-	assert.ElementsMatch(t, []string{"1.2.3.4/32", "5.6.7.8/32"}, policy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+	// Two-level grouping: routes with different CIDR sets each get their own Rule.
+	var allIPs, allHosts []string
+	for _, rule := range policy.Spec.Rules {
+		for _, from := range rule.From {
+			allIPs = append(allIPs, from.Source.RemoteIpBlocks...)
+		}
+		for _, to := range rule.To {
+			allHosts = append(allHosts, to.Operation.Hosts...)
+		}
+	}
+	assert.ElementsMatch(t, []string{"1.2.3.4/32", "5.6.7.8/32"}, allIPs)
 	assert.ElementsMatch(t,
 		[]string{"chaos-monkey.public.ns-staging00.example.com", "chaos-monkey.public.ns-staging01.example.com"},
-		policy.Spec.Rules[0].To[0].Operation.Hosts,
+		allHosts,
 	)
 	assert.Equal(t, "cross-namespace-public", policy.Spec.TargetRefs[0].Name)
 	assert.Equal(t, "ingress-allowlisting-controller", policy.Labels["app.kubernetes.io/managed-by"])
-	assert.Equal(t, "merged", policy.Labels["ipam.adevinta.com/owner-namespace"])
+	assert.Equal(t, "MERGED", policy.Labels["ipam.adevinta.com/owner-namespace"])
 	assert.Equal(t, "chaos-monkey", policy.Labels["ipam.adevinta.com/owner-name"])
 }
 
@@ -718,14 +874,23 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	}})
 	assert.NoError(t, err)
 
-	// Confirm both hosts are present
+	// Confirm both hosts are present (across all rules — two-level grouping gives each CIDR set its own rule).
+	allPolicyHosts := func(p *istiosecurityv1.AuthorizationPolicy) []string {
+		var hosts []string
+		for _, rule := range p.Spec.Rules {
+			for _, to := range rule.To {
+				hosts = append(hosts, to.Operation.Hosts...)
+			}
+		}
+		return hosts
+	}
 	policy := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"chaos-monkey.public.ns-staging00.example.com",
 		"chaos-monkey.public.ns-staging01.example.com",
-	}, policy.Spec.Rules[0].To[0].Operation.Hosts)
+	}, allPolicyHosts(policy))
 
 	// Step 2: route01 changes its merge key to "bar"
 	route01.Annotations["ipam.adevinta.com/merge"] = "bar"
@@ -748,10 +913,11 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	// chaos-monkey AP must now only contain route00's hostname
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
-	assert.NotContains(t, policy.Spec.Rules[0].To[0].Operation.Hosts,
+	allHosts := allPolicyHosts(policy)
+	assert.NotContains(t, allHosts,
 		"chaos-monkey.public.ns-staging01.example.com",
 		"route01 left the merge group — its hostname must not appear in the chaos-monkey AP")
-	assert.Contains(t, policy.Spec.Rules[0].To[0].Operation.Hosts,
+	assert.Contains(t, allHosts,
 		"chaos-monkey.public.ns-staging00.example.com",
 		"route00 is still in the merge group — its hostname must be present")
 }
@@ -885,10 +1051,10 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 	}})
 	assert.NoError(t, err)
 
-	// Normal cross-namespace naming: <namespace>-<name>
+	// Normal cross-namespace naming: {gateway}-{routeNS}-{routeName}
 	policy := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{
-		Name:      "ns-staging00-chaos-monkey.public.ns-staging00.example.com",
+		Name:      "cross-namespace-public-ns-staging00-chaos-monkey.public.ns-staging00.example.com",
 		Namespace: "ns-infra",
 	}, policy)
 	assert.NoError(t, err)
@@ -898,6 +1064,69 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 	merged := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, merged)
 	assert.True(t, apierrors.IsNotFound(err), "no merged policy should be created without merge annotation")
+}
+
+func TestReconcileHTTPRouteMergeSameNamespace(t *testing.T) {
+	// Two routes in the same namespace point to a same-namespace gateway (no Namespace on parentRef).
+	// Both carry merge=myapp — the controller must merge them just like it does cross-namespace.
+	cidr0 := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "my-ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	route0 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "svc-a", Namespace: "my-ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "myapp",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				parentRef("my-gateway", ""), // no namespace — same-namespace ref
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"svc-a.example.com"},
+		},
+	}
+	route1 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "svc-b", Namespace: "my-ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "myapp",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				parentRef("my-gateway", ""), // no namespace — same-namespace ref
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"svc-b.example.com"},
+		},
+	}
+
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gateway", "my-ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr0, route0, route1, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{
+		Name: "svc-a", Namespace: "my-ns",
+	}})
+	assert.NoError(t, err)
+
+	// Merged AP lives in the same namespace as the gateway (= route namespace here).
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "myapp", Namespace: "my-ns"}, policy)
+	assert.NoError(t, err, "same-namespace merge must create AP named by merge key")
+
+	var allHosts []string
+	for _, rule := range policy.Spec.Rules {
+		for _, to := range rule.To {
+			allHosts = append(allHosts, to.Operation.Hosts...)
+		}
+	}
+	assert.ElementsMatch(t, []string{"svc-a.example.com", "svc-b.example.com"}, allHosts)
+	assert.Equal(t, "my-gateway", policy.Spec.TargetRefs[0].Name)
 }
 
 func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
@@ -926,7 +1155,7 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 		assert.NoError(t, err)
 
 		policy := &istiosecurityv1.AuthorizationPolicy{}
-		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, policy)
+		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, policy)
 		assert.NoError(t, err)
 
 		assert.Len(t, policy.OwnerReferences, 1)
@@ -954,7 +1183,7 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 		assert.NoError(t, err)
 
 		policy := &istiosecurityv1.AuthorizationPolicy{}
-		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "mynamespace-test", Namespace: "gateway-namespace"}, policy)
+		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gateway-namespace"}, policy)
 		assert.NoError(t, err)
 		assert.Empty(t, policy.OwnerReferences, "cross-namespace AP cannot have owner reference")
 	})
@@ -1004,7 +1233,7 @@ func TestStartupOrphanCleanup(t *testing.T) {
 
 	// Current AP should still exist
 	current := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, current)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "gateway-a-test", Namespace: "mynamespace"}, current)
 	assert.NoError(t, err)
 }
 
@@ -1094,7 +1323,7 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 	// Old AP from before merge was added — owner is the HTTPRoute (still exists!)
 	oldAP := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: v1.ObjectMeta{
-			Name: "mynamespace-test", Namespace: "gw-ns",
+			Name: "my-gateway-mynamespace-test", Namespace: "gw-ns",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
@@ -1116,7 +1345,7 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 
 	// Old cross-namespace AP should be deleted — route now uses merge mode
 	stale := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "mynamespace-test", Namespace: "gw-ns"}, stale)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gw-ns"}, stale)
 	assert.True(t, apierrors.IsNotFound(err), "old non-merge AP should be deleted after merge annotation added")
 
 	// New merged AP should exist
@@ -1136,7 +1365,7 @@ func TestLabelSafe(t *testing.T) {
 		{"chaos-monkey.public.ns-staging00.example.com", "chaos-monkey.public.ns-staging00.example.com"},
 		{"namespace/name", "namespace_name"},
 		{"foo*bar", "foo_bar"},
-		{"merged", "merged"},
+		{"MERGED", "MERGED"},
 		{strings.Repeat("a", 70), strings.Repeat("a", 63)},
 	}
 	for _, tc := range tests {
@@ -1146,21 +1375,26 @@ func TestLabelSafe(t *testing.T) {
 
 func TestAuthorizationPolicyNameMaxLength(t *testing.T) {
 	// Kubernetes resource names are DNS subdomains: max 253 chars.
-	// Namespace max = 63, name max = 63.
-	// Index suffix is only appended for the 2nd+ parentRef (i > 0).
-	// Worst case: cross-namespace, index 99 → <63>-<63>-99 = 63+1+63+1+2 = 130 chars — well under 253.
+	// Namespace max = 63, name max = 63, gateway name max = 63.
+	// Format: {gateway}-{route}                           (same-namespace)
+	//         {gateway}-{routeNS}-{routeName}             (cross-namespace)
+	//         {gateway}-{route}-{pathSafe}                (same-namespace, with path)
+	//         {gateway}-{routeNS}-{routeName}-{pathSafe}  (cross-namespace, with path)
+	// Worst case: cross-namespace with path → 63+1+63+1+63+1+63 = 255, truncation not implemented
+	// but k8s names are limited to 253. In practice gateway/route/NS names are much shorter.
+	maxGW := strings.Repeat("g", 63)
 	maxNS := strings.Repeat("n", 63)
 	maxName := strings.Repeat("a", 63)
 
-	t.Run("same-namespace with suffix stays under 253", func(t *testing.T) {
-		// <name>-<index>  →  63 + 1 + 2 = 66
-		result := fmt.Sprintf("%s-%d", maxName, 99)
+	t.Run("same-namespace stays under 253", func(t *testing.T) {
+		// {gw}-{name}  →  63 + 1 + 63 = 127
+		result := fmt.Sprintf("%s-%s", maxGW, maxName)
 		assert.LessOrEqual(t, len(result), 253)
 	})
 
-	t.Run("cross-namespace with suffix stays under 253", func(t *testing.T) {
-		// <namespace>-<name>-<index>  →  63 + 1 + 63 + 1 + 2 = 130
-		result := fmt.Sprintf("%s-%s-%d", maxNS, maxName, 99)
+	t.Run("cross-namespace stays under 253", func(t *testing.T) {
+		// {gw}-{ns}-{name}  →  63 + 1 + 63 + 1 + 63 = 191
+		result := fmt.Sprintf("%s-%s-%s", maxGW, maxNS, maxName)
 		assert.LessOrEqual(t, len(result), 253)
 	})
 }

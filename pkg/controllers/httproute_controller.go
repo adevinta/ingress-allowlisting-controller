@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"fmt"
+	"regexp"
 	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -38,6 +40,8 @@ type HTTPRouteAllowlistingReconciler struct {
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
 
 // gatewayParentRefs returns all parentRefs that target a Gateway.
@@ -57,6 +61,10 @@ func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentR
 
 func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
 	return r.CidrResolver.AnnotationPrefix + "/merge"
+}
+
+func (r *HTTPRouteAllowlistingReconciler) granularityAnnotation() string {
+	return r.CidrResolver.AnnotationPrefix + "/granularity"
 }
 
 func (r *HTTPRouteAllowlistingReconciler) managedByValue() string {
@@ -82,12 +90,15 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	}
 
 	if mergeKey := httproute.Annotations[r.mergeAnnotation()]; mergeKey != "" {
-		i := 0
+		if err := validateMergeKey(mergeKey); err != nil {
+			log.Errorf("HTTPRoute %s/%s has invalid merge key: %v", httproute.Namespace, httproute.GetName(), err)
+			return ctrl.Result{}, err
+		}
 		for _, ref := range parentRefs {
-			if ref.Namespace == nil || string(*ref.Namespace) == httproute.Namespace {
-				continue // merge only applies to cross-namespace refs
+			gatewayNS := httproute.Namespace // nil Namespace means same namespace as the route
+			if ref.Namespace != nil {
+				gatewayNS = string(*ref.Namespace)
 			}
-			gatewayNS := string(*ref.Namespace)
 			gateway := &gatewayApiv1.Gateway{}
 			if err := r.Get(ctx, types.NamespacedName{Name: string(ref.Name), Namespace: gatewayNS}, gateway); err != nil {
 				if client.IgnoreNotFound(err) != nil {
@@ -114,10 +125,9 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				log.Infof("writer for controller %s does not support merge, skipping", gwClass.Spec.ControllerName)
 				continue
 			}
-			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey, i); err != nil {
+			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey); err != nil {
 				return ctrl.Result{}, err
 			}
-			i++
 		}
 		return ctrl.Result{}, nil
 	}
@@ -135,7 +145,23 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		hostnames = append(hostnames, string(h))
 	}
 
-	for i, ref := range parentRefs {
+	granularity := httproute.Annotations[r.granularityAnnotation()]
+
+	// Collect per-rule paths: one entry per rule, nil if the rule has no path matches.
+	// Only needed for granularity=rule (default).
+	var rulePaths [][]string
+	if granularity == "" || granularity == "rule" {
+		rulePaths = make([][]string, len(httproute.Spec.Rules))
+		for i, rule := range httproute.Spec.Rules {
+			for _, match := range rule.Matches {
+				if match.Path != nil && match.Path.Value != nil {
+					rulePaths[i] = append(rulePaths[i], *match.Path.Value)
+				}
+			}
+		}
+	}
+
+	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
 		if ref.Namespace != nil {
 			gatewayNS = string(*ref.Namespace)
@@ -161,10 +187,30 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			log.Infof("no L7 writer for controller %s, skipping", gwClass.Spec.ControllerName)
 			continue
 		}
-		if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil, i); err != nil {
-			return ctrl.Result{}, err
+
+		switch granularity {
+		case "host":
+			// One AP per route, host-matched, no path restriction.
+			if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
+				return ctrl.Result{}, err
+			}
+			log.Infof("policy (host) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
+		default:
+			// granularity=rule (default): one AP per HTTPRoute rule.
+			for ruleIdx, paths := range rulePaths {
+				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, paths); err != nil {
+					return ctrl.Result{}, err
+				}
+				log.Infof("policy (rule) created/updated for HTTPRoute %s rule %d → gateway %s/%s", httproute.GetName(), ruleIdx, gateway.Namespace, gateway.Name)
+			}
+			// Fallback: HTTPRoute with no rules — single AP, no path restriction.
+			if len(rulePaths) == 0 {
+				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
+					return ctrl.Result{}, err
+				}
+				log.Infof("policy (rule/fallback) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
+			}
 		}
-		log.Infof("AuthorizationPolicy created/updated for HTTPRoute %s parentRef %d", httproute.GetName(), i)
 	}
 
 	return ctrl.Result{}, nil
@@ -217,7 +263,7 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 	}
 }
 
-func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, writer writers.MergeableL7PolicyWriter, mergeKey string, i int) error {
+func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, writer writers.MergeableL7PolicyWriter, mergeKey string) error {
 	log := log.DefaultLogger.WithContext(ctx)
 
 	allRoutes := &gatewayApiv1.HTTPRouteList{}
@@ -237,7 +283,7 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 		siblings = append(siblings, sibling)
 	}
 
-	if err := writer.ApplyMerged(ctx, gateway, siblings, mergeKey, i); err != nil {
+	if err := writer.ApplyMerged(ctx, gateway, siblings, mergeKey); err != nil {
 		return err
 	}
 	log.Infof("Merged AuthorizationPolicy created/updated for merge group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
@@ -274,11 +320,31 @@ func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHa
 
 func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
 	for _, ref := range gatewayParentRefs(httproute) {
-		if string(ref.Name) == gatewayName && ref.Namespace != nil && string(*ref.Namespace) == gatewayNamespace {
+		if string(ref.Name) != gatewayName {
+			continue
+		}
+		// nil Namespace means same namespace as the route — resolve it before comparing.
+		refNS := httproute.Namespace
+		if ref.Namespace != nil {
+			refNS = string(*ref.Namespace)
+		}
+		if refNS == gatewayNamespace {
 			return true
 		}
 	}
 	return false
+}
+
+// validK8sName matches a valid Kubernetes resource name: lowercase alphanumeric and hyphens,
+// must start and end with alphanumeric, max 253 chars.
+var validK8sName = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-\.]{0,251}[a-z0-9])?$`)
+
+// validateMergeKey returns an error if key is not a valid Kubernetes resource name.
+func validateMergeKey(key string) error {
+	if !validK8sName.MatchString(key) {
+		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: must match [a-z0-9][a-z0-9-.]*[a-z0-9] and be ≤253 chars", key)
+	}
+	return nil
 }
 
 func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
@@ -337,7 +403,7 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 		build = build.Named(namePrefix + "-httproute")
 	}
 	if r.LegacyGroupVersion != "" {
-		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
+		build = build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
 			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
@@ -349,7 +415,7 @@ func newHTTPRoutesFromCIDRFuncMap(c client.Client, annotation string) handler.Ma
 		options := client.ListOptions{
 			Namespace: cidr.GetNamespace(),
 		}
-		err := c.List(context.Background(), httproutes, &options)
+		err := c.List(ctx, httproutes, &options)
 		if err != nil {
 			return []reconcile.Request{}
 		}
