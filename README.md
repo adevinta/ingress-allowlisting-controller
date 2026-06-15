@@ -149,9 +149,9 @@ The controller generates in `my-app`:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: my-route          # httproute name
+  name: my-gateway-my-route     # {gateway.Name}-{httproute.Name}
   namespace: my-app
-  ownerReferences:        # automatically garbage-collected when the HTTPRoute is deleted
+  ownerReferences:               # automatically garbage-collected when the HTTPRoute is deleted
   - kind: HTTPRoute
     name: my-route
 spec:
@@ -198,7 +198,7 @@ The controller generates in `infra`:
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: my-app-my-route   # <httproute-namespace>-<httproute-name>
+  name: cross-namespace-gateway-my-app-my-route   # {gateway.Name}-{httproute.Namespace}-{httproute.Name}
   namespace: infra
   # no ownerReference - cross-namespace owner references are not supported by Kubernetes
 spec:
@@ -230,14 +230,16 @@ spec:
 > kubectl rollout restart deployment/ingress-allowlisting-controller -n <namespace>
 > ```
 
-**Multiple gateways** - an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway. The first gets no index suffix; subsequent ones get `-1`, `-2`, etc.:
+**Multiple gateways** - an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway, each prefixed with the gateway name:
 
 ```yaml
 spec:
   parentRefs:
-  - name: internal-gateway           # → AuthorizationPolicy: <httproute-namespace>-<httproute-name>
-  - name: external-gateway           # → AuthorizationPolicy: <httproute-namespace>-<httproute-name>-1
+  - name: internal-gateway           # → AuthorizationPolicy: internal-gateway-{httproute.Name}
+  - name: external-gateway           # → AuthorizationPolicy: external-gateway-{httproute.Name}
 ```
+
+Cross-namespace refs follow the same prefix convention: `{gateway.Name}-{httproute.Namespace}-{httproute.Name}`.
 
 **Performance tuning** - if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
 
@@ -293,13 +295,14 @@ spec:
   - chaos-monkey.public.ns-staging01.example.com
 ```
 
-The controller generates a **single** `AuthorizationPolicy` in `ns-infra`:
+The controller generates a **single** `AuthorizationPolicy` in `ns-infra`. Routes with the **same CIDR set** are compacted into one `rule`; routes with **different CIDR sets** each get their own `rule` — this preserves the security boundary (a CIDR allowed for one hostname cannot implicitly reach another):
 
 ```yaml
+# Example A: both routes share the same CIDR set (e.g. same allowlist object)
 apiVersion: security.istio.io/v1
 kind: AuthorizationPolicy
 metadata:
-  name: chaos-monkey      # = the merge key (first gateway, no suffix; second would be chaos-monkey-1)
+  name: chaos-monkey      # = the merge key
   namespace: ns-infra
 spec:
   action: ALLOW
@@ -307,12 +310,43 @@ spec:
   - from:
     - source:
         remoteIpBlocks:
-        - 1.2.3.4/32       # union of all sibling CIDRs
-        - 5.6.7.8/32
+        - 1.2.3.4/32       # shared CIDRs → one rule
     to:
     - operation:
         hosts:
         - chaos-monkey.public.ns-staging00.example.com
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging01.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+---
+# Example B: each route has a different CIDR set → one rule per CIDR set
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: chaos-monkey
+  namespace: ns-infra
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 1.2.3.4/32       # only ns-staging00's CIDRs
+    to:
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging00.example.com
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 5.6.7.8/32       # only ns-staging01's CIDRs
+    to:
+    - operation:
+        hosts:
         - chaos-monkey.public.ns-staging01.example.com
   targetRefs:
   - group: gateway.networking.k8s.io
@@ -322,8 +356,38 @@ spec:
 
 Merge rules:
 - All HTTPRoutes with the **same annotation value** and the **same target gateway** are merged together, regardless of their `metadata.name`.
-- CIDRs and hostnames are deduplicated across all siblings.
+- Routes with the **same sorted CIDR set** share one `from` block (compacted for readability). Routes with different CIDR sets each get their own `rule` — security isolation is preserved.
+- Within a CIDR group, routes with the **same hostname set** share one `to` block, with all their paths collected together.
 - Reconciling any one sibling rebuilds the full merged policy.
+
+**Granularity** - by default the controller creates one `AuthorizationPolicy` per HTTPRoute rule (one per path set). Use the `ipam.adevinta.com/granularity` annotation to change this behaviour:
+
+| Value | AP count | AP name | `to` block |
+|---|---|---|---|
+| absent / `rule` | one per rule | `{gw}-{route}-{path}` | hosts + path from that rule |
+| `host` | one per route | `{gw}-{route}` | hosts only, no path restriction |
+
+```yaml
+# granularity=rule (default): separate AP per path
+metadata:
+  annotations:
+    ipam.adevinta.com/granularity: rule   # or omit entirely
+spec:
+  rules:
+  - matches:
+    - path:
+        value: /api      # → AP named {gw}-{route}-api
+  - matches:
+    - path:
+        value: /health   # → AP named {gw}-{route}-health
+---
+# granularity=host: one AP for the whole route, no path restriction
+metadata:
+  annotations:
+    ipam.adevinta.com/granularity: host
+```
+
+`granularity` also applies inside **merge mode**: when a sibling has `granularity=host`, its rule contributes to the merged AP without any path restriction; when it has `granularity=rule` (default), each rule's paths are included.
 
 > **Security warning:** Merge mode is **not recommended for production** environments. Any namespace in the cluster that sets the same merge key and points to the same gateway will be pulled into the same `AuthorizationPolicy`. This means a team controlling a different namespace could add their application's hostnames and CIDRs to your policy, potentially opening access to their service through your allowlist - or having their service inadvertently protected by your rules.
 >

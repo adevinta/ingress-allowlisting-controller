@@ -17,7 +17,9 @@ limitations under the License.
 package main
 
 import (
+	"context"
 	"flag"
+	"fmt"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -27,12 +29,17 @@ import (
 
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
+	authorizationv1 "k8s.io/api/authorization/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
+	"k8s.io/client-go/kubernetes"
+	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	log "github.com/adevinta/go-log-toolkit"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -77,6 +84,10 @@ func main() {
 		restConfig.Impersonate.UserName = as
 	}
 
+	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
+	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, "preflight", annotationPrefix)
+	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, l4Writers, l7Writers)
+
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
 		Metrics: metricsserver.Options{
@@ -111,5 +122,79 @@ func main() {
 	setupLog.Info("starting manager")
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Fatal(err, "problem running manager")
+	}
+}
+
+func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
+	cs := kubernetes.NewForConfigOrDie(restConfig)
+
+	var perms []writers.Permission
+
+	// Always required — CIDRs and secret/configmap sources used by all controllers.
+	perms = append(perms,
+		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Verb: "get"},
+		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Verb: "get"},
+		writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
+		writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
+	)
+
+	if gatewayEnabled {
+		perms = append(perms,
+			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gateways", Verb: "get"},
+			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gatewayclasses", Verb: "get"},
+		)
+		for _, w := range l4Writers {
+			if pp, ok := w.(writers.PermissionProvider); ok {
+				perms = append(perms, pp.RequiredPermissions()...)
+			}
+		}
+	}
+
+	if httpRouteEnabled {
+		perms = append(perms,
+			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verb: "get"},
+			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gateways", Verb: "get"},
+			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gatewayclasses", Verb: "get"},
+		)
+		for _, w := range l7Writers {
+			if pp, ok := w.(writers.PermissionProvider); ok {
+				perms = append(perms, pp.RequiredPermissions()...)
+			}
+		}
+	}
+
+	if networkPolicyEnabled {
+		perms = append(perms,
+			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get"},
+			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update"},
+		)
+	}
+
+	// Deduplicate before checking.
+	seen := map[writers.Permission]struct{}{}
+	for _, p := range perms {
+		if _, already := seen[p]; already {
+			continue
+		}
+		seen[p] = struct{}{}
+
+		sar := &authorizationv1.SelfSubjectAccessReview{
+			Spec: authorizationv1.SelfSubjectAccessReviewSpec{
+				ResourceAttributes: &authorizationv1.ResourceAttributes{
+					Verb:     p.Verb,
+					Group:    p.Group,
+					Resource: p.Resource,
+				},
+			},
+		}
+		result, err := cs.AuthorizationV1().SelfSubjectAccessReviews().Create(
+			context.Background(), sar, metav1.CreateOptions{},
+		)
+		if err != nil {
+			setupLog.Fatal(fmt.Errorf("RBAC preflight: cannot check %s %s/%s: %w", p.Verb, p.Group, p.Resource, err), "preflight failed")
+		}
+		if !result.Status.Allowed {
+			setupLog.Fatal(fmt.Errorf("missing permission: cannot %s %s/%s — fix ClusterRole and redeploy", p.Verb, p.Group, p.Resource), "RBAC preflight failed")
+		}
 	}
 }

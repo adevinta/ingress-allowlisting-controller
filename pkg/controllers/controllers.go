@@ -7,9 +7,11 @@ import (
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -26,6 +28,19 @@ type setupError struct {
 
 func (e *setupError) Log(logger logr.Logger) {
 	logger.Error(e, "unable to create controller", "controller", "Ingress")
+}
+
+// BuildWriterRegistries constructs the L4 and L7 writer registries based on which controllers
+// are enabled. Called from main.go before the manager starts so permissions can be checked.
+func BuildWriterRegistries(c client.Client, managedBy, annotationPrefix string) (writers.L4WriterRegistry, writers.L7WriterRegistry) {
+	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: c}
+	l4 := writers.L4WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL4Writer(c),
+	}
+	l7 := writers.L7WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL7Writer(c, managedBy, cidrResolver),
+	}
+	return l4, l7
 }
 
 func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
@@ -72,12 +87,26 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 		}
 	}
 
+	managedBy := "ingress-allowlisting-controller"
+	if namePrefix != "" {
+		managedBy = namePrefix + "-ingress-allowlisting-controller"
+	}
+
+	l4Writers := writers.L4WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL4Writer(mgr.GetClient()),
+	}
+	l7Writers := writers.L7WriterRegistry{
+		writers.IstioControllerName: writers.NewIstioL7Writer(mgr.GetClient(), managedBy, cidrResolver),
+		//		writers.TraefikControllerName: writers.NewTraefikL7Writer(mgr.GetClient(), managedBy, cidrResolver),
+	}
+
 	if gatewaySupportEnabled {
 		gatewayReconciler := GatewayAllowlistingReconciler{
 			Client:             mgr.GetClient(),
 			Scheme:             mgr.GetScheme(),
 			LegacyGroupVersion: legacyGroupVersion,
 			CidrResolver:       cidrResolver,
+			L4Writers:          l4Writers,
 		}
 		if err := gatewayReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
@@ -101,6 +130,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 			Scheme:             mgr.GetScheme(),
 			LegacyGroupVersion: legacyGroupVersion,
 			CidrResolver:       cidrResolver,
+			L7Writers:          l7Writers,
 		}
 		if err := httpRouteReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "HTTPRoute"}
@@ -151,6 +181,9 @@ func Scheme(legacyGroupVersion string) (*runtime.Scheme, error) {
 	if err := istiosecurityv1.AddToScheme(scheme); err != nil {
 		return nil, err
 	}
+	//	if err := writers.AddTraefikToScheme(scheme); err != nil {
+	//		return nil, err
+	//	}
 
 	if legacyGroupVersion != "" {
 		var err error
