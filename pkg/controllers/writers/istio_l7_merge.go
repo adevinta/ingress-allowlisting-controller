@@ -83,12 +83,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 		for _, rule := range sibling.Spec.Rules {
-			var paths []string
-			for _, match := range rule.Matches {
-				if match.Path != nil && match.Path.Value != nil {
-					paths = append(paths, *match.Path.Value)
-				}
-			}
+			paths := w.TranslatePaths(rule.Matches)
 			sort.Strings(paths)
 			tuples = append(tuples, mergedTuple{
 				cidrKey: cidrKey, hostKey: hostKey,

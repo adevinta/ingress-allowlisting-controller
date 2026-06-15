@@ -24,6 +24,7 @@ import (
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
@@ -43,21 +44,6 @@ type HTTPRouteAllowlistingReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
-
-// gatewayParentRefs returns all parentRefs that target a Gateway.
-func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentReference {
-	var refs []gatewayApiv1.ParentReference
-	for _, ref := range httproute.Spec.ParentRefs {
-		if ref.Kind != nil && *ref.Kind != "Gateway" {
-			continue
-		}
-		if ref.Group != nil && *ref.Group != "gateway.networking.k8s.io" {
-			continue
-		}
-		refs = append(refs, ref)
-	}
-	return refs
-}
 
 func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
 	return r.CidrResolver.AnnotationPrefix + "/merge"
@@ -83,7 +69,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	}
 	log.Infof("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
 
-	parentRefs := gatewayParentRefs(&httproute)
+	parentRefs := gateway.GatewayParentRefs(&httproute)
 	if len(parentRefs) == 0 {
 		log.Infof("HTTPRoute %s has no Gateway parentRefs, skipping", httproute.GetName())
 		return ctrl.Result{}, nil
@@ -147,20 +133,6 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 	granularity := httproute.Annotations[r.granularityAnnotation()]
 
-	// Collect per-rule paths: one entry per rule, nil if the rule has no path matches.
-	// Only needed for granularity=rule (default).
-	var rulePaths [][]string
-	if granularity == "" || granularity == "rule" {
-		rulePaths = make([][]string, len(httproute.Spec.Rules))
-		for i, rule := range httproute.Spec.Rules {
-			for _, match := range rule.Matches {
-				if match.Path != nil && match.Path.Value != nil {
-					rulePaths[i] = append(rulePaths[i], *match.Path.Value)
-				}
-			}
-		}
-	}
-
 	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
 		if ref.Namespace != nil {
@@ -186,6 +158,15 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		if !ok {
 			log.Infof("no L7 writer for controller %s, skipping", gwClass.Spec.ControllerName)
 			continue
+		}
+
+		// Collect per-rule paths using the writer's translation (if it implements PathTranslator).
+		var rulePaths [][]string
+		if granularity == "" || granularity == "rule" {
+			rulePaths = make([][]string, len(httproute.Spec.Rules))
+			for i, rule := range httproute.Spec.Rules {
+				rulePaths[i] = translatePaths(writer, rule.Matches)
+			}
 		}
 
 		switch granularity {
@@ -319,7 +300,7 @@ func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHa
 }
 
 func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
-	for _, ref := range gatewayParentRefs(httproute) {
+	for _, ref := range gateway.GatewayParentRefs(httproute) {
 		if string(ref.Name) != gatewayName {
 			continue
 		}
@@ -345,6 +326,21 @@ func validateMergeKey(key string) error {
 		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: must match [a-z0-9][a-z0-9-.]*[a-z0-9] and be ≤253 chars", key)
 	}
 	return nil
+}
+
+// translatePaths delegates path translation to the writer if it implements PathTranslator,
+// falling back to raw path values for writers that handle their own path semantics.
+func translatePaths(writer writers.L7PolicyWriter, matches []gatewayApiv1.HTTPRouteMatch) []string {
+	if pt, ok := writer.(writers.PathTranslator); ok {
+		return pt.TranslatePaths(matches)
+	}
+	var paths []string
+	for _, match := range matches {
+		if match.Path != nil && match.Path.Value != nil {
+			paths = append(paths, *match.Path.Value)
+		}
+	}
+	return paths
 }
 
 func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {

@@ -14,9 +14,11 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -472,17 +474,23 @@ func TestGranularityRule(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
 	assert.NoError(t, err)
 
-	// One AP per rule: /api and /admin
-	ap1 := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route-api", Namespace: "ns"}, ap1)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/api"}, ap1.Spec.Rules[0].To[0].Operation.Paths)
-	assert.ElementsMatch(t, []string{"example.com"}, ap1.Spec.Rules[0].To[0].Operation.Hosts)
+	// One AP per rule: /api and /admin — list all and verify by path content.
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	err = k8sClient.List(context.Background(), apList, client.InNamespace("ns"))
+	require.NoError(t, err)
+	require.Len(t, apList.Items, 2, "expected two APs, one per rule")
 
-	ap2 := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route-admin", Namespace: "ns"}, ap2)
-	assert.NoError(t, err)
-	assert.Equal(t, []string{"/admin"}, ap2.Spec.Rules[0].To[0].Operation.Paths)
+	var pathSets [][]string
+	for _, ap := range apList.Items {
+		require.Len(t, ap.Spec.Rules, 1)
+		require.Len(t, ap.Spec.Rules[0].To, 1)
+		pathSets = append(pathSets, ap.Spec.Rules[0].To[0].Operation.Paths)
+		assert.ElementsMatch(t, []string{"example.com"}, ap.Spec.Rules[0].To[0].Operation.Hosts)
+	}
+	assert.ElementsMatch(t, [][]string{
+		{"/api", "/api/*"},
+		{"/admin", "/admin/*"},
+	}, pathSets)
 }
 
 func TestGranularityHost(t *testing.T) {
@@ -522,7 +530,7 @@ func TestGatewayParentRefs(t *testing.T) {
 
 	t.Run("no parentRefs returns empty slice", func(t *testing.T) {
 		hr := &gatewayApiv1.HTTPRoute{}
-		assert.Empty(t, gatewayParentRefs(hr))
+		assert.Empty(t, gateway.GatewayParentRefs(hr))
 	})
 
 	t.Run("explicit kind=Gateway and group matches", func(t *testing.T) {
@@ -531,7 +539,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Group: &gwGroup, Kind: &gwKind, Name: "gw"},
 			}},
 		}}
-		refs := gatewayParentRefs(hr)
+		refs := gateway.GatewayParentRefs(hr)
 		assert.Len(t, refs, 1)
 		assert.Equal(t, gatewayApiv1.ObjectName("gw"), refs[0].Name)
 	})
@@ -542,7 +550,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Name: "gw"},
 			}},
 		}}
-		assert.Len(t, gatewayParentRefs(hr), 1)
+		assert.Len(t, gateway.GatewayParentRefs(hr), 1)
 	})
 
 	t.Run("non-Gateway kind is skipped", func(t *testing.T) {
@@ -551,7 +559,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Group: &gwGroup, Kind: &svcKind, Name: "svc"},
 			}},
 		}}
-		assert.Empty(t, gatewayParentRefs(hr))
+		assert.Empty(t, gateway.GatewayParentRefs(hr))
 	})
 
 	t.Run("non-gateway group is skipped", func(t *testing.T) {
@@ -560,7 +568,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Group: &coreGroup, Kind: &gwKind, Name: "gw"},
 			}},
 		}}
-		assert.Empty(t, gatewayParentRefs(hr))
+		assert.Empty(t, gateway.GatewayParentRefs(hr))
 	})
 
 	t.Run("multiple Gateway parentRefs all returned, non-Gateway skipped", func(t *testing.T) {
@@ -571,7 +579,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Group: &gwGroup, Kind: &gwKind, Name: "second-gw"},
 			}},
 		}}
-		refs := gatewayParentRefs(hr)
+		refs := gateway.GatewayParentRefs(hr)
 		assert.Len(t, refs, 2)
 		assert.Equal(t, gatewayApiv1.ObjectName("first-gw"), refs[0].Name)
 		assert.Equal(t, gatewayApiv1.ObjectName("second-gw"), refs[1].Name)
@@ -583,7 +591,7 @@ func TestGatewayParentRefs(t *testing.T) {
 				{Group: &gwGroup, Kind: &gwKind, Name: "gw", Namespace: &ns},
 			}},
 		}}
-		refs := gatewayParentRefs(hr)
+		refs := gateway.GatewayParentRefs(hr)
 		assert.Len(t, refs, 1)
 		assert.Equal(t, &ns, refs[0].Namespace)
 	})
@@ -1352,6 +1360,59 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 	merged := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "myapp", Namespace: "gw-ns"}, merged)
 	assert.NoError(t, err, "merged AP should exist")
+}
+
+// TestStartupCleanupGranularityHost verifies that an AP created by a granularity=host route
+// (base name, no path suffix) is NOT deleted by startup cleanup — the full reconcile+cleanup
+// loop must recognise it as live.
+func TestStartupCleanupGranularityHost(t *testing.T) {
+	pathMatch := gatewayApiv1.PathMatchPathPrefix
+	pathVal := "/api"
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "localnet",
+				"ipam.adevinta.com/granularity":     "host",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "")},
+			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+			Rules: []gatewayApiv1.HTTPRouteRule{
+				{Matches: []gatewayApiv1.HTTPRouteMatch{
+					{Path: &gatewayApiv1.HTTPPathMatch{Type: &pathMatch, Value: &pathVal}},
+				}},
+			},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// Reconcile creates the AP.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	// AP must be at base name (no path suffix) for granularity=host.
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, ap)
+	require.NoError(t, err, "AP at base name must exist after reconcile")
+	assert.Nil(t, ap.Spec.Rules[0].To[0].Operation.Paths, "granularity=host AP must have no path restriction")
+
+	// Startup cleanup must NOT delete the live AP.
+	reconciler.runStartupCleanup(context.Background())
+
+	surviving := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, surviving)
+	assert.NoError(t, err, "granularity=host AP must survive startup cleanup")
 }
 
 func TestLabelSafe(t *testing.T) {

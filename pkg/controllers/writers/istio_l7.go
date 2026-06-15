@@ -19,6 +19,7 @@ import (
 	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
@@ -236,7 +237,7 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 			return true
 		}
 		// Check if the route still produces this AP (exact or path-suffixed)
-		if routeProducesPolicy(r, obj.GetNamespace(), obj.GetName()) {
+		if w.routeProducesPolicy(r, obj.GetNamespace(), obj.GetName()) {
 			return false
 		}
 		return true
@@ -258,12 +259,13 @@ type policyTarget struct {
 }
 
 // policyTargetsForRoute returns the exact set of AP (namespace, name) pairs that the
-// non-merge reconcile path would produce for route — one per rule (with path suffixes),
-// plus the no-path base name for routes with no rules.
+// non-merge reconcile path would produce for route — mirrors the Apply call-sites exactly.
 // Used by IsOrphaned for exact matching — no prefix heuristics.
-func policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
+func (w *IstioL7Writer) policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
+	granularity := route.Annotations[w.annotationPrefix+"/granularity"]
+
 	var targets []policyTarget
-	for _, ref := range gatewayParentRefs(route) {
+	for _, ref := range gateway.GatewayParentRefs(route) {
 		refNS := route.Namespace
 		if ref.Namespace != nil {
 			refNS = string(*ref.Namespace)
@@ -277,17 +279,19 @@ func policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
 			baseName = gatewayName + "-" + route.Namespace + "-" + route.Name
 		}
 
+		// granularity=host: one AP with base name, no path suffix.
+		if granularity == "host" {
+			targets = append(targets, policyTarget{namespace: targetNamespace, name: baseName})
+			continue
+		}
+
+		// granularity=rule (default): one AP per rule with path suffix.
 		if len(route.Spec.Rules) == 0 {
 			targets = append(targets, policyTarget{namespace: targetNamespace, name: baseName})
 			continue
 		}
 		for _, rule := range route.Spec.Rules {
-			var paths []string
-			for _, match := range rule.Matches {
-				if match.Path != nil && match.Path.Value != nil {
-					paths = append(paths, *match.Path.Value)
-				}
-			}
+			paths := w.TranslatePaths(rule.Matches)
 			targets = append(targets, policyTarget{
 				namespace: targetNamespace,
 				name:      truncateName(baseName + policyNameSuffix(paths)),
@@ -299,28 +303,13 @@ func policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
 
 // routeProducesPolicy reports whether the non-merge reconcile path for route would generate
 // an AuthorizationPolicy at the given {namespace, name}. Uses exact matching only.
-func routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyName string) bool {
-	for _, pt := range policyTargetsForRoute(route) {
+func (w *IstioL7Writer) routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyName string) bool {
+	for _, pt := range w.policyTargetsForRoute(route) {
 		if pt.namespace == policyNamespace && pt.name == policyName {
 			return true
 		}
 	}
 	return false
-}
-
-// gatewayParentRefs returns all parentRefs that target a Gateway.
-func gatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentReference {
-	var refs []gatewayApiv1.ParentReference
-	for _, ref := range httproute.Spec.ParentRefs {
-		if ref.Kind != nil && *ref.Kind != "Gateway" {
-			continue
-		}
-		if ref.Group != nil && *ref.Group != "gateway.networking.k8s.io" {
-			continue
-		}
-		refs = append(refs, ref)
-	}
-	return refs
 }
 
 // buildAuthorizationRules builds the Istio rules for an AuthorizationPolicy.
@@ -346,6 +335,36 @@ func buildAuthorizationRules(allowedIPs, hostnames, paths []string) []*istioApiS
 		}
 	}
 	return rules
+}
+
+// TranslatePaths implements PathTranslator for Istio AuthorizationPolicy path semantics.
+// PathPrefix /chaos → ["/chaos", "/chaos/*"] (exact + glob, covers /chaos and all sub-paths)
+// Exact /chaos     → ["/chaos"]              (passed through unchanged)
+// RegularExpression → skipped                (not supported by Istio AuthorizationPolicy)
+func (w *IstioL7Writer) TranslatePaths(matches []gatewayApiv1.HTTPRouteMatch) []string {
+	var paths []string
+	for _, match := range matches {
+		if match.Path == nil || match.Path.Value == nil {
+			continue
+		}
+		v := *match.Path.Value
+		t := gatewayApiv1.PathMatchPathPrefix // default per Gateway API spec
+		if match.Path.Type != nil {
+			t = *match.Path.Type
+		}
+		switch t {
+		case gatewayApiv1.PathMatchPathPrefix:
+			if v == "/" {
+				paths = append(paths, "/*")
+			} else {
+				paths = append(paths, v, v+"/*")
+			}
+		case gatewayApiv1.PathMatchExact:
+			paths = append(paths, v)
+		// RegularExpression: not supported by Istio AP — skip
+		}
+	}
+	return paths
 }
 
 // dedupSorted returns a sorted, deduplicated copy of the input slice.

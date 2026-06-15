@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
@@ -58,6 +59,165 @@ func testCIDRs(name, namespace string, cidrs ...string) *ipamv1alpha1.CIDRs {
 		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: namespace},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: cidrs},
 	}
+}
+
+// TestIstioPathsForRule verifies correct translation of HTTPRoute path match types.
+func TestIstioPathsForRule(t *testing.T) {
+	prefix := gatewayApiv1.PathMatchPathPrefix
+	exact := gatewayApiv1.PathMatchExact
+	regex := gatewayApiv1.PathMatchRegularExpression
+
+	api := "/api"
+	root := "/"
+	chaos := "/chaos"
+
+	tests := []struct {
+		name     string
+		matches  []gatewayApiv1.HTTPRouteMatch
+		expected []string
+	}{
+		{
+			name: "PathPrefix /api → /api and /api/*",
+			matches: []gatewayApiv1.HTTPRouteMatch{
+				{Path: &gatewayApiv1.HTTPPathMatch{Type: &prefix, Value: &api}},
+			},
+			expected: []string{"/api", "/api/*"},
+		},
+		{
+			name: "PathPrefix / → /* only (no double slash)",
+			matches: []gatewayApiv1.HTTPRouteMatch{
+				{Path: &gatewayApiv1.HTTPPathMatch{Type: &prefix, Value: &root}},
+			},
+			expected: []string{"/*"},
+		},
+		{
+			name: "Exact /chaos → /chaos only",
+			matches: []gatewayApiv1.HTTPRouteMatch{
+				{Path: &gatewayApiv1.HTTPPathMatch{Type: &exact, Value: &chaos}},
+			},
+			expected: []string{"/chaos"},
+		},
+		{
+			name: "RegularExpression → skipped",
+			matches: []gatewayApiv1.HTTPRouteMatch{
+				{Path: &gatewayApiv1.HTTPPathMatch{Type: &regex, Value: &api}},
+			},
+			expected: nil,
+		},
+		{
+			name: "nil type defaults to PathPrefix",
+			matches: []gatewayApiv1.HTTPRouteMatch{
+				{Path: &gatewayApiv1.HTTPPathMatch{Value: &api}},
+			},
+			expected: []string{"/api", "/api/*"},
+		},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			w := newIstioL7Writer(fake.NewClientBuilder().WithScheme(istioL7Scheme).Build())
+			assert.ElementsMatch(t, tc.expected, w.TranslatePaths(tc.matches))
+		})
+	}
+}
+
+// TestIsOrphaned_GranularityHost verifies that a route with granularity=host produces
+// the base AP name (no path suffix), and that orphan detection recognises it as live.
+func TestIsOrphaned_GranularityHost(t *testing.T) {
+	gwNS := gatewayApiv1.Namespace("ns")
+	prefix := gatewayApiv1.PathMatchPathPrefix
+	path := "/api"
+	route := gatewayApiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{"ipam.adevinta.com/granularity": "host"},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "gw", Namespace: &gwNS},
+			}},
+			Rules: []gatewayApiv1.HTTPRouteRule{
+				{Matches: []gatewayApiv1.HTTPRouteMatch{
+					{Path: &gatewayApiv1.HTTPPathMatch{Type: &prefix, Value: &path}},
+				}},
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	// AP at base name (no path suffix) — what Apply actually creates for granularity=host.
+	liveAP := &istiosecurityv1.AuthorizationPolicy{}
+	liveAP.Name = "gw-my-route"
+	liveAP.Namespace = "ns"
+	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": "ns",
+		"ipam.adevinta.com/owner-name":      "my-route",
+	}
+	assert.False(t, w.IsOrphaned(liveAP, []gatewayApiv1.HTTPRoute{route}),
+		"granularity=host AP at base name must NOT be orphaned")
+
+	// AP at path-suffixed name — what the old logic would have computed (bug).
+	staleAP := &istiosecurityv1.AuthorizationPolicy{}
+	staleAP.Name = "gw-my-route-api-" // some hash-suffixed name
+	staleAP.Namespace = "ns"
+	staleAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": "ns",
+		"ipam.adevinta.com/owner-name":      "my-route",
+	}
+	assert.True(t, w.IsOrphaned(staleAP, []gatewayApiv1.HTTPRoute{route}),
+		"path-suffixed AP must be orphaned when route uses granularity=host")
+}
+
+// TestIsOrphaned_PathPrefixRoute verifies that orphan detection correctly resolves the AP name
+// for a PathPrefix route (which expands to two paths and gets a hash-suffixed name).
+func TestIsOrphaned_PathPrefixRoute(t *testing.T) {
+	gwNS := gatewayApiv1.Namespace("ns")
+	prefix := gatewayApiv1.PathMatchPathPrefix
+	path := "/api"
+	route := gatewayApiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "ns"},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "gw", Namespace: &gwNS},
+			}},
+			Rules: []gatewayApiv1.HTTPRouteRule{
+				{Matches: []gatewayApiv1.HTTPRouteMatch{
+					{Path: &gatewayApiv1.HTTPPathMatch{Type: &prefix, Value: &path}},
+				}},
+			},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	// Compute the name Apply would actually create.
+	targets := w.policyTargetsForRoute(&route)
+	require.Len(t, targets, 1)
+	liveAPName := targets[0].name
+
+	liveAP := &istiosecurityv1.AuthorizationPolicy{}
+	liveAP.Name = liveAPName
+	liveAP.Namespace = "ns"
+	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": "ns",
+		"ipam.adevinta.com/owner-name":      "my-route",
+	}
+	assert.False(t, w.IsOrphaned(liveAP, []gatewayApiv1.HTTPRoute{route}),
+		"PathPrefix AP at correct hash name must NOT be orphaned")
+
+	// The old (pre-fix) name using only the raw path value.
+	oldAP := &istiosecurityv1.AuthorizationPolicy{}
+	oldAP.Name = "gw-my-route-api" // single-path name, no hash
+	oldAP.Namespace = "ns"
+	oldAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": "ns",
+		"ipam.adevinta.com/owner-name":      "my-route",
+	}
+	assert.True(t, w.IsOrphaned(oldAP, []gatewayApiv1.HTTPRoute{route}),
+		"old single-path AP name must be orphaned after PathPrefix expansion fix")
 }
 
 // TestPolicyNameMultiPathNoCollision verifies the AP naming scheme for multi-path rules.

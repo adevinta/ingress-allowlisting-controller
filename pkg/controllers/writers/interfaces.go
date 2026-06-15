@@ -45,6 +45,13 @@ type MergeableL7PolicyWriter interface {
 	ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error
 }
 
+// PathTranslator is an optional interface a writer can implement to control how HTTPRoute path
+// matches are translated into the enforcement-layer path strings passed to Apply.
+// Writers that don't implement this receive raw path values from match.Path.Value.
+type PathTranslator interface {
+	TranslatePaths(matches []gatewayApiv1.HTTPRouteMatch) []string
+}
+
 // L4WriterRegistry maps GatewayClass controllerName to an L4PolicyWriter.
 type L4WriterRegistry map[string]L4PolicyWriter
 

@@ -133,7 +133,7 @@ func TestApplyMerged_SameCIDRSameHost(t *testing.T) {
 
 	assert.Len(t, policy.Spec.Rules, 1)
 	assert.Len(t, policy.Spec.Rules[0].To, 1)
-	assert.ElementsMatch(t, []string{"/api", "/health"}, policy.Spec.Rules[0].To[0].Operation.Paths)
+	assert.ElementsMatch(t, []string{"/api", "/api/*", "/health", "/health/*"}, policy.Spec.Rules[0].To[0].Operation.Paths)
 }
 
 // TestApplyMerged_GranularityHost verifies that granularity=host produces no paths in the merged AP.
@@ -195,7 +195,7 @@ func TestApplyMerged_SamePathsDifferentHosts(t *testing.T) {
 	require.Len(t, policy.Spec.Rules, 1, "same CIDR set must produce one Rule")
 	require.Len(t, policy.Spec.Rules[0].To, 1, "same path set must be compacted into one To operation")
 	assert.ElementsMatch(t, []string{"host-a.example.com", "host-b.example.com"}, policy.Spec.Rules[0].To[0].Operation.Hosts)
-	assert.Equal(t, []string{"/"}, policy.Spec.Rules[0].To[0].Operation.Paths)
+	assert.Equal(t, []string{"/*"}, policy.Spec.Rules[0].To[0].Operation.Paths)
 }
 
 // TestApplyMerged_MixedGranularity verifies that when one route uses granularity=host and another
@@ -277,5 +277,5 @@ func TestApplyMerged_DeduplicatesPaths(t *testing.T) {
 
 	assert.Len(t, policy.Spec.Rules, 1)
 	assert.Len(t, policy.Spec.Rules[0].To, 1)
-	assert.Equal(t, []string{"/api"}, policy.Spec.Rules[0].To[0].Operation.Paths, "duplicate path must appear only once")
+	assert.ElementsMatch(t, []string{"/api", "/api/*"}, policy.Spec.Rules[0].To[0].Operation.Paths, "duplicate paths must appear only once after expansion")
 }
