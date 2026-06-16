@@ -59,10 +59,8 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 					},
 				},
 			},
-			TargetRef: &istioApiTypeV1beta1.PolicyTargetReference{
-				Name:  gateway.Name,
-				Kind:  "Gateway",
-				Group: "gateway.networking.k8s.io",
+			TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
+				{Name: gateway.Name, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
 			},
 		}
 		return nil

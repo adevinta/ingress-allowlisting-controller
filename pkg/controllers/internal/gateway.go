@@ -11,7 +11,8 @@ import gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 //   - httproute_controller: to discover which Gateways the route is attached to and
 //     drive the reconcile loop (one AP per gateway).
 //   - istio_l7 (policyTargetsForRoute): to predict the exact AP names the reconcile loop
-//     would produce, so orphan detection can do exact matching without prefix heuristics.
+//     would produce, so orphan detection can match exactly — works for both same-namespace
+//     and cross-namespace routes (AP namespace differs in each case).
 func GatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentReference {
 	var refs []gatewayApiv1.ParentReference
 	for _, ref := range httproute.Spec.ParentRefs {

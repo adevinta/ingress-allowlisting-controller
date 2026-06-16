@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
 	"strings"
 	"testing"
 
@@ -29,6 +30,12 @@ import (
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
+
+func fnv32(s string) uint32 {
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(s))
+	return h.Sum32()
+}
 
 // newIstioGatewayClass creates an Istio GatewayClass with the given name.
 func newIstioGatewayClass(name string) *gatewayApiv1.GatewayClass {
@@ -1427,11 +1434,18 @@ func TestLabelSafe(t *testing.T) {
 		{"namespace/name", "namespace_name"},
 		{"foo*bar", "foo_bar"},
 		{"MERGED", "MERGED"},
-		{strings.Repeat("a", 70), strings.Repeat("a", 63)},
+		{strings.Repeat("a", 64), strings.Repeat("a", 54) + fmt.Sprintf("-%08x", fnv32(strings.Repeat("a", 64)))},
+		// two distinct long names must produce different label values (no silent collision)
+		{strings.Repeat("a", 54) + strings.Repeat("x", 10), strings.Repeat("a", 54) + fmt.Sprintf("-%08x", fnv32(strings.Repeat("a", 54)+strings.Repeat("x", 10)))},
 	}
 	for _, tc := range tests {
 		assert.Equal(t, tc.want, writers.LabelSafe(tc.input), "input: %q", tc.input)
 	}
+
+	// Confirm the two long names produce different results.
+	a := writers.LabelSafe(strings.Repeat("a", 54) + strings.Repeat("x", 10))
+	b := writers.LabelSafe(strings.Repeat("a", 54) + strings.Repeat("y", 10))
+	assert.NotEqual(t, a, b, "distinct long names must not collide after LabelSafe")
 }
 
 func TestAuthorizationPolicyNameMaxLength(t *testing.T) {
@@ -1619,4 +1633,77 @@ func TestClusterCidrToHTTPRouteMapper(t *testing.T) {
 		requests := newHTTPRoutesFromCIDRFuncMap(k8sClient, cidrResolver.ClusterAnnotation())(context.Background(), &cidr)
 		assert.Len(t, requests, 0)
 	})
+}
+
+// TestAnnotationRemovalDeletesAPs verifies that removing the allowlist annotation from an HTTPRoute
+// triggers deletion of any previously-created APs rather than leaving them orphaned.
+func TestAnnotationRemovalDeletesAPs(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 1, "AP must exist after first reconcile")
+
+	// Remove the allowlist annotation.
+	httproute.Annotations = map[string]string{}
+	require.NoError(t, k8sClient.Update(context.Background(), httproute))
+
+	// Second reconcile — AP must be deleted.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	assert.Empty(t, apList.Items, "AP must be deleted after allowlist annotation is removed")
+}
+
+// TestRuleCountReductionDeletesStaleAPs verifies that reducing the number of rules in an HTTPRoute
+// causes the now-unused per-rule APs to be cleaned up on the next startup cleanup.
+func TestRuleCountReductionDeletesStaleAPs(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api", "/admin")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+	reconciler.APIReader = k8sClient
+
+	// First reconcile — two APs created (one per rule).
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 2, "two APs must exist after first reconcile")
+
+	// Remove /admin rule — route now has only /api.
+	pathMatch := gatewayApiv1.PathMatchPathPrefix
+	apiPath := "/api"
+	httproute.Spec.Rules = []gatewayApiv1.HTTPRouteRule{
+		{Matches: []gatewayApiv1.HTTPRouteMatch{{
+			Path: &gatewayApiv1.HTTPPathMatch{Type: &pathMatch, Value: &apiPath},
+		}}},
+	}
+	require.NoError(t, k8sClient.Update(context.Background(), httproute))
+
+	// Second reconcile — /api AP is updated, /admin AP still exists (not yet cleaned up).
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	// Startup cleanup must remove the stale /admin AP.
+	reconciler.runStartupCleanup(context.Background())
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 1, "stale /admin AP must be deleted by startup cleanup")
+	assert.Contains(t, apList.Items[0].Spec.Rules[0].To[0].Operation.Paths, "/api", "remaining AP must be for /api")
 }

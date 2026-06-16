@@ -41,7 +41,7 @@ func TestIstioL4Writer_Apply_CreatesAP(t *testing.T) {
 	ap := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway", Namespace: "mynamespace"}, ap)
 	assert.NoError(t, err)
-	assert.Equal(t, "my-gateway", ap.Spec.TargetRef.Name)
+	assert.Equal(t, "my-gateway", ap.Spec.TargetRefs[0].Name)
 }
 
 func TestIstioL4Writer_Apply_SetsOwnerReference(t *testing.T) {

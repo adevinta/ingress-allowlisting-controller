@@ -27,10 +27,14 @@ import (
 var invalidLabelValue = regexp.MustCompile(`[^-A-Za-z0-9_.]`)
 
 // LabelSafe sanitizes a string for use as a Kubernetes label value.
+// Names longer than 63 chars are truncated to 54 chars and suffixed with
+// "-{fnv32hex}" to stay collision-resistant (same approach as truncateName).
 func LabelSafe(s string) string {
 	v := invalidLabelValue.ReplaceAllString(s, "_")
 	if len(v) > 63 {
-		v = v[:63]
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(v))
+		v = fmt.Sprintf("%s-%08x", v[:54], h.Sum32())
 	}
 	return v
 }
@@ -250,6 +254,24 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 // Delete removes the given object from the cluster.
 func (w *IstioL7Writer) Delete(ctx context.Context, obj client.Object) error {
 	return client.IgnoreNotFound(w.client.Delete(ctx, obj))
+}
+
+// DeleteForRoute deletes all APs owned by the given route, identified by owner labels.
+func (w *IstioL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNamespace, routeName string) error {
+	list := &istiosecurityv1.AuthorizationPolicyList{}
+	if err := w.client.List(ctx, list, client.MatchingLabels{
+		"app.kubernetes.io/managed-by":          managedBy,
+		w.annotationPrefix + "/owner-namespace": LabelSafe(routeNamespace),
+		w.annotationPrefix + "/owner-name":      LabelSafe(routeName),
+	}); err != nil {
+		return err
+	}
+	for i := range list.Items {
+		if err := client.IgnoreNotFound(w.client.Delete(ctx, list.Items[i])); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
 // policyTarget is a single (namespace, name) pair identifying an AuthorizationPolicy.

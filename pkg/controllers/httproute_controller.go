@@ -120,6 +120,12 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
 	if err == r.CidrResolver.AnnotationNotFoundError() {
+		// Annotation was removed — delete any APs that were previously created for this route.
+		for _, writer := range r.L7Writers {
+			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 		return ctrl.Result{}, nil
 	}
 	if err != nil {

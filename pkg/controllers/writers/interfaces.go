@@ -35,6 +35,10 @@ type L7PolicyWriter interface {
 	ListManaged(ctx context.Context, managedBy string) ([]client.Object, error)
 	IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool
 	Delete(ctx context.Context, obj client.Object) error
+	// DeleteForRoute deletes all policies owned by the given route, identified by owner labels.
+	// Called when the allowlist annotation is removed so that existing APs are cleaned up
+	// immediately rather than waiting for the next startup cleanup.
+	DeleteForRoute(ctx context.Context, managedBy, routeNamespace, routeName string) error
 }
 
 // MergeableL7PolicyWriter is an optional extension of L7PolicyWriter for writers that support
