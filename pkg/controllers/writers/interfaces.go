@@ -47,6 +47,9 @@ type L7PolicyWriter interface {
 type MergeableL7PolicyWriter interface {
 	L7PolicyWriter
 	ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error
+	// DeleteMerged removes the merged policy for the given merge key in the gateway's namespace.
+	// Called when a confirmed-empty sibling list means the merge group no longer exists.
+	DeleteMerged(ctx context.Context, namespace, mergeKey string) error
 }
 
 // PathTranslator is an optional interface a writer can implement to control how HTTPRoute path

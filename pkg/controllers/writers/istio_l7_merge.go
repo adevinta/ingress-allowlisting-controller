@@ -2,11 +2,11 @@ package writers
 
 import (
 	"context"
-	"sort"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
@@ -51,16 +51,14 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 
-		sortedIPs := make([]string, len(ips))
-		copy(sortedIPs, ips)
-		sort.Strings(sortedIPs)
+		sortedIPs := dedupSorted(ips)
 		cidrKey := strings.Join(sortedIPs, ",")
 
-		var hosts []string
+		var rawHosts []string
 		for _, h := range sibling.Spec.Hostnames {
-			hosts = append(hosts, string(h))
+			rawHosts = append(rawHosts, string(h))
 		}
-		sort.Strings(hosts)
+		hosts := dedupSorted(rawHosts)
 		hostKey := strings.Join(hosts, ",")
 
 		granularity := sibling.Annotations[granularityAnnotation]
@@ -83,8 +81,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 		for _, rule := range sibling.Spec.Rules {
-			paths := w.TranslatePaths(rule.Matches)
-			sort.Strings(paths)
+			paths := dedupSorted(w.TranslatePaths(rule.Matches))
 			tuples = append(tuples, mergedTuple{
 				cidrKey: cidrKey, hostKey: hostKey,
 				cidrs: sortedIPs, hosts: hosts,
@@ -177,6 +174,14 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 	return err
 }
 
+// DeleteMerged removes the merged AuthorizationPolicy for the given merge key.
+func (w *IstioL7Writer) DeleteMerged(ctx context.Context, namespace, mergeKey string) error {
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	policy.Name = mergeKey
+	policy.Namespace = namespace
+	return client.IgnoreNotFound(w.client.Delete(ctx, policy))
+}
+
 // mergeTosByPaths compacts `to` operations sharing the same path set into one, merging their host lists.
 func mergeTosByPaths(tos []*istioApiSecurityV1.Rule_To) []*istioApiSecurityV1.Rule_To {
 	type group struct {
@@ -189,7 +194,7 @@ func mergeTosByPaths(tos []*istioApiSecurityV1.Rule_To) []*istioApiSecurityV1.Ru
 		if to.Operation == nil {
 			continue
 		}
-		pathKey := strings.Join(to.Operation.Paths, ",")
+		pathKey := strings.Join(dedupSorted(to.Operation.Paths), ",")
 		g, exists := byPathKey[pathKey]
 		if !exists {
 			g = &group{}

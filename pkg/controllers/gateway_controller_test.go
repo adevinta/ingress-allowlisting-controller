@@ -589,3 +589,71 @@ func TestClusterCidrToGatewayMapper(t *testing.T) {
 		assert.Len(t, requests, 0)
 	})
 }
+
+// TestGatewayAnnotationRemovalDeletesAP verifies end-to-end that removing the allowlist
+// annotation from a Gateway triggers deletion of its AuthorizationPolicy.
+func TestGatewayAnnotationRemovalDeletesAP(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	gwClass := newGatewayClass("istio")
+	gateway := &gatewayApiv1.Gateway{
+		ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-gw", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "localnet",
+		}},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, gwClass, gateway).Build()
+	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-gw", Namespace: "ns"}})
+	assert.NoError(t, err)
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	assert.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw", Namespace: "ns"}, ap))
+
+	// Remove the allowlist annotation.
+	gateway.Annotations = map[string]string{}
+	assert.NoError(t, k8sClient.Update(context.Background(), gateway))
+
+	// Second reconcile — AP must be deleted.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-gw", Namespace: "ns"}})
+	assert.NoError(t, err)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw", Namespace: "ns"}, ap)
+	assert.True(t, apierrors.IsNotFound(err), "AP must be deleted after gateway annotation is removed")
+}
+
+// TestReconcileGatewayClassDeletedCleansUpAP verifies that when a GatewayClass is deleted,
+// the gateway controller still cleans up the AuthorizationPolicy rather than leaving it orphaned.
+func TestReconcileGatewayClassDeletedCleansUpAP(t *testing.T) {
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	gwClass := newGatewayClass("istio")
+	gateway := &gatewayApiv1.Gateway{
+		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "localnet",
+		}},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, gateway, gwClass).Build()
+	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
+	assert.NoError(t, err)
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	assert.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, ap))
+
+	// Delete the GatewayClass.
+	assert.NoError(t, k8sClient.Delete(context.Background(), gwClass))
+
+	// Second reconcile — AP must be cleaned up even though GatewayClass is gone.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
+	assert.NoError(t, err)
+
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, ap)
+	assert.True(t, apierrors.IsNotFound(err), "AP must be deleted when GatewayClass is removed")
+}

@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
+	istioApiSecurityV1 "istio.io/api/security/v1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
 
@@ -278,4 +279,24 @@ func TestApplyMerged_DeduplicatesPaths(t *testing.T) {
 	assert.Len(t, policy.Spec.Rules, 1)
 	assert.Len(t, policy.Spec.Rules[0].To, 1)
 	assert.ElementsMatch(t, []string{"/api", "/api/*"}, policy.Spec.Rules[0].To[0].Operation.Paths, "duplicate paths must appear only once after expansion")
+}
+
+// TestMergeTosByPaths_PathOrderIndependent verifies that two `to` operations with the same paths
+// in different order are compacted into one. Without sorting the path key, they would produce
+// different keys and survive as separate redundant `to` blocks — causing spurious AP updates.
+func TestMergeTosByPaths_PathOrderIndependent(t *testing.T) {
+	istioOp := func(hosts, paths []string) *istioApiSecurityV1.Rule_To {
+		return &istioApiSecurityV1.Rule_To{
+			Operation: &istioApiSecurityV1.Operation{Hosts: hosts, Paths: paths},
+		}
+	}
+
+	// Same paths, different order — must compact to one To block.
+	result := mergeTosByPaths([]*istioApiSecurityV1.Rule_To{
+		istioOp([]string{"host-a.example.com"}, []string{"/health", "/api"}),
+		istioOp([]string{"host-b.example.com"}, []string{"/api", "/health"}),
+	})
+	require.Len(t, result, 1, "same paths in different order must compact into one To operation")
+	assert.ElementsMatch(t, []string{"host-a.example.com", "host-b.example.com"}, result[0].Operation.Hosts)
+	assert.ElementsMatch(t, []string{"/api", "/health"}, result[0].Operation.Paths)
 }

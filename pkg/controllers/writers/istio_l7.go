@@ -5,8 +5,6 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
-	"sort"
-	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -33,7 +31,7 @@ func LabelSafe(s string) string {
 	v := invalidLabelValue.ReplaceAllString(s, "_")
 	if len(v) > 63 {
 		h := fnv.New32a()
-		_, _ = h.Write([]byte(v))
+		_, _ = h.Write([]byte(s))
 		v = fmt.Sprintf("%s-%08x", v[:54], h.Sum32())
 	}
 	return v
@@ -67,22 +65,13 @@ func (w *IstioL7Writer) applyLabels(policy *istiosecurityv1.AuthorizationPolicy,
 	policy.Labels[w.annotationPrefix+"/owner-name"] = LabelSafe(ownerName)
 }
 
-// pathSafe converts a URL path to a safe AP name suffix.
-// Encoding: escape "-" as "--", trim surrounding "/", replace remaining "/" with "-".
-// Returns empty string only for "/" (or equivalent all-slash paths).
-// Examples: /admin/users → admin-users, /admin-users → admin--users, /root → root, / → ""
-func pathSafe(path string) string {
-	escaped := strings.ReplaceAll(path, "-", "--")
-	escaped = strings.Trim(escaped, "/")
-	return strings.ReplaceAll(escaped, "/", "-")
-}
-
 // policyName computes the AP name and namespace for a given route+gateway+paths.
 // Format: {gateway.Name}-{route.Name} (same-namespace)
 //
 //	{gateway.Name}-{route.Namespace}-{route.Name} (cross-namespace, AP lives in gateway's namespace)
 //
-// When paths is non-empty, a path-safe suffix is appended so each HTTPRoute rule gets its own AP.
+// When paths is non-empty, a FNV-32a hash of the sorted path set is appended so each HTTPRoute
+// rule gets its own AP. The hash is order-independent and collision-resistant.
 func policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, paths []string) (name, namespace string, crossNamespace bool) {
 	crossNamespace = gateway.Namespace != route.Namespace
 	namespace = route.Namespace
@@ -92,30 +81,12 @@ func policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, pa
 		baseName = gateway.Name + "-" + route.Namespace + "-" + route.Name
 	}
 	name = baseName
-	if len(paths) == 1 {
-		// Single path: keep the human-readable suffix, no hash needed.
-		safe := pathSafe(paths[0])
-		if safe == "" {
-			safe = "-root"
-		}
-		name = fmt.Sprintf("%s-%s", baseName, safe)
-	} else if len(paths) > 1 {
-		// Multiple paths: first path (readable) + hash of the full sorted set.
-		// e.g. ["/api", "/health"] → "{base}-api-3d2a1f8c"
-		// The hash disambiguates sets sharing the same first path; the readable
-		// prefix lets humans quickly identify the rule without inspecting the AP spec.
-		sorted := make([]string, len(paths))
-		copy(sorted, paths)
-		sort.Strings(sorted)
+	if len(paths) > 0 {
 		h := fnv.New32a()
-		for _, p := range sorted {
+		for _, p := range dedupSorted(paths) {
 			_, _ = h.Write([]byte(p))
 		}
-		first := pathSafe(sorted[0])
-		if first == "" {
-			first = "-root"
-		}
-		name = fmt.Sprintf("%s-%s-%08x", baseName, first, h.Sum32())
+		name = fmt.Sprintf("%s-%08x", baseName, h.Sum32())
 	}
 	name = truncateName(name)
 	return name, namespace, crossNamespace
@@ -137,28 +108,14 @@ func truncateName(name string) string {
 
 // policyNameSuffix returns the AP name suffix for a given path set, mirroring policyName.
 func policyNameSuffix(paths []string) string {
-	if len(paths) == 1 {
-		safe := pathSafe(paths[0])
-		if safe == "" {
-			safe = "-root"
-		}
-		return "-" + safe
+	if len(paths) == 0 {
+		return ""
 	}
-	if len(paths) > 1 {
-		sorted := make([]string, len(paths))
-		copy(sorted, paths)
-		sort.Strings(sorted)
-		h := fnv.New32a()
-		for _, p := range sorted {
-			_, _ = h.Write([]byte(p))
-		}
-		first := pathSafe(sorted[0])
-		if first == "" {
-			first = "-root"
-		}
-		return fmt.Sprintf("-%s-%08x", first, h.Sum32())
+	h := fnv.New32a()
+	for _, p := range dedupSorted(paths) {
+		_, _ = h.Write([]byte(p))
 	}
-	return ""
+	return fmt.Sprintf("-%08x", h.Sum32())
 }
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
@@ -172,9 +129,16 @@ func (w *IstioL7Writer) RequiredPermissions() []Permission {
 }
 
 // Apply creates or updates an AuthorizationPolicy for the given HTTPRoute+gateway+paths combination.
-// When paths is non-empty the AP name includes a path-safe suffix so each rule gets its own AP.
+// When paths is non-empty the AP name includes a hash suffix so each rule gets its own AP.
+// If ips is empty, any previously created AP for this route+paths is deleted instead.
 func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string) error {
 	apName, apNamespace, crossNamespace := policyName(route, gateway, paths)
+	if len(ips) == 0 {
+		policy := &istiosecurityv1.AuthorizationPolicy{}
+		policy.Name = apName
+		policy.Namespace = apNamespace
+		return client.IgnoreNotFound(w.client.Delete(ctx, policy))
+	}
 
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: apNamespace},
@@ -230,10 +194,11 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 		return true
 	}
 
-	// Normal AP: check if owner route still exists and still produces this AP
+	// Normal AP: check if owner route still exists and still produces this AP.
+	// Labels are stored via LabelSafe() so we must compare using LabelSafe() on both sides.
 	for i := range allRoutes {
 		r := &allRoutes[i]
-		if r.Namespace != ownerNS || r.Name != ownerName {
+		if LabelSafe(r.Namespace) != ownerNS || LabelSafe(r.Name) != ownerName {
 			continue
 		}
 		// Route exists — check if it's in merge mode now

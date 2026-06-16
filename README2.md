@@ -114,60 +114,38 @@ All AP names follow a deterministic pattern derived from the objects involved. T
 | Scenario | Pattern | Example |
 |---|---|---|
 | Same-namespace, no paths | `{gw}-{route}` | `my-gateway-my-route` |
-| Same-namespace, single path | `{gw}-{route}-{pathSafe(path)}` | `my-gateway-my-route-api` |
-| Same-namespace, multiple paths | `{gw}-{route}-{pathSafe(paths[0])}-{fnv32hex}` | `my-gateway-my-route-api-3d2a1f8c` |
+| Same-namespace, with paths | `{gw}-{route}-{fnv32hex}` | `my-gateway-my-route-3d2a1f8c` |
 | Cross-namespace, no paths | `{gw}-{routeNS}-{route}` | `my-gateway-app-ns-my-route` |
-| Cross-namespace, single path | `{gw}-{routeNS}-{route}-{pathSafe(path)}` | `my-gateway-app-ns-my-route-api` |
-| Cross-namespace, multiple paths | `{gw}-{routeNS}-{route}-{pathSafe(paths[0])}-{fnv32hex}` | `my-gateway-app-ns-my-route-api-3d2a1f8c` |
+| Cross-namespace, with paths | `{gw}-{routeNS}-{route}-{fnv32hex}` | `my-gateway-app-ns-my-route-3d2a1f8c` |
 | Merge mode | `{mergeKey}` | `chaos-monkey` |
 
-### `pathSafe` encoding
+### Path-based collision protection
 
-`pathSafe` converts a URL path to a valid Kubernetes name segment:
-
-1. Escape `-` → `--` (so the separator `-` is never ambiguous)
-2. Trim leading and trailing `/`
-3. Replace remaining `/` with `-`
-
-Examples:
-
-| Path | `pathSafe` result |
-|---|---|
-| `/api` | `api` |
-| `/admin/users` | `admin-users` |
-| `/admin-users` | `admin--users` |
-| `/` | `""` → caller uses sentinel `-root` → final name ends `--root` |
-
-The double-dash prefix produced by `/` (`--root`) is unreachable by any real path, since `pathSafe` escapes all literal `-` first.
-
-### Multi-path collision protection
-
-When a rule has a single path the suffix is the plain readable `pathSafe` result. When a rule has **multiple paths** a hash is appended:
+When a rule has paths, a FNV-32a hash of the **full sorted path set** is appended:
 
 ```
-suffix = pathSafe(sorted_paths[0]) + "-" + hex8(fnv32a(sorted_paths))
+suffix = hex8(fnv32a(sorted_paths))
 ```
 
-- `sorted_paths[0]` gives a human-readable hint — operators can identify the rule at a glance
-- The FNV-32a hash covers the **full sorted set**, so two rules sharing the same first path but differing elsewhere get different names
 - Sorting makes the name order-independent — reordering matches in an HTTPRoute rule does not rename the AP
+- The hash covers the full set, so two rules with different paths always get different names
 - FNV-32a output is hex digits only (`[0-9a-f]`) — always a valid Kubernetes name segment
+- The human-readable part comes from the HTTPRoute name itself, not the path
 
 Collision table:
 
 | Input | Suffix | Notes |
 |---|---|---|
-| `["/api"]` | `api` | single path, readable, no hash |
-| `["/api", "/health"]` | `api-3d2a1f8c` | multi-path, first + hash |
-| `["/api", "/admin"]` | `api-7b2e41f0` | same first path, different hash |
-| `["/api-v2"]` | `api--v2` | single path, dash escaped — never clashes with above |
+| `["/api"]` | `3d2a1f8c` | single path, hash only |
+| `["/api", "/health"]` | `5f1a9c2e` | multi-path, hash of full set |
+| `["/api", "/admin"]` | `7b2e41f0` | different set, different hash |
+| `["/api/*"]` | `8e4d3b1a` | glob path, same format |
 
 A same-namespace gateway named `my-gw` with route `r` would produce:
 ```
-gw-r-api            ← single path /api
-gw-r-api-3d2a1f8c   ← paths [/api, /health]
-gw-r-api-7b2e41f0   ← paths [/api, /admin]
-gw-r-api--v2        ← single path /api-v2 (dash escaped)
+gw-r                ← no paths (granularity=host)
+gw-r-3d2a1f8c       ← paths [/api, /api/*]
+gw-r-5f1a9c2e       ← paths [/admin, /admin/*]
 ```
 
 None of these can ever collide.

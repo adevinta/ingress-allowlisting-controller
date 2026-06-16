@@ -220,10 +220,9 @@ func TestIsOrphaned_PathPrefixRoute(t *testing.T) {
 		"old single-path AP name must be orphaned after PathPrefix expansion fix")
 }
 
-// TestPolicyNameMultiPathNoCollision verifies the AP naming scheme for multi-path rules.
-// Single path: human-readable pathSafe suffix (unchanged from before).
-// Multiple paths: FNV-32a hex hash of the sorted set — valid K8s name chars, order-independent.
-func TestPolicyNameMultiPathNoCollision(t *testing.T) {
+// TestPolicyNameHashSuffix verifies the AP naming scheme: any non-empty path set produces
+// {base}-{fnv32hex}, order-independent and collision-resistant.
+func TestPolicyNameHashSuffix(t *testing.T) {
 	gw := &gatewayApiv1.Gateway{}
 	gw.Name = "gw"
 	gw.Namespace = "ns"
@@ -231,13 +230,13 @@ func TestPolicyNameMultiPathNoCollision(t *testing.T) {
 	route.Name = "r"
 	route.Namespace = "ns"
 
-	// Single path: readable suffix, no hash.
+	// Single path: hash suffix, no human-readable path in name.
 	nameSingle, _, _ := policyName(route, gw, []string{"/api"})
-	assert.Equal(t, "gw-r-api", nameSingle)
+	assert.Regexp(t, `^gw-r-[0-9a-f]{8}$`, nameSingle, "single path must produce {base}-{hash}")
 
-	// Multi-path: first path + hash suffix.
+	// Multiple paths: same format.
 	nameMulti, _, _ := policyName(route, gw, []string{"/api", "/health"})
-	assert.Regexp(t, `^gw-r-api-[0-9a-f]{8}$`, nameMulti, "multi-path name must be {base}-{firstPath}-{hash}")
+	assert.Regexp(t, `^gw-r-[0-9a-f]{8}$`, nameMulti, "multi-path must produce {base}-{hash}")
 
 	// Order must not matter.
 	nameReversed, _, _ := policyName(route, gw, []string{"/health", "/api"})
@@ -247,8 +246,12 @@ func TestPolicyNameMultiPathNoCollision(t *testing.T) {
 	nameOther, _, _ := policyName(route, gw, []string{"/api", "/admin"})
 	assert.NotEqual(t, nameMulti, nameOther, "different path sets must produce different names")
 
-	// Multi-path must never collide with single-path.
-	assert.NotEqual(t, nameMulti, nameSingle)
+	// Single-path and multi-path with same first path must differ.
+	assert.NotEqual(t, nameSingle, nameMulti)
+
+	// No paths: base name only.
+	nameBase, _, _ := policyName(route, gw, nil)
+	assert.Equal(t, "gw-r", nameBase)
 }
 
 // TestTruncateName verifies the 253-char name length cap.
@@ -312,4 +315,91 @@ func TestRoutePolicyPrefixOverlap(t *testing.T) {
 	}
 	assert.False(t, w.IsOrphaned(liveAP, []gatewayApiv1.HTTPRoute{routeApi}),
 		"AP gw-api must NOT be orphaned: route api still produces it")
+}
+
+// TestIsOrphaned_CrossNamespace verifies that orphan detection works correctly for
+// cross-namespace APs where the AP lives in the gateway's namespace but is owned by
+// a route in a different namespace.
+func TestIsOrphaned_CrossNamespace(t *testing.T) {
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route := gatewayApiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "route-ns"},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "my-gw", Namespace: &gwNS},
+			}},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	// Compute the expected cross-namespace AP name.
+	targets := w.policyTargetsForRoute(&route)
+	require.Len(t, targets, 1)
+	assert.Equal(t, "gw-ns", targets[0].namespace, "cross-namespace AP must live in gateway's namespace")
+
+	// Live cross-namespace AP — should NOT be orphaned.
+	liveAP := &istiosecurityv1.AuthorizationPolicy{}
+	liveAP.Name = targets[0].name
+	liveAP.Namespace = targets[0].namespace
+	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
+		"ipam.adevinta.com/owner-name":      LabelSafe("my-route"),
+	}
+	assert.False(t, w.IsOrphaned(liveAP, []gatewayApiv1.HTTPRoute{route}),
+		"cross-namespace AP at correct name must NOT be orphaned")
+
+	// Stale AP from a route that no longer exists — should be orphaned.
+	staleAP := &istiosecurityv1.AuthorizationPolicy{}
+	staleAP.Name = "my-gw-route-ns-deleted-route"
+	staleAP.Namespace = "gw-ns"
+	staleAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
+		"ipam.adevinta.com/owner-name":      LabelSafe("deleted-route"),
+	}
+	assert.True(t, w.IsOrphaned(staleAP, []gatewayApiv1.HTTPRoute{route}),
+		"AP for a deleted cross-namespace route must be orphaned")
+
+	// AP with wrong name for the existing route — should be orphaned (e.g. gateway changed).
+	wrongNameAP := &istiosecurityv1.AuthorizationPolicy{}
+	wrongNameAP.Name = "old-gw-route-ns-my-route"
+	wrongNameAP.Namespace = "gw-ns"
+	wrongNameAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
+		"ipam.adevinta.com/owner-name":      LabelSafe("my-route"),
+	}
+	assert.True(t, w.IsOrphaned(wrongNameAP, []gatewayApiv1.HTTPRoute{route}),
+		"AP with wrong name for existing cross-namespace route must be orphaned")
+}
+
+// TestIsOrphaned_LongRouteName verifies that routes with names > 63 chars (which get
+// truncated by LabelSafe) are still correctly recognised as owners during orphan detection.
+func TestIsOrphaned_LongRouteName(t *testing.T) {
+	longName := strings.Repeat("a", 54) + strings.Repeat("b", 20) // 74 chars — exceeds 63
+	gwNS := gatewayApiv1.Namespace("ns")
+	route := gatewayApiv1.HTTPRoute{
+		ObjectMeta: metav1.ObjectMeta{Name: longName, Namespace: "ns"},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "gw", Namespace: &gwNS},
+			}},
+		},
+	}
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	targets := w.policyTargetsForRoute(&route)
+	require.Len(t, targets, 1)
+
+	liveAP := &istiosecurityv1.AuthorizationPolicy{}
+	liveAP.Name = targets[0].name
+	liveAP.Namespace = targets[0].namespace
+	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": LabelSafe("ns"),
+		"ipam.adevinta.com/owner-name":      LabelSafe(longName),
+	}
+	assert.False(t, w.IsOrphaned(liveAP, []gatewayApiv1.HTTPRoute{route}),
+		"AP with LabelSafe'd long name must NOT be orphaned when route still exists")
 }

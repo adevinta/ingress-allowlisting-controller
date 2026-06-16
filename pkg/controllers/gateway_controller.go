@@ -42,23 +42,20 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 	log.Infof("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
-	var allowedIps []string
-	var err error
-	allowedIps, err = r.CidrResolver.GetCidrsFromObject(ctx, &gateway)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
-		return ctrl.Result{}, nil
-	}
-	if err != nil {
-		return ctrl.Result{}, err
-	}
 
-	// Resolve GatewayClass to find which writer to use
+	// Resolve GatewayClass and writer first — needed for both apply and delete paths.
 	gwClass := &gatewayApiv1.GatewayClass{}
 	if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, gwClass); err != nil {
 		if client.IgnoreNotFound(err) != nil {
 			return ctrl.Result{}, err
 		}
-		log.Infof("GatewayClass %s not found, skipping gateway %s", gateway.Spec.GatewayClassName, gateway.Name)
+		// GatewayClass was deleted — attempt cleanup with all registered writers to avoid orphaned APs.
+		for _, w := range r.L4Writers {
+			if err := w.Delete(ctx, &gateway); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		log.Infof("GatewayClass %s not found, cleaned up gateway %s", gateway.Spec.GatewayClassName, gateway.Name)
 		return ctrl.Result{}, nil
 	}
 
@@ -66,6 +63,20 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	if !ok {
 		log.Infof("no L4 writer registered for controller %s, skipping gateway %s", gwClass.Spec.ControllerName, gateway.Name)
 		return ctrl.Result{}, nil
+	}
+
+	var allowedIps []string
+	var err error
+	allowedIps, err = r.CidrResolver.GetCidrsFromObject(ctx, &gateway)
+	if err == r.CidrResolver.AnnotationNotFoundError() {
+		// Annotation removed — delete any previously created L4 AP.
+		if err := writer.Delete(ctx, &gateway); err != nil {
+			return ctrl.Result{}, err
+		}
+		return ctrl.Result{}, nil
+	}
+	if err != nil {
+		return ctrl.Result{}, err
 	}
 
 	if err := writer.Apply(ctx, r.Scheme, &gateway, allowedIps); err != nil {
@@ -90,7 +101,7 @@ func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nameP
 		build = build.Named(namePrefix + "-gateway")
 	}
 	if r.LegacyGroupVersion != "" {
-		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
+		build = build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
 			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
@@ -102,7 +113,7 @@ func newGatewaysFromCIDRFuncMap(c client.Client, annotation string) handler.MapF
 		options := client.ListOptions{
 			Namespace: cidr.GetNamespace(),
 		}
-		err := c.List(context.Background(), gateways, &options)
+		err := c.List(ctx, gateways, &options)
 		if err != nil {
 			return []reconcile.Request{}
 		}

@@ -719,8 +719,8 @@ func TestValidateMergeKey(t *testing.T) {
 }
 
 func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
-	// A route with an invalid merge key must return an error — not silently create
-	// an AP with an invalid name that the API server would reject opaquely.
+	// A route with an invalid merge key must stop reconciling without error (no requeue)
+	// and must not create any AP — the user must fix the annotation first.
 	cidr := &ipamv1alpha1.CIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
@@ -746,8 +746,11 @@ func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
-	assert.Error(t, err, "invalid merge key must return an error")
-	assert.Contains(t, err.Error(), "INVALID_KEY!")
+	assert.NoError(t, err, "invalid merge key must not requeue — user must fix the annotation")
+
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList))
+	assert.Empty(t, apList.Items, "no AP must be created for an invalid merge key")
 }
 
 func TestReconcileHTTPRouteMerge(t *testing.T) {
@@ -935,6 +938,52 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	assert.Contains(t, allHosts,
 		"chaos-monkey.public.ns-staging00.example.com",
 		"route00 is still in the merge group — its hostname must be present")
+}
+
+// TestReconcileHTTPRouteMergeLastSiblingLeaves verifies that when the last sibling
+// leaves a merge group, the merged AP is deleted — not left orphaned with stale CIDRs.
+func TestReconcileHTTPRouteMergeLastSiblingLeaves(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "my-group",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "my-gw", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "gw-ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+	reconciler.APIReader = k8sClient
+
+	// First reconcile — merged AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, policy))
+
+	// Route leaves the merge group.
+	route.Annotations["ipam.adevinta.com/merge"] = ""
+	require.NoError(t, k8sClient.Update(context.Background(), route))
+
+	// Second reconcile — cache now shows no siblings → confirmed via APIReader → AP deleted.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, policy)
+	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted when last sibling leaves the group")
 }
 
 func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
@@ -1252,6 +1301,77 @@ func TestStartupOrphanCleanup(t *testing.T) {
 	assert.NoError(t, err)
 }
 
+// TestStartupCleanupAnnotationRemoved verifies that startup cleanup deletes APs whose
+// owning route still exists but has had its allowlist annotation removed.
+// This covers the case where the annotation was removed while the controller was down,
+// so the runtime DeleteForRoute call never ran.
+func TestStartupCleanupAnnotationRemoved(t *testing.T) {
+	t.Run("same-namespace", func(t *testing.T) {
+		// Route exists but allowlist annotation is gone.
+		httproute := &gatewayApiv1.HTTPRoute{
+			ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-route"},
+			Spec: gatewayApiv1.HTTPRouteSpec{
+				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "")},
+				},
+			},
+		}
+		// AP was created when the annotation was still present.
+		staleAP := &istiosecurityv1.AuthorizationPolicy{
+			ObjectMeta: v1.ObjectMeta{
+				Name: "my-gw-my-route", Namespace: "ns",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+					"ipam.adevinta.com/owner-namespace": "ns",
+					"ipam.adevinta.com/owner-name":      "my-route",
+				},
+			},
+		}
+		gwClass := newIstioGatewayClass("istio")
+		gw := newTestGateway("my-gw", "ns", "istio")
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute, staleAP, gwClass, gw).Build()
+		reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+		reconciler.APIReader = k8sClient
+
+		reconciler.runStartupCleanup(context.Background())
+
+		err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, &istiosecurityv1.AuthorizationPolicy{})
+		assert.True(t, apierrors.IsNotFound(err), "AP must be deleted when owning route lost its allowlist annotation")
+	})
+
+	t.Run("cross-namespace", func(t *testing.T) {
+		// Route in ns, gateway in gw-ns — AP lives in gw-ns (no owner ref).
+		httproute := &gatewayApiv1.HTTPRoute{
+			ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-route"},
+			Spec: gatewayApiv1.HTTPRouteSpec{
+				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "gw-ns")},
+				},
+			},
+		}
+		staleAP := &istiosecurityv1.AuthorizationPolicy{
+			ObjectMeta: v1.ObjectMeta{
+				Name: "my-gw-ns-my-route", Namespace: "gw-ns",
+				Labels: map[string]string{
+					"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+					"ipam.adevinta.com/owner-namespace": "ns",
+					"ipam.adevinta.com/owner-name":      "my-route",
+				},
+			},
+		}
+		gwClass := newIstioGatewayClass("istio")
+		gw := newTestGateway("my-gw", "gw-ns", "istio")
+		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(httproute, staleAP, gwClass, gw).Build()
+		reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+		reconciler.APIReader = k8sClient
+
+		reconciler.runStartupCleanup(context.Background())
+
+		err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+		assert.True(t, apierrors.IsNotFound(err), "cross-namespace AP must be deleted when owning route lost its allowlist annotation")
+	})
+}
+
 func TestStartupCleanupAbortsOnEmptyHTTPRouteList(t *testing.T) {
 	// Scenario: managed APs exist but the HTTPRoute list returns empty (dirty read / cache not synced).
 	// Cleanup must abort rather than delete all APs.
@@ -1453,10 +1573,9 @@ func TestAuthorizationPolicyNameMaxLength(t *testing.T) {
 	// Namespace max = 63, name max = 63, gateway name max = 63.
 	// Format: {gateway}-{route}                           (same-namespace)
 	//         {gateway}-{routeNS}-{routeName}             (cross-namespace)
-	//         {gateway}-{route}-{pathSafe}                (same-namespace, with path)
-	//         {gateway}-{routeNS}-{routeName}-{pathSafe}  (cross-namespace, with path)
-	// Worst case: cross-namespace with path → 63+1+63+1+63+1+63 = 255, truncation not implemented
-	// but k8s names are limited to 253. In practice gateway/route/NS names are much shorter.
+	//         {gateway}-{route}-{fnv32hex}                (same-namespace, with paths)
+	//         {gateway}-{routeNS}-{routeName}-{fnv32hex}  (cross-namespace, with paths)
+	// Worst case: cross-namespace with paths → 63+1+63+1+63+1+8 = 200, safely under 253.
 	maxGW := strings.Repeat("g", 63)
 	maxNS := strings.Repeat("n", 63)
 	maxName := strings.Repeat("a", 63)
@@ -1706,4 +1825,236 @@ func TestRuleCountReductionDeletesStaleAPs(t *testing.T) {
 	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
 	require.Len(t, apList.Items, 1, "stale /admin AP must be deleted by startup cleanup")
 	assert.Contains(t, apList.Items[0].Spec.Rules[0].To[0].Operation.Paths, "/api", "remaining AP must be for /api")
+}
+
+// TestLabelRemovalDeletesAPs verifies that when an HTTPRoute is evicted from the informer
+// cache (e.g. label common-platform.io/allowlisting removed), the controller deletes any
+// previously-created APs rather than leaving them orphaned.
+// This simulates the watch-selector scenario: the route's label is removed, the route drops
+// out of the cache, and the controller receives a reconcile request for a now-missing route.
+func TestLabelRemovalDeletesAPs(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 1, "AP must exist after first reconcile")
+
+	// Simulate label removal: delete the route from the store so Get returns NotFound.
+	// This mimics the controller-runtime behaviour when a route leaves the label-selector cache.
+	require.NoError(t, k8sClient.Delete(context.Background(), httproute))
+
+	// Reconcile fires for the now-missing route — APs must be cleaned up.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	assert.Empty(t, apList.Items, "AP must be deleted when route is no longer visible to the controller")
+}
+
+// TestRuleCountReductionDeletesStaleAPsAtRuntime verifies that reducing the number of rules
+// in an HTTPRoute immediately cleans up the now-unused per-rule APs during the same reconcile,
+// without needing a restart or startup cleanup.
+func TestRuleCountReductionDeletesStaleAPsAtRuntime(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api", "/admin")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — two APs created (one per rule).
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 2, "two APs must exist after first reconcile")
+
+	// Remove /admin rule — route now has only /api.
+	pathMatch := gatewayApiv1.PathMatchPathPrefix
+	apiPath := "/api"
+	httproute.Spec.Rules = []gatewayApiv1.HTTPRouteRule{
+		{Matches: []gatewayApiv1.HTTPRouteMatch{{
+			Path: &gatewayApiv1.HTTPPathMatch{Type: &pathMatch, Value: &apiPath},
+		}}},
+	}
+	require.NoError(t, k8sClient.Update(context.Background(), httproute))
+
+	// Second reconcile — stale /admin AP must be deleted immediately (no startup cleanup needed).
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 1, "stale /admin AP must be deleted at runtime")
+	assert.Contains(t, apList.Items[0].Spec.Rules[0].To[0].Operation.Paths, "/api", "remaining AP must be for /api")
+}
+
+// TestGranularityChangedRuleToHostDeletesStaleAPs verifies that switching granularity from
+// "rule" to "host" at runtime causes the per-rule APs to be cleaned up immediately.
+func TestGranularityChangedRuleToHostDeletesStaleAPs(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := newHTTPRouteWithPaths("my-route", "ns", "my-gw", "rule", "/api", "/admin")
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile with granularity=rule — two per-rule APs created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	apList := &istiosecurityv1.AuthorizationPolicyList{}
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 2, "two per-rule APs must exist")
+
+	// Switch granularity to "host".
+	httproute.Annotations["ipam.adevinta.com/granularity"] = "host"
+	require.NoError(t, k8sClient.Update(context.Background(), httproute))
+
+	// Second reconcile — one host-level AP created, two per-rule APs cleaned up.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("ns")))
+	require.Len(t, apList.Items, 1, "only one host-level AP must remain after granularity switch")
+	assert.Equal(t, "my-gw-my-route", apList.Items[0].Name, "AP must be at base name (host granularity)")
+	assert.Nil(t, apList.Items[0].Spec.Rules[0].To[0].Operation.Paths, "host-level AP must have no path restriction")
+}
+
+// TestReconcileHTTPRouteMultipleGatewayClassesOneUnknown verifies that when an HTTPRoute
+// references two gateways with different GatewayClasses, one registered and one unknown,
+// the controller creates an AP for the registered one and silently skips the unknown one.
+func TestReconcileHTTPRouteMultipleGatewayClassesOneUnknown(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	httproute := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-route", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "localnet",
+		}},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{
+					parentRef("istio-gw", ""),
+					parentRef("nginx-gw", ""),
+				},
+			},
+		},
+	}
+	istioGwClass := newIstioGatewayClass("istio")
+	nginxGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "nginx"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: "k8s.io/nginx"},
+	}
+	istioGw := newTestGateway("istio-gw", "ns", "istio")
+	nginxGw := newTestGateway("nginx-gw", "ns", "nginx")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, httproute, istioGwClass, nginxGwClass, istioGw, nginxGw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	assert.NoError(t, err)
+
+	// AP should be created for the Istio gateway only.
+	istioAP := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, istioAP)
+	assert.NoError(t, err, "AP must be created for the registered Istio gateway")
+	assert.Equal(t, "istio-gw", istioAP.Spec.TargetRefs[0].Name)
+
+	// No AP should be created for the nginx gateway (no L7 writer registered for it).
+	nginxAP := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "nginx-gw-my-route", Namespace: "ns"}, nginxAP)
+	assert.True(t, apierrors.IsNotFound(err), "no AP should be created for the unregistered nginx gateway")
+}
+
+// TestMergedAPUpdatesWhenSiblingCIDRsChange verifies that when a sibling's CIDRs change,
+// re-reconciling any route in the merge group picks up the updated IPs for all siblings.
+func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
+	cidr00 := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-a"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32"}},
+	}
+	cidr01 := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-b"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"2.2.2.2/32"}},
+	}
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route00 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "svc-a", Namespace: "ns-a",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "shared-app",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "my-gw", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"a.example.com"},
+		},
+	}
+	route01 := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "svc-b", Namespace: "ns-b",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "shared-app",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "my-gw", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"b.example.com"},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("my-gw", "gw-ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr00, cidr01, route00, route01, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// Initial reconcile — merged AP contains both routes' IPs.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "svc-a", Namespace: "ns-a"}})
+	require.NoError(t, err)
+
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-app", Namespace: "gw-ns"}, policy))
+	var allIPs []string
+	for _, rule := range policy.Spec.Rules {
+		for _, from := range rule.From {
+			allIPs = append(allIPs, from.Source.RemoteIpBlocks...)
+		}
+	}
+	assert.ElementsMatch(t, []string{"1.1.1.1/32", "2.2.2.2/32"}, allIPs)
+
+	// Sibling's CIDR changes: ns-b's allowlist now has a different IP.
+	cidr01.Status.CIDRs = []string{"3.3.3.3/32"}
+	require.NoError(t, k8sClient.Update(context.Background(), cidr01))
+
+	// Re-reconcile any route in the group (e.g. triggered by CIDR→HTTPRoute mapper).
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "svc-a", Namespace: "ns-a"}})
+	require.NoError(t, err)
+
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-app", Namespace: "gw-ns"}, policy))
+	allIPs = nil
+	for _, rule := range policy.Spec.Rules {
+		for _, from := range rule.From {
+			allIPs = append(allIPs, from.Source.RemoteIpBlocks...)
+		}
+	}
+	assert.ElementsMatch(t, []string{"1.1.1.1/32", "3.3.3.3/32"}, allIPs, "merged AP must reflect updated sibling CIDRs")
 }

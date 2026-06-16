@@ -65,7 +65,17 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 	httproute := gatewayApiv1.HTTPRoute{}
 	if err := r.Get(ctx, req.NamespacedName, &httproute); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		// Route not found — it was deleted or evicted from the cache (e.g. watch-selector label removed).
+		// Clean up any APs that were created for it.
+		for _, writer := range r.L7Writers {
+			if err := writer.DeleteForRoute(ctx, r.managedByValue(), req.Namespace, req.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
+		return ctrl.Result{}, nil
 	}
 	log.Infof("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
 
@@ -78,7 +88,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	if mergeKey := httproute.Annotations[r.mergeAnnotation()]; mergeKey != "" {
 		if err := validateMergeKey(mergeKey); err != nil {
 			log.Errorf("HTTPRoute %s/%s has invalid merge key: %v", httproute.Namespace, httproute.GetName(), err)
-			return ctrl.Result{}, err
+			return ctrl.Result{}, nil
 		}
 		for _, ref := range parentRefs {
 			gatewayNS := httproute.Namespace // nil Namespace means same namespace as the route
@@ -116,6 +126,11 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			}
 		}
 		return ctrl.Result{}, nil
+	}
+
+	// Route is not in merge mode — clean up any stale merged APs where this route was the last member.
+	if err := r.cleanupOrphanedMergedAPs(ctx, &httproute, parentRefs); err != nil {
+		return ctrl.Result{}, err
 	}
 
 	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
@@ -200,6 +215,28 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
+	// Delete stale APs owned by this route that the current reconcile no longer produces
+	// (e.g. rule count reduced, or granularity changed from rule→host).
+	for _, writer := range r.L7Writers {
+		managed, err := writer.ListManaged(ctx, r.managedByValue())
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		for _, obj := range managed {
+			ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
+			ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+			if ownerNS != writers.LabelSafe(httproute.Namespace) || ownerName != writers.LabelSafe(httproute.Name) {
+				continue
+			}
+			if writer.IsOrphaned(obj, []gatewayApiv1.HTTPRoute{httproute}) {
+				if err := writer.Delete(ctx, obj); err != nil {
+					return ctrl.Result{}, err
+				}
+				log.Infof("Deleted stale policy %s/%s for HTTPRoute %s", obj.GetNamespace(), obj.GetName(), httproute.GetName())
+			}
+		}
+	}
+
 	return ctrl.Result{}, nil
 }
 
@@ -239,7 +276,23 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 		}
 		for _, obj := range managed {
 			obj := obj
-			if writer.IsOrphaned(obj, allRoutes.Items) {
+			shouldDelete := writer.IsOrphaned(obj, allRoutes.Items)
+			if !shouldDelete {
+				// Also delete if the owning route exists but lost its allowlist annotation —
+				// the runtime DeleteForRoute would have handled this, but a restart may have missed it.
+				ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
+				ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+				for i := range allRoutes.Items {
+					route := &allRoutes.Items[i]
+					if writers.LabelSafe(route.Namespace) == ownerNS && writers.LabelSafe(route.Name) == ownerName {
+						if !hasAllowlistAnnotation(r.CidrResolver.AnnotationPrefix, route) {
+							shouldDelete = true
+						}
+						break
+					}
+				}
+			}
+			if shouldDelete {
 				if err := writer.Delete(ctx, obj); client.IgnoreNotFound(err) != nil {
 					log.Errorf("startup cleanup: failed to delete %s/%s: %v", obj.GetNamespace(), obj.GetName(), err)
 					continue
@@ -248,6 +301,92 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			}
 		}
 	}
+}
+
+// cleanupOrphanedMergedAPs checks whether the route just left a merge group as the last member.
+// For each gateway the route is attached to, it looks for a merged AP whose group now has
+// no remaining siblings in the cache — and confirms via APIReader before deleting.
+func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, parentRefs []gatewayApiv1.ParentReference) error {
+	log := log.DefaultLogger.WithContext(ctx)
+	for _, ref := range parentRefs {
+		gatewayNS := httproute.Namespace
+		if ref.Namespace != nil {
+			gatewayNS = string(*ref.Namespace)
+		}
+		gateway := &gatewayApiv1.Gateway{}
+		if err := r.Get(ctx, types.NamespacedName{Name: string(ref.Name), Namespace: gatewayNS}, gateway); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return err
+			}
+			continue
+		}
+		gwClass := &gatewayApiv1.GatewayClass{}
+		if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, gwClass); err != nil {
+			if client.IgnoreNotFound(err) != nil {
+				return err
+			}
+			continue
+		}
+		writer, ok := r.L7Writers[string(gwClass.Spec.ControllerName)]
+		if !ok {
+			continue
+		}
+		mw, ok := writer.(writers.MergeableL7PolicyWriter)
+		if !ok {
+			continue
+		}
+
+		managed, err := mw.ListManaged(ctx, r.managedByValue())
+		if err != nil {
+			return err
+		}
+		for _, obj := range managed {
+			ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
+			if ownerNS != "MERGED" {
+				continue
+			}
+			mergeKey := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+			if mergeKey == "" || obj.GetNamespace() != gatewayNS {
+				continue
+			}
+			// Check cache: any sibling still in this group?
+			allRoutes := &gatewayApiv1.HTTPRouteList{}
+			if err := r.List(ctx, allRoutes); err != nil {
+				return err
+			}
+			hasSibling := false
+			for _, route := range allRoutes.Items {
+				if route.Annotations[r.mergeAnnotation()] == mergeKey &&
+					httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
+					hasSibling = true
+					break
+				}
+			}
+			if hasSibling {
+				continue
+			}
+			// Confirm via direct API read before deleting.
+			confirmed := &gatewayApiv1.HTTPRouteList{}
+			if err := r.APIReader.List(ctx, confirmed); err != nil {
+				return err
+			}
+			for _, route := range confirmed.Items {
+				if route.Annotations[r.mergeAnnotation()] == mergeKey &&
+					httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
+					hasSibling = true
+					break
+				}
+			}
+			if hasSibling {
+				continue
+			}
+			if err := mw.DeleteMerged(ctx, gatewayNS, mergeKey); err != nil {
+				return err
+			}
+			log.Infof("Deleted orphaned merged AP %q — no siblings remain in group", mergeKey)
+		}
+	}
+	return nil
 }
 
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, writer writers.MergeableL7PolicyWriter, mergeKey string) error {
@@ -268,6 +407,26 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 			continue
 		}
 		siblings = append(siblings, sibling)
+	}
+
+	if len(siblings) == 0 {
+		// Cache shows no siblings — confirm via direct API read before deleting,
+		// to avoid removing the AP on a dirty cache read (same guard as startup cleanup).
+		confirmed := &gatewayApiv1.HTTPRouteList{}
+		if err := r.APIReader.List(ctx, confirmed); err != nil {
+			return err
+		}
+		for _, route := range confirmed.Items {
+			if route.Annotations[r.mergeAnnotation()] == mergeKey &&
+				httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
+				return nil // cache was stale — sibling still exists, skip deletion
+			}
+		}
+		if err := writer.DeleteMerged(ctx, gateway.Namespace, mergeKey); err != nil {
+			return err
+		}
+		log.Infof("Deleted merged AuthorizationPolicy for empty group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
+		return nil
 	}
 
 	if err := writer.ApplyMerged(ctx, gateway, siblings, mergeKey); err != nil {
