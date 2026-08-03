@@ -241,7 +241,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, "", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -313,7 +313,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, "", t.Name(), "legacy.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "legacy.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -352,6 +352,10 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "group-name", Namespace: currentNamespaceName},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
+	gwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "istio"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: "istio.io/gateway-controller"},
+	}
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "test",
@@ -360,8 +364,9 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 				"ipam.example.com/allowlist-group": "group-name",
 			},
 		},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, gateway).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, gwClass, gateway).Build()
 
 	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
 
@@ -382,7 +387,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -442,6 +447,10 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		ObjectMeta: v1.ObjectMeta{Name: "group-name"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
+	gwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "istio"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: "istio.io/gateway-controller"},
+	}
 	gateway := &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{
 			Name:      "test",
@@ -450,8 +459,9 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 				"ipam.example.com/cluster-allowlist-group": "group-name",
 			},
 		},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, gateway).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, gwClass, gateway).Build()
 
 	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
 
@@ -472,7 +482,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com"))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))

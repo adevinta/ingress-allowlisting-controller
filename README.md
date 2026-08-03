@@ -58,6 +58,341 @@ The content of the annotations can be a comma-separated list:
 
 `MyCidrsObject,MyCidrsObject2,MyCidrsObject3`
 
+### Example Gateway Resource
+
+The controller can watch `Gateway` resources and create an `AuthorizationPolicy` in the same namespace targeting the gateway itself.
+
+Enable the feature via Helm:
+```yaml
+gateway:
+  enabled: true
+```
+
+Or directly with the flag: `--gateway-support-enabled`.
+
+Required annotations:
+- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` - same as for Ingress
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+```
+
+The controller generates in `my-app`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: my-gateway      # same as the Gateway name
+  namespace: my-app
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+  targetRef:
+    group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
+```
+
+The `AuthorizationPolicy` is created in the same namespace as the `Gateway` and uses `targetRef` (singular) pointing directly at the gateway - no cross-namespace support, no hostnames, no merge mode. The AP is owned by the `Gateway` resource and garbage-collected automatically when the `Gateway` is deleted.
+
+### Example HTTPRoute Resource
+
+The controller can also watch `HTTPRoute` resources and create an `AuthorizationPolicy` targeting the associated Istio Gateway.
+
+Enable the feature via Helm:
+```yaml
+httproute:
+  enabled: true
+```
+
+Or directly with the flag: `--httproute-support-enabled`.
+
+Required annotations:
+- `ipam.adevinta.com/allowlist-group` and/or `ipam.adevinta.com/cluster-allowlist-group` - same as for Ingress
+
+The gateway name, gateway namespace, and target namespace for the `AuthorizationPolicy` are all derived automatically from `spec.parentRefs` - no extra annotations needed.
+
+**Same-namespace case** - parentRef has no `namespace`, so the `AuthorizationPolicy` is created in the same namespace as the `HTTPRoute`:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-route
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
+  hostnames:
+  - app.example.com
+```
+
+The controller generates in `my-app`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: my-gateway-my-route     # {gateway.Name}-{httproute.Name}
+  namespace: my-app
+  ownerReferences:               # automatically garbage-collected when the HTTPRoute is deleted
+  - kind: HTTPRoute
+    name: my-route
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+    to:
+    - operation:
+        hosts:
+        - app.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: my-gateway
+```
+
+**Cross-namespace case** - parentRef has a `namespace` that differs from the HTTPRoute namespace. The `AuthorizationPolicy` is created in the gateway namespace:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: my-route
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+    namespace: infra          # different from HTTPRoute namespace
+  hostnames:
+  - app.example.com
+```
+
+The controller generates in `infra`:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: cross-namespace-gateway-my-app-my-route   # {gateway.Name}-{httproute.Namespace}-{httproute.Name}
+  namespace: infra
+  # no ownerReference - cross-namespace owner references are not supported by Kubernetes
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 10.0.0.0/8
+        - 192.168.0.0/16
+    to:
+    - operation:
+        hosts:
+        - app.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+```
+
+> **Note:** Cross-namespace `AuthorizationPolicy` resources are not garbage-collected automatically when the `HTTPRoute` is deleted. Kubernetes does not support cross-namespace owner references, so the controller cannot set one - the API server would silently strip it anyway. This means stale APs can accumulate when routes are deleted, have their `parentRefs` changed, or switch between normal and merge mode.
+>
+> **Automatic cleanup on restart:** every time the controller starts, it runs a one-time sweep over all `AuthorizationPolicy` resources it owns (identified by the `app.kubernetes.io/managed-by=ingress-allowlisting-controller` label). Any AP whose owner `HTTPRoute` no longer exists, or that the current route configuration would no longer produce, is deleted. Restarting the controller is therefore sufficient to clean up any accumulated orphans.
+>
+> **Hard reset:** to remove all APs managed by this controller and let it rebuild from scratch:
+> ```bash
+> kubectl delete authorizationpolicies -A -l app.kubernetes.io/managed-by=ingress-allowlisting-controller
+> # then restart the controller
+> kubectl rollout restart deployment/ingress-allowlisting-controller -n <namespace>
+> ```
+
+**Multiple gateways** - an HTTPRoute can reference more than one gateway. The controller creates one `AuthorizationPolicy` per gateway, each prefixed with the gateway name:
+
+```yaml
+spec:
+  parentRefs:
+  - name: internal-gateway           # → AuthorizationPolicy: internal-gateway-{httproute.Name}
+  - name: external-gateway           # → AuthorizationPolicy: external-gateway-{httproute.Name}
+```
+
+Cross-namespace refs follow the same prefix convention: `{gateway.Name}-{httproute.Namespace}-{httproute.Name}`.
+
+**Performance tuning** - if you have thousands of HTTPRoutes in a cluster, you can restrict the informer cache to only the ones opted into allowlisting using a label selector:
+
+```yaml
+httproute:
+  enabled: true
+  labelSelector: "ipam.adevinta.com/allowlisting=enabled"
+```
+
+Or via flag: `--httproute-label-selector=ipam.adevinta.com/allowlisting=enabled`.
+
+This filters at the API server level, reducing both memory usage and reconcile load.
+
+**Merge mode** - for staging environments where the same application is deployed across multiple namespaces (e.g. `ns-staging00`, `ns-staging01`, ...) and all point to a shared cross-namespace gateway, you can set `ipam.adevinta.com/merge` to a shared policy name to produce a single `AuthorizationPolicy` that covers all of them.
+
+The annotation value is both the **merge key** (which routes belong together) and the **name of the generated `AuthorizationPolicy`**. HTTPRoute names can be anything - typically they are hostname-based - and do not need to match.
+
+```yaml
+# In namespace ns-staging00:
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chaos-monkey.public.ns-staging00.example.com
+  namespace: ns-staging00
+  annotations:
+    ipam.adevinta.com/allowlist-group: allowlist
+    ipam.adevinta.com/merge: chaos-monkey   # merge key = AP name
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+    namespace: ns-infra
+  hostnames:
+  - chaos-monkey.public.ns-staging00.example.com
+---
+# In namespace ns-staging01:
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata:
+  name: chaos-monkey.public.ns-staging01.example.com
+  namespace: ns-staging01
+  annotations:
+    ipam.adevinta.com/allowlist-group: allowlist
+    ipam.adevinta.com/merge: chaos-monkey   # same merge key → same AP
+spec:
+  parentRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+    namespace: ns-infra
+  hostnames:
+  - chaos-monkey.public.ns-staging01.example.com
+```
+
+The controller generates a **single** `AuthorizationPolicy` in `ns-infra`. Routes with the **same CIDR set** are compacted into one `rule`; routes with **different CIDR sets** each get their own `rule` — this preserves the security boundary (a CIDR allowed for one hostname cannot implicitly reach another):
+
+```yaml
+# Example A: both routes share the same CIDR set (e.g. same allowlist object)
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: chaos-monkey      # = the merge key
+  namespace: ns-infra
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 1.2.3.4/32       # shared CIDRs → one rule
+    to:
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging00.example.com
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging01.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+---
+# Example B: each route has a different CIDR set → one rule per CIDR set
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: chaos-monkey
+  namespace: ns-infra
+spec:
+  action: ALLOW
+  rules:
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 1.2.3.4/32       # only ns-staging00's CIDRs
+    to:
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging00.example.com
+  - from:
+    - source:
+        remoteIpBlocks:
+        - 5.6.7.8/32       # only ns-staging01's CIDRs
+    to:
+    - operation:
+        hosts:
+        - chaos-monkey.public.ns-staging01.example.com
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-public
+```
+
+Merge rules:
+- All HTTPRoutes with the **same annotation value** and the **same target gateway** are merged together, regardless of their `metadata.name`.
+- Routes with the **same sorted CIDR set** share one `from` block (compacted for readability). Routes with different CIDR sets each get their own `rule` — security isolation is preserved.
+- Within a CIDR group, routes with the **same hostname set** share one `to` block, with all their paths collected together.
+- Reconciling any one sibling rebuilds the full merged policy.
+
+**Granularity** - by default the controller creates one `AuthorizationPolicy` per HTTPRoute rule (one per path set). Use the `ipam.adevinta.com/granularity` annotation to change this behaviour:
+
+| Value | AP count | AP name | `to` block |
+|---|---|---|---|
+| absent / `rule` | one per rule | `{gw}-{route}-{path}` | hosts + path from that rule |
+| `host` | one per route | `{gw}-{route}` | hosts only, no path restriction |
+
+```yaml
+# granularity=rule (default): separate AP per path
+metadata:
+  annotations:
+    ipam.adevinta.com/granularity: rule   # or omit entirely
+spec:
+  rules:
+  - matches:
+    - path:
+        value: /api      # → AP named {gw}-{route}-api
+  - matches:
+    - path:
+        value: /health   # → AP named {gw}-{route}-health
+---
+# granularity=host: one AP for the whole route, no path restriction
+metadata:
+  annotations:
+    ipam.adevinta.com/granularity: host
+```
+
+`granularity` also applies inside **merge mode**: when a sibling has `granularity=host`, its rule contributes to the merged AP without any path restriction; when it has `granularity=rule` (default), each rule's paths are included.
+
+> **Security warning:** Merge mode is **not recommended for production** environments. Any namespace in the cluster that sets the same merge key and points to the same gateway will be pulled into the same `AuthorizationPolicy`. This means a team controlling a different namespace could add their application's hostnames and CIDRs to your policy, potentially opening access to their service through your allowlist - or having their service inadvertently protected by your rules.
+>
+> Merge mode is designed for **staging environments** where multiple namespace-isolated instances of the same application exist under the same team's control and share a single gateway.
+
 ### Example NetworkPolicy Resource
 Below are examples of NetworkPolicy resources with different `policyTypes` (Ingress or Egress).
 
@@ -197,6 +532,117 @@ spec:
   location:
     uri: https://api.github.com/repos/my-org/my-repo/contents/path/to/cidrs/file.json
 ```
+
+## Security considerations
+
+### Gateway vs HTTPRoute allowlisting - do not mix
+
+The Gateway controller creates an `AuthorizationPolicy` with `action: ALLOW` targeting the Gateway directly - this is **L4-level** protection (IP-only, no hostname matching).
+
+The HTTPRoute controller creates `AuthorizationPolicy` resources with `action: ALLOW` targeting the same Gateway but scoped per-hostname - this is **L7-level** protection.
+
+**Istio evaluates multiple ALLOW policies with OR logic.** A request is allowed if it matches ANY ALLOW policy targeting that resource. This means:
+
+```
+Request from 5.5.5.5 → app.example.com
+
+Gateway AP:  ALLOW from [10.0.0.0/8]               → ✗ no match
+HTTPRoute AP: ALLOW from [5.5.5.5/32] host app.example.com → ✓ match → ALLOWED
+```
+
+The HTTPRoute AP bypasses the Gateway AP entirely. **Do not use both `allowlist-group` on a Gateway and on its HTTPRoutes simultaneously.** Pick one level:
+
+- Use **Gateway-level** when you want a single uniform allowlist for all traffic through the gateway, regardless of hostname.
+- Use **HTTPRoute-level** when you need per-route control with different CIDRs per service.
+
+---
+
+### Protecting a cross-namespace Gateway with a DENY policy
+
+When using HTTPRoute-level allowlisting on a cross-namespace gateway, each HTTPRoute produces an ALLOW policy scoped to its hostnames. However, any hostname not covered by an ALLOW policy defaults to Istio's implicit deny - **unless another policy creates a gap**.
+
+To explicitly lock down which hostnames are permitted to reach the gateway at all, add a DENY policy that blocks anything not matching your expected hostname patterns:
+
+```yaml
+apiVersion: security.istio.io/v1
+kind: AuthorizationPolicy
+metadata:
+  name: protect-gateway-hostnames
+  namespace: infra
+spec:
+  action: DENY
+  rules:
+  - to:
+    - operation:
+        notHosts:
+        - '*.public.ns-staging00.example.com'
+        - '*.public.ns-staging01.example.com'
+        - '*.public.ns-staging02.example.com'
+  targetRefs:
+  - group: gateway.networking.k8s.io
+    kind: Gateway
+    name: cross-namespace-gateway
+```
+
+DENY rules take precedence over all ALLOW rules in Istio - this ensures that even if an ALLOW policy is misconfigured or overly broad, traffic to unexpected hostnames is blocked at the gateway level.
+
+---
+
+### Restricting which namespaces can attach to a cross-namespace Gateway
+
+A cross-namespace Gateway accepting routes from arbitrary namespaces is a lateral movement risk - any team that can create an HTTPRoute can attach to your gateway. Restrict attachment using the Gateway's `allowedRoutes` listener configuration:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: cross-namespace-gateway
+  namespace: infra
+spec:
+  gatewayClassName: istio
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+    allowedRoutes:
+      namespaces:
+        from: Selector
+        selector:
+          matchLabels:
+            cross-gateway-access: "true"
+```
+
+Only namespaces with the label `cross-gateway-access: "true"` can attach HTTPRoutes to this gateway. All other HTTPRoutes are rejected by the Gateway controller (`Accepted=False`) and no traffic flows for them - regardless of any `AuthorizationPolicy` that may exist.
+
+Combine all three layers for defence in depth:
+
+1. **Namespace label selector** on the Gateway listener - controls who can attach
+2. **HTTPRoute-level ALLOW policies** via this controller - controls which IPs can reach each service
+3. **Gateway-level DENY policy** on unexpected hostnames - prevents gaps from misconfigured or missing ALLOW policies
+
+### AWS: preserving client IP for IP-based filtering
+
+`AuthorizationPolicy` rules match on `remoteIpBlocks` — this requires the **original client IP** to reach the Istio proxy. On AWS, load balancers terminate connections and replace the source IP with the LB's own address unless explicitly configured to propagate it.
+
+Without this configuration, all requests appear to come from the load balancer's IP and no allowlist rule will match correctly — effectively making the allowlist useless.
+
+**Solution: Proxy Protocol**
+
+Use Proxy Protocol to propagate the client IP through the AWS NLB to the Istio gateway:
+
+```yaml
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  annotations:
+    # Tell AWS LB to send Proxy Protocol v2 headers
+    service.beta.kubernetes.io/aws-load-balancer-proxy-protocol: '*'
+    # Tell Istio's Envoy proxy to expect and parse Proxy Protocol
+    proxy.istio.io/config: '{"gatewayTopology": {"proxyProtocol": {}}}'
+```
+
+Both annotations are required — the first enables Proxy Protocol on the AWS side, the second tells Envoy to parse the protocol header and extract the real client IP for use in `remoteIpBlocks` matching.
 
 ## Metrics
 The operator exposes a single metric `namespace_ingress_IpAllowlistingGroup_missing` that, when operated appropiately, it offer several information:

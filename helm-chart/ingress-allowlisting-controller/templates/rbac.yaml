@@ -35,7 +35,15 @@ rules:
   verbs: ["get", "watch", "list"]
 {{- if .Values.gateway.enabled }}
 - apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["gateways"]
+  resources: ["gateways", "gatewayclasses"]
+  verbs: ["list","get", "watch"]
+- apiGroups: ["security.istio.io"]
+  resources: ["authorizationpolicies"]
+  verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
+{{- end }}
+{{- if .Values.httproute.enabled }}
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["httproutes", "gateways", "gatewayclasses"]
   verbs: ["list","get", "watch"]
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
