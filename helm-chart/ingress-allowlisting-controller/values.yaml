@@ -24,6 +24,10 @@ vpa:
 gateway:
   enabled: false
 
+httproute:
+  enabled: false
+  labelSelector: ""
+
 networkpolicy:
   enabled: false
 
