@@ -128,16 +128,13 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 	}
 }
 
-func newBOMStripper(r io.Reader) io.Reader {
-	br := bufio.NewReader(r)
+func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	// remove Byte Order Mark
+	br := bufio.NewReader(reader)
 	if b, err := br.Peek(3); err == nil && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
 		_, _ = br.Discard(3)
 	}
-	return br
-}
-
-func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	data := csv.NewReader(newBOMStripper(reader))
+	data := csv.NewReader(br)
 	data.Comment = '#'        // Ignore comments
 	data.FieldsPerRecord = -1 // Disable strict field count checking
 	data.LazyQuotes = true    // Allow unescaped quotes inside fields
