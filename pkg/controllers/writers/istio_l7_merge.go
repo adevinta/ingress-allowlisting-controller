@@ -9,6 +9,8 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
+
 	istioApiSecurityV1 "istio.io/api/security/v1"
 	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
@@ -51,14 +53,14 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 
-		sortedIPs := dedupSorted(ips)
+		sortedIPs := util.DedupSorted(ips)
 		cidrKey := strings.Join(sortedIPs, ",")
 
 		var rawHosts []string
 		for _, h := range sibling.Spec.Hostnames {
 			rawHosts = append(rawHosts, string(h))
 		}
-		hosts := dedupSorted(rawHosts)
+		hosts := util.DedupSorted(rawHosts)
 		hostKey := strings.Join(hosts, ",")
 
 		granularity := sibling.Annotations[granularityAnnotation]
@@ -81,7 +83,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 		for _, rule := range sibling.Spec.Rules {
-			paths := dedupSorted(w.TranslatePaths(rule.Matches))
+			paths := util.DedupSorted(w.TranslatePaths(rule.Matches))
 			tuples = append(tuples, mergedTuple{
 				cidrKey: cidrKey, hostKey: hostKey,
 				cidrs: sortedIPs, hosts: hosts,
@@ -147,7 +149,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 				op.Hosts = hosts
 			}
 			if !hg.unrestricted && len(hg.paths) > 0 {
-				op.Paths = dedupSorted(hg.paths)
+				op.Paths = util.DedupSorted(hg.paths)
 			}
 			if op.Hosts != nil || op.Paths != nil {
 				rule.To = append(rule.To, &istioApiSecurityV1.Rule_To{Operation: op})
@@ -194,7 +196,7 @@ func mergeTosByPaths(tos []*istioApiSecurityV1.Rule_To) []*istioApiSecurityV1.Ru
 		if to.Operation == nil {
 			continue
 		}
-		pathKey := strings.Join(dedupSorted(to.Operation.Paths), ",")
+		pathKey := strings.Join(util.DedupSorted(to.Operation.Paths), ",")
 		g, exists := byPathKey[pathKey]
 		if !exists {
 			g = &group{}
@@ -209,7 +211,7 @@ func mergeTosByPaths(tos []*istioApiSecurityV1.Rule_To) []*istioApiSecurityV1.Ru
 		g := byPathKey[pathKey]
 		op := &istioApiSecurityV1.Operation{}
 		if len(g.hosts) > 0 {
-			op.Hosts = dedupSorted(g.hosts)
+			op.Hosts = util.DedupSorted(g.hosts)
 		}
 		if pathKey != "" {
 			op.Paths = strings.Split(pathKey, ",")

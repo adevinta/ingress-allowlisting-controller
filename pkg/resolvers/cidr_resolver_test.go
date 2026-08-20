@@ -78,7 +78,7 @@ func TestGetCidrsFromObject(t *testing.T) {
 	ingress := &netv1.Ingress{
 		ObjectMeta: v1.ObjectMeta{Name: "myingress", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnslocal"}},
 	}
-	expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8", "8.8.8.8/32", "1.1.1.1/32"}
+	expected := []string{"1.1.1.1/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "8.8.8.8/32"}
 
 	cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 
@@ -124,7 +124,7 @@ func TestGetCidrsFromObjectWithCidrsAndClusterCidrs(t *testing.T) {
 	ingress := &netv1.Ingress{
 		ObjectMeta: v1.ObjectMeta{Name: "myingress", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet", "ipam.adevinta.com/cluster-allowlist-group": "dnslocal"}},
 	}
-	expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8", "8.8.8.8/32", "1.1.1.1/32"}
+	expected := []string{"1.1.1.1/32", "10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16", "8.8.8.8/32"}
 
 	cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 

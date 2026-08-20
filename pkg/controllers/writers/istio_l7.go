@@ -8,7 +8,6 @@ import (
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/util/sets"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -18,6 +17,7 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
@@ -83,7 +83,7 @@ func policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, pa
 	name = baseName
 	if len(paths) > 0 {
 		h := fnv.New32a()
-		for _, p := range dedupSorted(paths) {
+		for _, p := range util.DedupSorted(paths) {
 			_, _ = h.Write([]byte(p))
 		}
 		name = fmt.Sprintf("%s-%08x", baseName, h.Sum32())
@@ -112,7 +112,7 @@ func policyNameSuffix(paths []string) string {
 		return ""
 	}
 	h := fnv.New32a()
-	for _, p := range dedupSorted(paths) {
+	for _, p := range util.DedupSorted(paths) {
 		_, _ = h.Write([]byte(p))
 	}
 	return fmt.Sprintf("-%08x", h.Sum32())
@@ -354,7 +354,3 @@ func (w *IstioL7Writer) TranslatePaths(matches []gatewayApiv1.HTTPRouteMatch) []
 	return paths
 }
 
-// dedupSorted returns a sorted, deduplicated copy of the input slice.
-func dedupSorted(items []string) []string {
-	return sets.List(sets.New[string](items...))
-}

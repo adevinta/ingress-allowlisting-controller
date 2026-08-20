@@ -624,6 +624,40 @@ func TestGatewayAnnotationRemovalDeletesAP(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err), "AP must be deleted after gateway annotation is removed")
 }
 
+// TestReconcileGatewayDuplicateCIDRsAcrossGroups verifies that when multiple groups share
+// common CIDRs, the generated AuthorizationPolicy contains each CIDR only once.
+func TestReconcileGatewayDuplicateCIDRsAcrossGroups(t *testing.T) {
+	sharedCIDR := "10.0.0.0/8"
+	staticAkamai := &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "static-akamai"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{sharedCIDR, "1.2.3.0/24"}},
+	}
+	dynamicAkamai := &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "dynamic-akamai"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{sharedCIDR, "5.6.7.0/24"}},
+	}
+	gwClass := newGatewayClass("istio")
+	gateway := &gatewayApiv1.Gateway{
+		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+			"ipam.adevinta.com/cluster-allowlist-group": "static-akamai,dynamic-akamai",
+		}},
+		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, staticAkamai, dynamicAkamai, gwClass).Build()
+	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
+	assert.NoError(t, err)
+
+	generatedAuthorizationPolicy := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedAuthorizationPolicy)
+	assert.NoError(t, err)
+
+	remoteIpBlocks := generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks
+	assert.ElementsMatch(t, []string{sharedCIDR, "1.2.3.0/24", "5.6.7.0/24"}, remoteIpBlocks,
+		"shared CIDRs across groups must not be duplicated in the AuthorizationPolicy")
+}
+
 // TestReconcileGatewayClassDeletedCleansUpAP verifies that when a GatewayClass is deleted,
 // the gateway controller still cleans up the AuthorizationPolicy rather than leaving it orphaned.
 func TestReconcileGatewayClassDeletedCleansUpAP(t *testing.T) {

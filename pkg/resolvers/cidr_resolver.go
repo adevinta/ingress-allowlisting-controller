@@ -13,6 +13,7 @@ import (
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -204,5 +205,5 @@ func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Obj
 		}
 		allowedIps = append(allowedIps, allowedClusterIps...)
 	}
-	return allowedIps, nil
+	return util.DedupSorted(allowedIps), nil
 }

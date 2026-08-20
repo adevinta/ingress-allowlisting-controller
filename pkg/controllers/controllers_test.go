@@ -276,7 +276,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		func() bool {
 			ing := &netv1.Ingress{}
 			require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Namespace: currentNamespaceName, Name: "ing1"}, ing))
-			return ing.Annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] == "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8"
+			return ing.Annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] == "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
 		},
 		5*time.Second,
 		100*time.Millisecond,
@@ -429,7 +429,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 				return false
 			}
 			actual := generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks
-			expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}
+			expected := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 			return reflect.DeepEqual(actual, expected)
 		},
 		5*time.Second,
@@ -524,7 +524,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 				return false
 			}
 			actual := generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks
-			expected := []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}
+			expected := []string{"10.0.0.0/8", "172.16.0.0/12", "192.168.0.0/16"}
 			return reflect.DeepEqual(actual, expected)
 		},
 		5*time.Second,
