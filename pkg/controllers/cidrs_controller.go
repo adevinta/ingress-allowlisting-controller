@@ -1,6 +1,7 @@
 package controllers
 
 import (
+	"bufio"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
@@ -128,7 +129,12 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 }
 
 func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
-	data := csv.NewReader(reader)
+	// remove Byte Order Mark
+	br := bufio.NewReader(reader)
+	if b, err := br.Peek(3); err == nil && b[0] == 0xef && b[1] == 0xbb && b[2] == 0xbf {
+		_, _ = br.Discard(3)
+	}
+	data := csv.NewReader(br)
 	data.Comment = '#'        // Ignore comments
 	data.FieldsPerRecord = -1 // Disable strict field count checking
 	data.LazyQuotes = true    // Allow unescaped quotes inside fields

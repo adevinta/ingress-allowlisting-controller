@@ -653,6 +653,47 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 	assert.Equal(t, []string{"1.1.1.1/32", "10.1.0.0/24", "10.2.0.0/24", "10.3.0.0/24", "10.4.0.0/24", "200.1.1.1/24"}, cidrs.GetStatus().CIDRs)
 }
 
+func TestCIDRsReconcileFromCSVWithBOM(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	// Akamai-style CSV: UTF-8 BOM at the start, trailing spaces, CRLF line endings.
+	// The BOM causes the first CIDR to be silently dropped without BOM stripping.
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte("\xef\xbb\xbf2.16.0.0/13  \r\n23.0.0.0/12  \r\n23.192.0.0/11  \r\n"))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				Processing: ipamv1alpha1.Processing{
+					Format: "CSV",
+				},
+			},
+		}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:     &ipamv1alpha1.CIDRs{},
+		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:    fakeClient,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+
+	assert.Equal(t, []string{"2.16.0.0/13", "23.0.0.0/12", "23.192.0.0/11"}, cidrs.GetStatus().CIDRs)
+}
+
 func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
