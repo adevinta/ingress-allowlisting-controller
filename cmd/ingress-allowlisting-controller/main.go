@@ -71,6 +71,7 @@ func main() {
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.Parse()
+	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
 	var err error
 	scheme, err := controllers.Scheme(legacyGroupVersion)
