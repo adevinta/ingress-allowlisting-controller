@@ -88,7 +88,7 @@ func TestReconcileIngress(t *testing.T) {
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet,dnssource",
 				"ipam.adevinta.com/cluster-allowlist-group":          "globalnet",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,1.1.1.1/32,8.8.8.8/32,15.13.12.0/24",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "1.1.1.1/32,10.0.0.0/8,15.13.12.0/24,172.16.0.0/12,192.168.0.0/16,8.8.8.8/32",
 			},
 		},
 	}
@@ -127,7 +127,7 @@ func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/cluster-allowlist-group":          "globalnet,anotherglobalnet",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,15.13.12.0/24",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "10.0.0.0/8,15.13.12.0/24,172.16.0.0/12,192.168.0.0/16",
 			},
 		},
 	}
@@ -178,7 +178,7 @@ func TestReconcileIngressPartialNotFound(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet,notexisting",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
 			},
 		},
 	}
@@ -211,7 +211,7 @@ func TestReconcileIngressWithInvalidCIDRIpsNoError(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet,dnssource",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "172.16.0.0/12,10.0.0.0/8,1.1.1.1/32,8.8.8.8/32",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "1.1.1.1/32,10.0.0.0/8,172.16.0.0/12,8.8.8.8/32",
 			},
 		},
 	}
@@ -347,7 +347,7 @@ func TestReconcileIngressOverwriteAllowlist(t *testing.T) {
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet",
 				"ipam.adevinta.com/cluster-allowlist-group":          "globalnet",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,1.2.3.0/24",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "1.2.3.0/24,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16",
 			},
 		},
 	}
@@ -410,7 +410,7 @@ func TestReconcileIngressInvalidAnnotationFormat(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet, dnssource",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,1.1.1.1/32,8.8.8.8/32",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "1.1.1.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,8.8.8.8/32",
 			},
 		},
 	}
@@ -443,7 +443,7 @@ func TestReconcileIngressV1(t *testing.T) {
 			ResourceVersion: "999",
 			Annotations: map[string]string{
 				"ipam.adevinta.com/allowlist-group":                  "localnet,dnssource",
-				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16,172.16.0.0/12,10.0.0.0/8,1.1.1.1/32,8.8.8.8/32",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "1.1.1.1/32,10.0.0.0/8,172.16.0.0/12,192.168.0.0/16,8.8.8.8/32",
 			},
 		},
 	}
