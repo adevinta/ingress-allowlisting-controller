@@ -27,7 +27,7 @@ type setupError struct {
 }
 
 func (e *setupError) Log(logger logr.Logger) {
-	logger.Error(e, "unable to create controller", "controller", "Ingress")
+	logger.Error(e, "unable to create controller", "controller", e.controllerType)
 }
 
 // BuildWriterRegistries constructs the L4 and L7 writer registries based on which controllers
@@ -120,7 +120,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 			CidrResolver:       cidrResolver,
 		}
 		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
-			return &setupError{error: err, controllerType: "Gateway"}
+			return &setupError{error: err, controllerType: "NetworkPolicy"}
 		}
 	}
 
