@@ -21,6 +21,9 @@ vpa:
       cpu: 100m
       memory: 128M
 
+ingress:
+  enabled: true
+
 gateway:
   enabled: false
 

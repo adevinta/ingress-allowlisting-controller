@@ -24,6 +24,7 @@ import (
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
@@ -54,6 +55,7 @@ func main() {
 	ctx := mainContext
 	var metricsAddr string
 	var enableLeaderElection bool
+	var ingressSupportEnabled bool
 	var gatewaySupportEnabled bool
 	var networkPolicySupportEnabled bool
 	var httpRouteSupportEnabled bool
@@ -66,6 +68,7 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
 	flag.BoolVar(&gatewaySupportEnabled, "gateway-support-enabled", false, "Enable gateway support for the controller")
 	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
 	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
@@ -90,8 +93,19 @@ func main() {
 		restConfig.Impersonate.UserName = as
 	}
 
+	// Build a REST mapper from the rest config for pre-flight CRD detection.
+	// This runs before the manager starts, so we can't use mgr.GetRESTMapper() yet.
+	httpClient, err := rest.HTTPClientFor(restConfig)
+	if err != nil {
+		setupLog.Fatal(err, "unable to create http client for REST mapper")
+	}
+	preflightMapper, err := apiutil.NewDynamicRESTMapper(restConfig, httpClient)
+	if err != nil {
+		setupLog.Fatal(err, "unable to create REST mapper for preflight")
+	}
+
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
-	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, "preflight", annotationPrefix)
+	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
 	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, httpHeadersEnabled, l4Writers, l7Writers)
 
 	mgrOptions := ctrl.Options{
@@ -129,7 +143,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 

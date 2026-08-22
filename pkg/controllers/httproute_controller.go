@@ -40,10 +40,11 @@ type HTTPRouteAllowlistingReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=traefik.io,resources=middlewares,verbs=get;list;watch;create;update;delete
 
 func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
 	return r.CidrResolver.AnnotationPrefix + "/merge"
@@ -539,8 +540,14 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 	}
 
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate)).
-		Owns(&istiosecurityv1.AuthorizationPolicy{}).
+		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate))
+	if isCRDInstalled(mgr.GetRESTMapper(), "security.istio.io", "v1", "AuthorizationPolicy") {
+		build = build.Owns(&istiosecurityv1.AuthorizationPolicy{})
+	}
+	if isCRDInstalled(mgr.GetRESTMapper(), "traefik.io", "v1alpha1", "Middleware") {
+		build = build.Owns(&writers.TraefikMiddleware{})
+	}
+	build = build.
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).

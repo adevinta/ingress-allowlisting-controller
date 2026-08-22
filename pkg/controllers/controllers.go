@@ -2,8 +2,10 @@ package controllers
 
 import (
 	"github.com/go-logr/logr"
+	log "github.com/adevinta/go-log-toolkit"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
+	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -21,6 +23,16 @@ import (
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
+var setupLog = log.DefaultLogger.WithField("setup", "controllers")
+
+// isCRDInstalled returns true when the given GVK exists in the cluster's REST API.
+// Used at startup to auto-detect optional dependencies (Istio, Traefik) — any
+// combination is supported: neither, either, or both.
+func isCRDInstalled(mapper meta.RESTMapper, group, version, kind string) bool {
+	_, err := mapper.RESTMapping(schema.GroupKind{Group: group, Kind: kind}, version)
+	return err == nil
+}
+
 type setupError struct {
 	error
 	controllerType string
@@ -30,29 +42,35 @@ func (e *setupError) Log(logger logr.Logger) {
 	logger.Error(e, "unable to create controller", "controller", e.controllerType)
 }
 
-// BuildWriterRegistries constructs the L4 and L7 writer registries based on which controllers
-// are enabled. Called from main.go before the manager starts so permissions can be checked.
-func BuildWriterRegistries(c client.Client, managedBy, annotationPrefix string) (writers.L4WriterRegistry, writers.L7WriterRegistry) {
+// BuildWriterRegistries constructs the L4 and L7 writer registries for the CRDs that are
+// actually installed on the cluster. Called from main.go before the manager starts so
+// permissions can be checked. Pass the REST mapper from the pre-flight client.
+func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, annotationPrefix string) (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: c}
-	l4 := writers.L4WriterRegistry{
-		writers.IstioControllerName: writers.NewIstioL4Writer(c),
+	l4 := writers.L4WriterRegistry{}
+	l7 := writers.L7WriterRegistry{}
+	if isCRDInstalled(mapper, "security.istio.io", "v1", "AuthorizationPolicy") {
+		l4[writers.IstioControllerName] = writers.NewIstioL4Writer(c)
+		l7[writers.IstioControllerName] = writers.NewIstioL7Writer(c, managedBy, cidrResolver)
 	}
-	l7 := writers.L7WriterRegistry{
-		writers.IstioControllerName: writers.NewIstioL7Writer(c, managedBy, cidrResolver),
+	if isCRDInstalled(mapper, "traefik.io", "v1alpha1", "Middleware") {
+		l7[writers.TraefikControllerName] = writers.NewTraefikL7Writer(c, managedBy, cidrResolver)
 	}
 	return l4, l7
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool) error {
+func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool) error {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
-	if err := (&IngressReconciler{
-		Client:             mgr.GetClient(),
-		Scheme:             mgr.GetScheme(),
-		LegacyGroupVersion: legacyGroupVersion,
-		CidrResolver:       cidrResolver,
-	}).SetupWithManager(mgr, namePrefix); err != nil {
-		return &setupError{error: err, controllerType: "Ingress"}
+	if ingressSupportEnabled {
+		if err := (&IngressReconciler{
+			Client:             mgr.GetClient(),
+			Scheme:             mgr.GetScheme(),
+			LegacyGroupVersion: legacyGroupVersion,
+			CidrResolver:       cidrResolver,
+		}).SetupWithManager(mgr, namePrefix); err != nil {
+			return &setupError{error: err, controllerType: "Ingress"}
+		}
 	}
 
 	if err := (&CIDRReconciler{
@@ -96,12 +114,18 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 		managedBy = namePrefix + "-ingress-allowlisting-controller"
 	}
 
-	l4Writers := writers.L4WriterRegistry{
-		writers.IstioControllerName: writers.NewIstioL4Writer(mgr.GetClient()),
+	mapper := mgr.GetRESTMapper()
+	l4Writers, l7Writers := BuildWriterRegistries(mgr.GetClient(), mapper, managedBy, annotationPrefix)
+
+	if _, ok := l4Writers[writers.IstioControllerName]; ok {
+		setupLog.Infof("detected Istio: enabling Istio writers")
 	}
-	l7Writers := writers.L7WriterRegistry{
-		writers.IstioControllerName: writers.NewIstioL7Writer(mgr.GetClient(), managedBy, cidrResolver),
-		//		writers.TraefikControllerName: writers.NewTraefikL7Writer(mgr.GetClient(), managedBy, cidrResolver),
+	if _, ok := l7Writers[writers.TraefikControllerName]; ok {
+		setupLog.Infof("detected Traefik: enabling Traefik writer")
+	}
+
+	if httpRouteSupportEnabled && len(l7Writers) == 0 {
+		setupLog.Warnf("httproute support is enabled but no L7 writer was detected (neither Istio nor Traefik CRDs found); HTTPRoutes will be reconciled but no allowlist resources will be written")
 	}
 
 	if gatewaySupportEnabled {
@@ -185,9 +209,9 @@ func Scheme(legacyGroupVersion string) (*runtime.Scheme, error) {
 	if err := istiosecurityv1.AddToScheme(scheme); err != nil {
 		return nil, err
 	}
-	//	if err := writers.AddTraefikToScheme(scheme); err != nil {
-	//		return nil, err
-	//	}
+	if err := writers.AddTraefikToScheme(scheme); err != nil {
+		return nil, err
+	}
 
 	if legacyGroupVersion != "" {
 		var err error

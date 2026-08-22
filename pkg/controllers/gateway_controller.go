@@ -31,6 +31,7 @@ type GatewayAllowlistingReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
@@ -89,8 +90,11 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 
 func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayApiv1.Gateway{}).
-		Owns(&istiosecurityv1.AuthorizationPolicy{}).
+		For(&gatewayApiv1.Gateway{})
+	if isCRDInstalled(mgr.GetRESTMapper(), "security.istio.io", "v1", "AuthorizationPolicy") {
+		build = build.Owns(&istiosecurityv1.AuthorizationPolicy{})
+	}
+	build = build.
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).
