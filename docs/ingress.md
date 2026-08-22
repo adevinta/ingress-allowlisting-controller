@@ -1,0 +1,47 @@
+# Ingress
+
+The controller watches `Ingress` resources and maintains the
+`nginx.ingress.kubernetes.io/whitelist-source-range` annotation with the resolved CIDR list.
+
+## Annotations
+
+| Annotation | Scope | Description |
+|---|---|---|
+| `ipam.adevinta.com/allowlist-group` | namespace | Reference a `CIDRs` object in the same namespace |
+| `ipam.adevinta.com/cluster-allowlist-group` | cluster | Reference a `ClusterCIDRs` object |
+
+Both annotations accept a comma-separated list of object names.
+
+## Example
+
+```yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: my-app
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips,cloudfront
+spec:
+  rules:
+  - host: app.example.com
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: my-app
+            port:
+              number: 80
+```
+
+The controller sets:
+
+```yaml
+annotations:
+  nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,192.168.0.0/16"
+```
+
+The CIDR list is always sorted and deduplicated. Removing the allowlist annotation removes
+the whitelist annotation.
