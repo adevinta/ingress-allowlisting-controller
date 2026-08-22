@@ -69,7 +69,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			return ctrl.Result{}, err
 		}
 		// Route not found — it was deleted or evicted from the cache (e.g. watch-selector label removed).
-		// Clean up any APs that were created for it.
+		// Clean up any policies that were created for it.
 		for _, writer := range r.L7Writers {
 			if err := writer.DeleteForRoute(ctx, r.managedByValue(), req.Namespace, req.Name); err != nil {
 				return ctrl.Result{}, err
@@ -215,7 +215,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
-	// Delete stale APs owned by this route that the current reconcile no longer produces
+	// Delete stale policies owned by this route that the current reconcile no longer produces
 	// (e.g. rule count reduced, or granularity changed from rule→host).
 	for _, writer := range r.L7Writers {
 		managed, err := writer.ListManaged(ctx, r.managedByValue())
@@ -252,11 +252,11 @@ func cleanupRunnable(mgr ctrl.Manager, r *HTTPRouteAllowlistingReconciler) manag
 	})
 }
 
-// runStartupCleanup lists all APs managed by this controller, checks whether the owning
-// HTTPRoute still exists and would still produce that AP, and deletes any that are orphaned.
+// runStartupCleanup lists all policies managed by this controller, checks whether the owning
+// HTTPRoute still exists and would still produce that policy, and deletes any that are orphaned.
 func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context) {
 	log := log.DefaultLogger.WithContext(ctx)
-	log.Infof("Running post-startup orphan cleanup for managed AuthorizationPolicies")
+	log.Infof("Running post-startup orphan cleanup for managed policies")
 
 	allRoutes := &gatewayApiv1.HTTPRouteList{}
 	if err := r.APIReader.List(ctx, allRoutes); err != nil {
@@ -271,7 +271,7 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			continue
 		}
 		if len(allRoutes.Items) == 0 && len(managed) > 0 {
-			log.Infof("startup cleanup: no HTTPRoutes found but managed APs exist — skipping to avoid dirty-read deletions")
+			log.Infof("startup cleanup: no HTTPRoutes found but managed policies exist — skipping to avoid dirty-read deletions")
 			continue
 		}
 		for _, obj := range managed {
