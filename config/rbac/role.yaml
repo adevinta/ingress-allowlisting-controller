@@ -5,9 +5,20 @@ metadata:
   name: manager-role
 rules:
 - apiGroups:
+  - ""
+  resources:
+  - configmaps
+  - secrets
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
   - gateway.networking.k8s.io
   resources:
+  - gatewayclasses
   - gateways
+  - httproutes
   verbs:
   - get
   - list
@@ -28,7 +39,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking
+  - networking.k8s.io
   resources:
   - ingresses
   - networkpolicies
@@ -41,7 +52,7 @@ rules:
   - update
   - watch
 - apiGroups:
-  - networking
+  - networking.k8s.io
   resources:
   - ingresses/status
   verbs:
