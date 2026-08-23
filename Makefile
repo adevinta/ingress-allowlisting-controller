@@ -44,6 +44,16 @@ deploy: manifests
 manifests: controller-gen
 	$(CONTROLLER_GEN) $(CRD_OPTIONS) rbac:roleName=manager-role webhook paths="./..." output:crd:artifacts:config=config/crd/bases
 
+# Verify that the committed manifests match the kubebuilder markers.
+verify-manifests: manifests
+	@status="$$(git status --porcelain --untracked-files=all -- config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml)"; \
+	if [ -n "$$status" ]; then \
+		echo "Generated manifests are out of date. Run 'make manifests' and commit the changes:"; \
+		git --no-pager diff -- config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml; \
+		printf '%s\n' "$$status"; \
+		exit 1; \
+	fi
+
 # Run go fmt against code
 fmt:
 	go fmt ./...
@@ -68,3 +78,5 @@ docker-push:
 # download controller-gen if necessary
 controller-gen:
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4
+
+.PHONY: all test manager run install uninstall deploy manifests verify-manifests fmt vet generate docker-build docker-push controller-gen

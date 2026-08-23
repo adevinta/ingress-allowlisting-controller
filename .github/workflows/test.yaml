@@ -30,6 +30,9 @@ jobs:
       with:
         go-version-file: './go.mod'
 
+    - name: Verify generated manifests
+      run: make verify-manifests
+
     - name: run go tests
       env:
         RUN_INTEGRATION_TESTS: true
