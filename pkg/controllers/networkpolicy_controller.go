@@ -31,7 +31,6 @@ type NetworkPolicyReconciler struct {
 var ErrMultipleRulesNotSupported = errors.New("Networkpolicy with multiple egress or ingress rules is not supported")
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
 
 func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("networkpolicy", req.NamespacedName)
@@ -132,8 +131,7 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 	return networkPolicy, nil
 }
 
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs;clustercidrs,verbs=get;list;watch
 
 func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).

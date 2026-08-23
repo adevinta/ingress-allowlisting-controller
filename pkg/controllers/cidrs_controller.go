@@ -38,6 +38,7 @@ type CIDRReconciler struct {
 	CIDRsList ipamv1alpha1.CIDRsGetterList
 }
 
+// +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch;create;update;patch;delete
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch;create;update;patch;delete
 
