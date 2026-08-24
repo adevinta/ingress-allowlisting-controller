@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -159,21 +160,27 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 		rules = append(rules, rule)
 	}
 
-	policy := &istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: mergeKey, Namespace: gateway.Namespace},
-	}
-	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
-		w.applyLabels(policy, "MERGED", mergeKey)
-		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
-			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
-			Rules:  rules,
-			TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
-				{Name: gateway.Name, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
-			},
+	// Wrap in RetryOnConflict because sibling HTTPRoutes in the same merge group can reconcile
+	// concurrently: both call CreateOrUpdate on the same AuthorizationPolicy, one wins and bumps
+	// resourceVersion, the other gets a 409 conflict on Update. Re-creating the policy object
+	// inside the retry func ensures each attempt does a fresh Get with the latest resourceVersion.
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		policy := &istiosecurityv1.AuthorizationPolicy{
+			ObjectMeta: metav1.ObjectMeta{Name: mergeKey, Namespace: gateway.Namespace},
 		}
-		return nil
+		_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+			w.applyLabels(policy, "MERGED", mergeKey)
+			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
+				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
+				Rules:  rules,
+				TargetRefs: []*istioApiTypeV1beta1.PolicyTargetReference{
+					{Name: gateway.Name, Kind: "Gateway", Group: "gateway.networking.k8s.io"},
+				},
+			}
+			return nil
+		})
+		return err
 	})
-	return err
 }
 
 // DeleteMerged removes the merged AuthorizationPolicy for the given merge key.

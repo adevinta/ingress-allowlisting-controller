@@ -473,7 +473,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -524,7 +524,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
