@@ -1,5 +1,7 @@
 # Ingress
 
+**Requires:** [nginx Ingress Controller](https://kubernetes.github.io/ingress-nginx/)
+
 The controller watches `Ingress` resources and maintains the
 `nginx.ingress.kubernetes.io/whitelist-source-range` annotation with the resolved CIDR list.
 

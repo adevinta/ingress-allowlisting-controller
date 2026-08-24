@@ -4,13 +4,13 @@ A Kubernetes controller that manages IP allowlisting for Ingress, Gateway API, a
 
 ## Features
 
-| Resource | Output | Requires |
+| Source | Destination | Requires |
 |---|---|---|
-| `Ingress` | `nginx.ingress.kubernetes.io/whitelist-source-range` annotation | — |
-| `Gateway` | Istio `AuthorizationPolicy` (L4, gateway-scoped) | Istio |
-| `HTTPRoute` | Istio `AuthorizationPolicy` (L7, per-route) | Istio |
-| `HTTPRoute` | Traefik `Middleware` (IPAllowList, per-route) | Traefik |
-| `NetworkPolicy` | `ipBlock` rules in `ingress`/`egress` sections | — |
+| `kind: Ingress` | `metadata.annotation:`<br>`nginx.ingress.kubernetes.io/whitelist-source-range` | nginx Ingress Controller |
+| `kind: Gateway` | `kind: AuthorizationPolicy` (L4, gateway-scoped) | Gateway API + Istio |
+| `kind: HTTPRoute` | `kind: AuthorizationPolicy` (L7, per-route) | Gateway API + Istio |
+| `kind: HTTPRoute` | `kind: Middleware` (IPAllowList, per-route) | Gateway API + Traefik |
+| `kind: NetworkPolicy` | `spec.ingress[].from[].ipBlock`<br>AND/OR<br>`spec.egress[].to[].ipBlock` | CNI with NetworkPolicy support (e.g. Calico, AWS VPC CNI) |
 
 Istio and Traefik support is **auto-detected** at startup — no flags needed. The controller checks which CRDs are installed and registers only the relevant writers.
 

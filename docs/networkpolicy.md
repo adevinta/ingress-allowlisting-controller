@@ -1,5 +1,7 @@
 # NetworkPolicy
 
+**Requires:** a CNI that enforces `networking.k8s.io/v1 NetworkPolicy` (e.g. Calico, AWS VPC CNI, Antrea, Cilium). Flannel does not enforce NetworkPolicy — objects are created but silently ignored.
+
 The controller watches `NetworkPolicy` resources and populates the `ipBlock` rules in the
 `ingress` and/or `egress` sections. Enable with `--networkpolicy-support-enabled`.
 

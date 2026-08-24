@@ -1,5 +1,7 @@
 # Gateway API — Gateway & HTTPRoute
 
+**Requires:** [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/) + Istio or Traefik
+
 The controller supports `Gateway` and `HTTPRoute` resources from the Kubernetes Gateway API.
 The output depends on which ingress controller is installed:
 
