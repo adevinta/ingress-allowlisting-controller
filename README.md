@@ -34,6 +34,7 @@ kubectl get pods -n ingress-allowlisting
 - [NetworkPolicy](docs/networkpolicy.md)
 - [CIDRs & ClusterCIDRs CRDs](docs/cidrs.md)
 - [Security considerations](docs/security.md)
+- [Architecture & support matrix](docs/architecture.md)
 - [Metrics](docs/metrics.md)
 
 ## Quick start
