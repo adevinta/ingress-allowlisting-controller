@@ -38,6 +38,7 @@ func NewTraefikL7Writer(c client.Client, managedBy string, cidrResolver resolver
 func (w *TraefikL7Writer) RequiredPermissions() []Permission {
 	return []Permission{
 		{Group: "traefik.io", Resource: "middlewares", Verb: "get"},
+		{Group: "traefik.io", Resource: "middlewares", Verb: "list"},
 		{Group: "traefik.io", Resource: "middlewares", Verb: "create"},
 		{Group: "traefik.io", Resource: "middlewares", Verb: "update"},
 		{Group: "traefik.io", Resource: "middlewares", Verb: "delete"},
