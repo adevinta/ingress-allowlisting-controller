@@ -59,6 +59,7 @@ func main() {
 	var httpRouteLabelSelector string
 	var as string
 	var annotationPrefix string
+	var watchConfigmapSecrets bool
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
@@ -70,6 +71,7 @@ func main() {
 	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
+	flag.BoolVar(&watchConfigmapSecrets, "watch-configmap-secrets", true, "Watch ConfigMaps and Secrets to trigger CIDR reconciliation on changes. Disable if not using configmap/secret HTTP header sources to reduce API server load.")
 	flag.Parse()
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
@@ -87,7 +89,7 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, "preflight", annotationPrefix)
-	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, l4Writers, l7Writers)
+	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, watchConfigmapSecrets, l4Writers, l7Writers)
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -115,7 +117,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, watchConfigmapSecrets); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 
@@ -126,18 +128,21 @@ func main() {
 	}
 }
 
-func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
+func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled, watchConfigmapSecrets bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
 	cs := kubernetes.NewForConfigOrDie(restConfig)
 
 	var perms []writers.Permission
 
-	// Always required — CIDRs and secret/configmap sources used by all controllers.
 	perms = append(perms,
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Verb: "get"},
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Verb: "get"},
-		writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
-		writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
 	)
+	if watchConfigmapSecrets {
+		perms = append(perms,
+			writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
+			writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
+		)
+	}
 
 	if gatewayEnabled {
 		perms = append(perms,

@@ -43,7 +43,7 @@ func BuildWriterRegistries(c client.Client, managedBy, annotationPrefix string) 
 	return l4, l7
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string) error {
+func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, watchConfigmapSecrets bool) error {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
 	if err := (&IngressReconciler{
@@ -56,32 +56,36 @@ func SetupControllersWithManager(mgr ctrl.Manager, gatewaySupportEnabled bool, n
 	}
 
 	if err := (&CIDRReconciler{
-		Client:    mgr.GetClient(),
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
+		Client:               mgr.GetClient(),
+		CIDRs:                &ipamv1alpha1.CIDRs{},
+		CIDRsList:            &ipamv1alpha1.CIDRsList{},
+		WatchConfigmapSecrets: watchConfigmapSecrets,
 	}).SetupWithManager(mgr, namePrefix); err != nil {
 		return &setupError{error: err, controllerType: "CIDRs"}
 	}
 	if err := (&CIDRReconciler{
-		Client:    mgr.GetClient(),
-		CIDRs:     &ipamv1alpha1.ClusterCIDRs{},
-		CIDRsList: &ipamv1alpha1.ClusterCIDRsList{},
+		Client:               mgr.GetClient(),
+		CIDRs:                &ipamv1alpha1.ClusterCIDRs{},
+		CIDRsList:            &ipamv1alpha1.ClusterCIDRsList{},
+		WatchConfigmapSecrets: watchConfigmapSecrets,
 	}).SetupWithManager(mgr, namePrefix); err != nil {
 		return &setupError{error: err, controllerType: "ClusterCIDRs"}
 	}
 
 	if legacyGroupVersion != "" {
 		if err := (&CIDRReconciler{
-			Client:    mgr.GetClient(),
-			CIDRs:     &ipamv1alpha1_legacy.CIDRs{},
-			CIDRsList: &ipamv1alpha1_legacy.CIDRsList{},
+			Client:               mgr.GetClient(),
+			CIDRs:                &ipamv1alpha1_legacy.CIDRs{},
+			CIDRsList:            &ipamv1alpha1_legacy.CIDRsList{},
+			WatchConfigmapSecrets: watchConfigmapSecrets,
 		}).SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "LegacyCIDRs"}
 		}
 		if err := (&CIDRReconciler{
-			Client:    mgr.GetClient(),
-			CIDRs:     &ipamv1alpha1_legacy.ClusterCIDRs{},
-			CIDRsList: &ipamv1alpha1_legacy.ClusterCIDRsList{},
+			Client:               mgr.GetClient(),
+			CIDRs:                &ipamv1alpha1_legacy.ClusterCIDRs{},
+			CIDRsList:            &ipamv1alpha1_legacy.ClusterCIDRsList{},
+			WatchConfigmapSecrets: watchConfigmapSecrets,
 		}).SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "LegacyClusterCIDRs"}
 		}
