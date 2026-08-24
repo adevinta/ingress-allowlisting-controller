@@ -20,7 +20,6 @@ func addTraefikTypes(scheme *runtime.Scheme) error {
 }
 
 // TraefikMiddleware is a minimal representation of the Traefik Middleware CRD.
-// +kubebuilder:object:root=true
 type TraefikMiddleware struct {
 	metav1.TypeMeta   `json:",inline"`
 	metav1.ObjectMeta `json:"metadata,omitempty"`
@@ -35,7 +34,6 @@ func (in *TraefikMiddleware) DeepCopyObject() runtime.Object {
 }
 
 // TraefikMiddlewareList contains a list of TraefikMiddleware.
-// +kubebuilder:object:root=true
 type TraefikMiddlewareList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
