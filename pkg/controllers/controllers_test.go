@@ -437,6 +437,104 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	)
 }
 
+func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.T) {
+	extendedScheme, err := controllers.Scheme("")
+	require.NoError(t, err)
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).Build()
+	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
+
+	mgr, err := manager.New(&rest.Config{}, manager.Options{
+		Scheme: extendedScheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
+		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
+			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+		},
+		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
+			return k8sClient, nil
+		},
+		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
+			return k8sCache, nil
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		require.NoError(t, mgr.Start(ctx))
+	}()
+
+	require.Eventually(
+		t,
+		func() bool {
+			k8sCache.m.Lock()
+			defer k8sCache.m.Unlock()
+			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
+			return ok && informer != nil && len(informer.handlers) > 0
+		},
+		5*time.Second,
+		100*time.Millisecond,
+	)
+
+	k8sCache.m.Lock()
+	defer k8sCache.m.Unlock()
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	configMapGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+	_, secretWatched := k8sCache.informers[secretGVK]
+	_, configMapWatched := k8sCache.informers[configMapGVK]
+	assert.False(t, secretWatched, "Secret informer must not be registered when watchConfigmapSecrets=false")
+	assert.False(t, configMapWatched, "ConfigMap informer must not be registered when watchConfigmapSecrets=false")
+}
+
+func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
+	extendedScheme, err := controllers.Scheme("")
+	require.NoError(t, err)
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).Build()
+	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
+
+	mgr, err := manager.New(&rest.Config{}, manager.Options{
+		Scheme: extendedScheme,
+		Metrics: metricsserver.Options{BindAddress: "0"},
+		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
+			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+		},
+		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
+			return k8sClient, nil
+		},
+		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
+			return k8sCache, nil
+		},
+	})
+	require.NoError(t, err)
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() {
+		require.NoError(t, mgr.Start(ctx))
+	}()
+
+	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
+	configMapGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
+
+	require.Eventually(
+		t,
+		func() bool {
+			k8sCache.m.Lock()
+			defer k8sCache.m.Unlock()
+			secret, secretOk := k8sCache.informers[secretGVK]
+			cm, cmOk := k8sCache.informers[configMapGVK]
+			return secretOk && secret != nil && len(secret.handlers) > 0 &&
+				cmOk && cm != nil && len(cm.handlers) > 0
+		},
+		5*time.Second,
+		100*time.Millisecond,
+	)
+}
+
 func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
 	assert.NoError(t, err)

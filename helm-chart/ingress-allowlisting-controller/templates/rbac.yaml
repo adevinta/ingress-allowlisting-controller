@@ -30,9 +30,11 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["list","get", "update", "create", "watch"]
+{{- if .Values.watchConfigmapSecrets }}
 - apiGroups: [""]
   resources: ["secrets", "configmaps"]
   verbs: ["get", "watch", "list"]
+{{- end }}
 {{- if .Values.gateway.enabled }}
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways", "gatewayclasses"]
