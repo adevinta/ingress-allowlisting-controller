@@ -30,7 +30,7 @@ rules:
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["list","get", "update", "create", "watch"]
-{{- if .Values.watchConfigmapSecrets }}
+{{- if .Values.httpHeadersEnabled }}
 - apiGroups: [""]
   resources: ["secrets", "configmaps"]
   verbs: ["get", "watch", "list"]

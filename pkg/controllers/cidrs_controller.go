@@ -36,7 +36,7 @@ type CIDRReconciler struct {
 	client.Client
 	CIDRs                ipamv1alpha1.CIDRsGetter
 	CIDRsList            ipamv1alpha1.CIDRsGetterList
-	WatchConfigmapSecrets bool
+	HTTPHeadersEnabled bool
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
@@ -372,9 +372,11 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if err != nil {
 		return err
 	}
-	err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), req.Header, spec.CIDRsSource.Location.HeadersFrom)
-	if err != nil {
-		return err
+	if r.HTTPHeadersEnabled {
+		err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), req.Header, spec.CIDRsSource.Location.HeadersFrom)
+		if err != nil {
+			return err
+		}
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -456,7 +458,7 @@ func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) e
 		build = build.Named(fmt.Sprintf("%T", r.CIDRs))
 	}
 	build = build.For(r.CIDRs)
-	if r.WatchConfigmapSecrets {
+	if r.HTTPHeadersEnabled {
 		build = build.Watches(
 			&v1.Secret{},
 			handler.EnqueueRequestsFromMapFunc(

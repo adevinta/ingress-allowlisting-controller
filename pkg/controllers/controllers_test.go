@@ -484,8 +484,8 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 	configMapGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
 	_, secretWatched := k8sCache.informers[secretGVK]
 	_, configMapWatched := k8sCache.informers[configMapGVK]
-	assert.False(t, secretWatched, "Secret informer must not be registered when watchConfigmapSecrets=false")
-	assert.False(t, configMapWatched, "ConfigMap informer must not be registered when watchConfigmapSecrets=false")
+	assert.False(t, secretWatched, "Secret informer must not be registered when httpHeadersEnabled=false")
+	assert.False(t, configMapWatched, "ConfigMap informer must not be registered when httpHeadersEnabled=false")
 }
 
 func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {

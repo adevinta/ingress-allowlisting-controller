@@ -52,8 +52,8 @@ spec:
 {{- with .Values.annotationPrefix }}
         - "--annotation-prefix={{ . }}"
 {{- end }}
-{{- if not .Values.watchConfigmapSecrets }}
-        - "--watch-configmap-secrets=false"
+{{- if not .Values.httpHeadersEnabled }}
+        - "--http-headers-enabled=false"
 {{- end }}
         ports:
         - containerPort: 8080
