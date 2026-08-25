@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -57,6 +58,7 @@ func main() {
 	var networkPolicySupportEnabled bool
 	var httpRouteSupportEnabled bool
 	var httpRouteLabelSelector string
+	var cidrHTTPHeaderSourceLabelSelector string
 	var as string
 	var annotationPrefix string
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
@@ -67,6 +69,7 @@ func main() {
 	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
 	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
 	flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
+	flag.StringVar(&cidrHTTPHeaderSourceLabelSelector, "cidr-http-header-source-label-selector", "", "Label selector to filter Secrets and ConfigMaps used as CIDR HTTP header sources. Restricts the informer cache at the API server level; every referenced source must match.")
 	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
@@ -98,17 +101,18 @@ func main() {
 		LeaderElection:   enableLeaderElection,
 		LeaderElectionID: "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
 	}
+	cacheByObject, err := buildCacheByObject(httpRouteSupportEnabled, httpRouteLabelSelector, cidrHTTPHeaderSourceLabelSelector)
+	if err != nil {
+		setupLog.Fatal(err, "invalid cache label selector")
+	}
+	if len(cacheByObject) > 0 {
+		mgrOptions.Cache = cache.Options{ByObject: cacheByObject}
+	}
 	if httpRouteSupportEnabled && httpRouteLabelSelector != "" {
-		selector, err := labels.Parse(httpRouteLabelSelector)
-		if err != nil {
-			setupLog.Fatal(err, "invalid --httproute-label-selector")
-		}
-		mgrOptions.Cache = cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&gatewayApiv1.HTTPRoute{}: {Label: selector},
-			},
-		}
 		setupLog.Infof("HTTPRoute informer cache restricted to label selector: %s", httpRouteLabelSelector)
+	}
+	if cidrHTTPHeaderSourceLabelSelector != "" {
+		setupLog.Infof("Secret and ConfigMap informer caches restricted to CIDR HTTP header source label selector: %s", cidrHTTPHeaderSourceLabelSelector)
 	}
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
 	if err != nil {
@@ -124,6 +128,29 @@ func main() {
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Fatal(err, "problem running manager")
 	}
+}
+
+func buildCacheByObject(httpRouteEnabled bool, httpRouteLabelSelector, cidrHTTPHeaderSourceLabelSelector string) (map[client.Object]cache.ByObject, error) {
+	byObject := make(map[client.Object]cache.ByObject)
+
+	if httpRouteEnabled && httpRouteLabelSelector != "" {
+		selector, err := labels.Parse(httpRouteLabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --httproute-label-selector: %w", err)
+		}
+		byObject[&gatewayApiv1.HTTPRoute{}] = cache.ByObject{Label: selector}
+	}
+
+	if cidrHTTPHeaderSourceLabelSelector != "" {
+		selector, err := labels.Parse(cidrHTTPHeaderSourceLabelSelector)
+		if err != nil {
+			return nil, fmt.Errorf("invalid --cidr-http-header-source-label-selector: %w", err)
+		}
+		byObject[&corev1.Secret{}] = cache.ByObject{Label: selector}
+		byObject[&corev1.ConfigMap{}] = cache.ByObject{Label: selector}
+	}
+
+	return byObject, nil
 }
 
 func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {

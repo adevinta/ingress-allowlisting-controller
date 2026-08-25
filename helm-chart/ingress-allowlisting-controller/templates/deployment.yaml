@@ -46,6 +46,9 @@ spec:
         - "--httproute-label-selector={{ . }}"
 {{- end }}
 {{- end }}
+{{- with .Values.cidrHTTPHeaderSources.labelSelector }}
+        - "--cidr-http-header-source-label-selector={{ . }}"
+{{- end }}
 {{ with .Values.legacyGroupVersion }}
         - "--legacy-group-version={{ . }}"
 {{- end }}

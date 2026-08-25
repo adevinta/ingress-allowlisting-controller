@@ -490,8 +490,8 @@ spec:
   location:
     cel: 'data.prefixes.filter(p, p.service == "EC2" && has(p.ip_prefix)).map(p, p.ip_prefix)' # transform the AWS response into a list of strings using CEL expression
     uri: https://ip-ranges.amazonaws.com/ip-ranges.json # the remote URL responding all IPs
-    headersFrom: # optional: inject CIDRs to the HTTP request (if the request needs to be authenticated)
-      secretRef: # optional: inject all keys
+    headersFrom: # optional: inject headers into the HTTP request (if the request needs to be authenticated)
+    - secretRef: # optional: inject all keys
         name: aws-authentication-headers # all aws-authentication-headers data will be used as http headers in the http request
         namespace: test # optional. For CIDRs, it must match the CIDRs namespace when not empty.
       configMapRef:
@@ -504,6 +504,8 @@ kind: ConfigMap
 metadata:
   name: aws-headers
   namespace: test
+  labels:
+    ipam.adevinta.com/cidr-http-header-source: "true" # required when the source label selector is enabled
 data:
   My-Header: some-value
 ---
@@ -513,9 +515,28 @@ kind: Secret
 metadata:
   name: aws-authentication-headers
   namespace: test
-data:
-  Authentication: $(echo "Bearer $token" | base64)
+  labels:
+    ipam.adevinta.com/cidr-http-header-source: "true" # required when the source label selector is enabled
+stringData:
+  Authentication: Bearer my-token
 ```
+
+#### Filtering HTTP header source watches
+
+By default, the controller watches and caches all Secrets and ConfigMaps so references can be added dynamically. In clusters with many of these resources, restrict both informer caches to explicitly labelled HTTP header sources:
+
+```yaml
+cidrHTTPHeaderSources:
+  labelSelector: "ipam.adevinta.com/cidr-http-header-source=true"
+```
+
+Or use the flag directly:
+
+```text
+--cidr-http-header-source-label-selector=ipam.adevinta.com/cidr-http-header-source=true
+```
+
+The selector is applied by the Kubernetes API server, reducing watch traffic and preventing unrelated Secret data from being stored in the controller cache. When enabled, every Secret and ConfigMap referenced by `headersFrom` must match the selector; otherwise the controller cannot retrieve it and reports the source as missing.
 
 #### Fetching CIDRs from github
 

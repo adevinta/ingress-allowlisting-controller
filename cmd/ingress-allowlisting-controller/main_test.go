@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/e2e-framework/pkg/envfuncs"
 	"sigs.k8s.io/e2e-framework/support/kind"
 	"sigs.k8s.io/e2e-framework/third_party/helm"
+	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 )
 
 var (
@@ -39,6 +40,51 @@ var (
 	allowListingNamespace = envconf.RandomName("controller", 16)
 	testNamespace         = envconf.RandomName("ingress", 16)
 )
+
+func TestBuildCacheByObject(t *testing.T) {
+	t.Run("returns no restrictions when selectors are disabled", func(t *testing.T) {
+		byObject, err := buildCacheByObject(false, "", "")
+
+		require.NoError(t, err)
+		assert.Empty(t, byObject)
+	})
+
+	t.Run("combines HTTPRoute and CIDR header source selectors", func(t *testing.T) {
+		byObject, err := buildCacheByObject(
+			true,
+			"allowlisting=enabled",
+			"ipam.adevinta.com/cidr-http-header-source=true",
+		)
+
+		require.NoError(t, err)
+		require.Len(t, byObject, 3)
+		for object, config := range byObject {
+			switch object.(type) {
+			case *gatewayApiv1.HTTPRoute:
+				assert.Equal(t, "allowlisting=enabled", config.Label.String())
+			case *v1.Secret, *v1.ConfigMap:
+				assert.Equal(t, "ipam.adevinta.com/cidr-http-header-source=true", config.Label.String())
+			default:
+				t.Fatalf("unexpected cache object type %T", object)
+			}
+		}
+	})
+
+	t.Run("ignores an HTTPRoute selector when HTTPRoute support is disabled", func(t *testing.T) {
+		byObject, err := buildCacheByObject(false, "not a valid selector (", "source=true")
+
+		require.NoError(t, err)
+		assert.Len(t, byObject, 2)
+	})
+
+	t.Run("rejects invalid selectors", func(t *testing.T) {
+		_, err := buildCacheByObject(true, "not a valid selector (", "")
+		assert.ErrorContains(t, err, "--httproute-label-selector")
+
+		_, err = buildCacheByObject(false, "", "not a valid selector (")
+		assert.ErrorContains(t, err, "--cidr-http-header-source-label-selector")
+	})
+}
 
 func testCIDRsStatusIsUpdated(ctx context.Context, t *testing.T, k8sClient client.Client, cidr ipamv1alpha1.CIDRsGetter, expectedCIDRs []string) {
 	t.Helper()

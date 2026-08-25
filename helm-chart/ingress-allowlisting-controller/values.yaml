@@ -28,6 +28,9 @@ httproute:
   enabled: false
   labelSelector: ""
 
+cidrHTTPHeaderSources:
+  labelSelector: ""
+
 networkpolicy:
   enabled: false
 
