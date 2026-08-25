@@ -44,3 +44,4 @@ tolerations: []
 legacyGroupVersion: ""
 annotationPrefix: "ipam.adevinta.com"
 httpHeadersEnabled: true
+secretLabelSelector: ""
