@@ -38,6 +38,21 @@ import (
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 )
 
+// namespacedScope implements meta.RESTScope for namespace-scoped resources.
+type namespacedScope struct{}
+
+func (namespacedScope) Name() meta.RESTScopeName { return meta.RESTScopeNameNamespace }
+
+// schemeRESTMapper builds a DefaultRESTMapper that includes every GVK registered
+// in the scheme. All types are treated as namespaced (sufficient for isCRDInstalled checks).
+func schemeRESTMapper(s *runtime.Scheme) meta.RESTMapper {
+	mapper := meta.NewDefaultRESTMapper(s.PrioritizedVersionsAllGroups())
+	for gvk := range s.AllKnownTypes() {
+		mapper.Add(gvk, namespacedScope{})
+	}
+	return mapper
+}
+
 type testHandlerRegistration struct{}
 
 func (r *testHandlerRegistration) HasSynced() bool { return true }
@@ -231,7 +246,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
 		Scheme: extendedScheme,
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
-			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+			return schemeRESTMapper(extendedScheme), nil
 		},
 		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			return k8sClient, nil
@@ -241,7 +256,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, "", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -300,7 +315,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
 		Scheme: extendedScheme,
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
-			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+			return schemeRESTMapper(extendedScheme), nil
 		},
 		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			return k8sClient, nil
@@ -313,7 +328,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "legacy.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, "", t.Name(), "legacy.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -374,7 +389,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
 		Scheme: extendedScheme,
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
-			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+			return schemeRESTMapper(extendedScheme), nil
 		},
 		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			return k8sClient, nil
@@ -387,7 +402,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -458,7 +473,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -509,7 +524,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -567,7 +582,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
 		Scheme: extendedScheme,
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
-			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
+			return schemeRESTMapper(extendedScheme), nil
 		},
 		NewClient: func(config *rest.Config, options client.Options) (client.Client, error) {
 			return k8sClient, nil
@@ -580,7 +595,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))

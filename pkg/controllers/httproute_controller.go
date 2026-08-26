@@ -40,10 +40,12 @@ type HTTPRouteAllowlistingReconciler struct {
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
-// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch
+// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch
+// +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;update
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=traefik.io,resources=middlewares,verbs=get;list;watch;create;update;delete
 
 func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
 	return r.CidrResolver.AnnotationPrefix + "/merge"
@@ -80,79 +82,33 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	log.Infof("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
 
 	parentRefs := gateway.GatewayParentRefs(&httproute)
-	if len(parentRefs) == 0 {
-		log.Infof("HTTPRoute %s has no Gateway parentRefs, skipping", httproute.GetName())
-		return ctrl.Result{}, nil
-	}
 
-	if mergeKey := httproute.Annotations[r.mergeAnnotation()]; mergeKey != "" {
+	mergeKey := httproute.Annotations[r.mergeAnnotation()]
+	if mergeKey != "" {
 		if err := validateMergeKey(mergeKey); err != nil {
 			log.Errorf("HTTPRoute %s/%s has invalid merge key: %v", httproute.Namespace, httproute.GetName(), err)
 			return ctrl.Result{}, nil
 		}
-		for _, ref := range parentRefs {
-			gatewayNS := httproute.Namespace // nil Namespace means same namespace as the route
-			if ref.Namespace != nil {
-				gatewayNS = string(*ref.Namespace)
-			}
-			gateway := &gatewayApiv1.Gateway{}
-			if err := r.Get(ctx, types.NamespacedName{Name: string(ref.Name), Namespace: gatewayNS}, gateway); err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					return ctrl.Result{}, err
-				}
-				log.Infof("gateway %s/%s not found, skipping parentRef", gatewayNS, ref.Name)
-				continue
-			}
-			gwClass := &gatewayApiv1.GatewayClass{}
-			if err := r.Get(ctx, types.NamespacedName{Name: string(gateway.Spec.GatewayClassName)}, gwClass); err != nil {
-				if client.IgnoreNotFound(err) != nil {
-					return ctrl.Result{}, err
-				}
-				log.Infof("GatewayClass %s not found, skipping parentRef", gateway.Spec.GatewayClassName)
-				continue
-			}
-			writer, ok := r.L7Writers[string(gwClass.Spec.ControllerName)]
-			if !ok {
-				log.Infof("no L7 writer for controller %s, skipping", gwClass.Spec.ControllerName)
-				continue
-			}
-			mw, ok := writer.(writers.MergeableL7PolicyWriter)
-			if !ok {
-				log.Infof("writer for controller %s does not support merge, skipping", gwClass.Spec.ControllerName)
-				continue
-			}
-			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey); err != nil {
-				return ctrl.Result{}, err
-			}
+	} else {
+		// Route is not in merge mode — clean up any stale merged APs where this route was the last member.
+		if err := r.cleanupOrphanedMergedAPs(ctx, &httproute, parentRefs); err != nil {
+			return ctrl.Result{}, err
 		}
-		return ctrl.Result{}, nil
 	}
 
-	// Route is not in merge mode — clean up any stale merged APs where this route was the last member.
-	if err := r.cleanupOrphanedMergedAPs(ctx, &httproute, parentRefs); err != nil {
-		return ctrl.Result{}, err
-	}
-
-	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
-		// Annotation was removed — delete any APs that were previously created for this route.
-		for _, writer := range r.L7Writers {
-			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
-	}
-	if err != nil {
-		return ctrl.Result{}, err
-	}
+	// Resolve CIDRs once — used by all per-route writers (always Traefik, Istio when no mergeKey).
+	allowedIps, cidrErr := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
 
 	var hostnames []string
 	for _, h := range httproute.Spec.Hostnames {
 		hostnames = append(hostnames, string(h))
 	}
-
 	granularity := httproute.Annotations[r.granularityAnnotation()]
+
+	// invokedWriters tracks which writers were used in this reconcile.
+	// Any registered writer not present here had its gateway removed from parentRefs
+	// and must have its stale policies cleaned up after the loop.
+	invokedWriters := map[string]struct{}{}
 
 	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
@@ -180,8 +136,30 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			log.Infof("no L7 writer for controller %s, skipping", gwClass.Spec.ControllerName)
 			continue
 		}
+		controllerName := string(gwClass.Spec.ControllerName)
 
-		// Collect per-rule paths using the writer's translation (if it implements PathTranslator).
+		// Mergeable writers (e.g. Istio) with a merge annotation share one AP across the group.
+		// Non-mergeable writers (e.g. Traefik) always get a per-route policy regardless of mergeKey.
+		if mw, ok := writer.(writers.MergeableL7PolicyWriter); ok && mergeKey != "" {
+			invokedWriters[controllerName] = struct{}{}
+			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey); err != nil {
+				return ctrl.Result{}, err
+			}
+			continue
+		}
+
+		// Per-route apply path — Traefik always, Istio when no mergeKey.
+		if cidrErr == r.CidrResolver.AnnotationNotFoundError() {
+			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+			invokedWriters[controllerName] = struct{}{}
+			continue
+		}
+		if cidrErr != nil {
+			return ctrl.Result{}, cidrErr
+		}
+
 		var rulePaths [][]string
 		if granularity == "" || granularity == "rule" {
 			rulePaths = make([][]string, len(httproute.Spec.Rules))
@@ -192,20 +170,20 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 		switch granularity {
 		case "host":
-			// One AP per route, host-matched, no path restriction.
+			// One policy per route, host-matched, no path restriction.
 			if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
 				return ctrl.Result{}, err
 			}
 			log.Infof("policy (host) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
 		default:
-			// granularity=rule (default): one AP per HTTPRoute rule.
+			// granularity=rule (default): one policy per HTTPRoute rule.
 			for ruleIdx, paths := range rulePaths {
 				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, paths); err != nil {
 					return ctrl.Result{}, err
 				}
 				log.Infof("policy (rule) created/updated for HTTPRoute %s rule %d → gateway %s/%s", httproute.GetName(), ruleIdx, gateway.Namespace, gateway.Name)
 			}
-			// Fallback: HTTPRoute with no rules — single AP, no path restriction.
+			// Fallback: HTTPRoute with no rules — single policy, no path restriction.
 			if len(rulePaths) == 0 {
 				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
 					return ctrl.Result{}, err
@@ -213,26 +191,41 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				log.Infof("policy (rule/fallback) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
 			}
 		}
+		invokedWriters[controllerName] = struct{}{}
 	}
 
-	// Delete stale policies owned by this route that the current reconcile no longer produces
-	// (e.g. rule count reduced, or granularity changed from rule→host).
-	for _, writer := range r.L7Writers {
-		managed, err := writer.ListManaged(ctx, r.managedByValue())
-		if err != nil {
-			return ctrl.Result{}, err
-		}
-		for _, obj := range managed {
-			ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
-			ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
-			if ownerNS != writers.LabelSafe(httproute.Namespace) || ownerName != writers.LabelSafe(httproute.Name) {
-				continue
+	// Delete all policies for writers that had no matching parentRef this reconcile.
+	// This fires when a gateway is removed from the route's parentRefs while the route itself still exists.
+	for controllerName, writer := range r.L7Writers {
+		if _, used := invokedWriters[controllerName]; !used {
+			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
+				return ctrl.Result{}, err
 			}
-			if writer.IsOrphaned(obj, []gatewayApiv1.HTTPRoute{httproute}) {
-				if err := writer.Delete(ctx, obj); err != nil {
-					return ctrl.Result{}, err
+			log.Infof("deleted stale policies for writer %s — no matching parentRef for HTTPRoute %s", controllerName, httproute.GetName())
+		}
+	}
+
+	// Delete stale per-route policies that this reconcile no longer produces
+	// (e.g. rule count reduced, granularity changed). Skipped for merge mode because
+	// mergeable writers manage their own AP lifecycle via ApplyMerged/DeleteMerged.
+	if mergeKey == "" {
+		for _, writer := range r.L7Writers {
+			managed, err := writer.ListManaged(ctx, r.managedByValue())
+			if err != nil {
+				return ctrl.Result{}, err
+			}
+			for _, obj := range managed {
+				ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
+				ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+				if ownerNS != writers.LabelSafe(httproute.Namespace) || ownerName != writers.LabelSafe(httproute.Name) {
+					continue
 				}
-				log.Infof("Deleted stale policy %s/%s for HTTPRoute %s", obj.GetNamespace(), obj.GetName(), httproute.GetName())
+				if writer.IsOrphaned(obj, []gatewayApiv1.HTTPRoute{httproute}) {
+					if err := writer.Delete(ctx, obj); err != nil {
+						return ctrl.Result{}, err
+					}
+					log.Infof("Deleted stale policy %s/%s for HTTPRoute %s", obj.GetNamespace(), obj.GetName(), httproute.GetName())
+				}
 			}
 		}
 	}
@@ -539,8 +532,14 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 	}
 
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate)).
-		Owns(&istiosecurityv1.AuthorizationPolicy{}).
+		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate))
+	if isCRDInstalled(mgr.GetRESTMapper(), "security.istio.io", "v1", "AuthorizationPolicy") {
+		build = build.Owns(&istiosecurityv1.AuthorizationPolicy{})
+	}
+	if isCRDInstalled(mgr.GetRESTMapper(), "traefik.io", "v1alpha1", "Middleware") {
+		build = build.Owns(&writers.TraefikMiddleware{})
+	}
+	build = build.
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).

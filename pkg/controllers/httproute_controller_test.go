@@ -1982,6 +1982,136 @@ func TestReconcileHTTPRouteMultipleGatewayClassesOneUnknown(t *testing.T) {
 
 // TestMergedAPUpdatesWhenSiblingCIDRsChange verifies that when a sibling's CIDRs change,
 // re-reconciling any route in the merge group picks up the updated IPs for all siblings.
+// TestReconcileHTTPRouteDualParentIstioAndTraefik verifies that an HTTPRoute with two parent
+// gateways — one Istio and one Traefik — creates both an Istio AuthorizationPolicy and a
+// Traefik Middleware in a single reconcile, without a merge annotation.
+func TestReconcileHTTPRouteDualParentIstioAndTraefik(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				parentRef("istio-gw", ""),
+				parentRef("traefik-gw", ""),
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	istioGwClass := newIstioGatewayClass("istio")
+	traefikGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "traefik"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: gatewayApiv1.GatewayController(writers.TraefikControllerName)},
+	}
+	istioGw := newTestGateway("istio-gw", "ns", "istio")
+	traefikGw := newTestGateway("traefik-gw", "ns", "traefik")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).
+		WithObjects(cidr, route, istioGwClass, traefikGwClass, istioGw, traefikGw).Build()
+
+	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	l7Writers := writers.L7WriterRegistry{
+		writers.IstioControllerName:   writers.NewIstioL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+		writers.TraefikControllerName: writers.NewTraefikL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+	}
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		Client: k8sClient, APIReader: k8sClient,
+		CidrResolver: resolver, Scheme: extendedScheme, L7Writers: l7Writers,
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// Istio AP must be created.
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, ap)
+	assert.NoError(t, err, "Istio AuthorizationPolicy must be created for the Istio parent gateway")
+	assert.Equal(t, "istio-gw", ap.Spec.TargetRefs[0].Name)
+	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+
+	// Traefik Middleware must also be created.
+	mw := &writers.TraefikMiddleware{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw)
+	assert.NoError(t, err, "Traefik Middleware must be created for the Traefik parent gateway")
+	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, mw.Spec.IPAllowList.SourceRange)
+}
+
+// TestReconcileHTTPRouteMergeWithNonMergeWriter verifies that an HTTPRoute in merge mode
+// with two parent gateways — one Istio (merge-capable) and one Traefik (non-merge) —
+// creates both the merged Istio AuthorizationPolicy AND the Traefik Middleware.
+// Regression test: before the fix, the merge early-return skipped Traefik Apply entirely.
+func TestReconcileHTTPRouteMergeWithNonMergeWriter(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "allowlist",
+				"ipam.adevinta.com/merge":           "my-group",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "istio-gw", Namespace: &gwNS},
+				parentRef("traefik-gw", ""),
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+
+	istioGwClass := newIstioGatewayClass("istio")
+	traefikGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "traefik"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: gatewayApiv1.GatewayController(writers.TraefikControllerName)},
+	}
+	istioGw := newTestGateway("istio-gw", "gw-ns", "istio")
+	traefikGw := newTestGateway("traefik-gw", "ns", "traefik")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).
+		WithObjects(cidr, route, istioGwClass, traefikGwClass, istioGw, traefikGw).Build()
+
+	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	l7Writers := writers.L7WriterRegistry{
+		writers.IstioControllerName:   writers.NewIstioL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+		writers.TraefikControllerName: writers.NewTraefikL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+	}
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		Client: k8sClient, APIReader: k8sClient,
+		CidrResolver: resolver, Scheme: extendedScheme, L7Writers: l7Writers,
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// Istio: merged AP must be created in the gateway's namespace with name = merge key.
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, ap)
+	assert.NoError(t, err, "merged Istio AuthorizationPolicy must be created")
+	assert.Equal(t, "istio-gw", ap.Spec.TargetRefs[0].Name)
+	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+
+	// Traefik: per-route Middleware must also be created in the route's namespace.
+	mw := &writers.TraefikMiddleware{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw)
+	assert.NoError(t, err, "Traefik Middleware must be created even when route is in merge mode")
+	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, mw.Spec.IPAllowList.SourceRange)
+}
+
 func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
 	cidr00 := &ipamv1alpha1.CIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-a"},
@@ -2057,4 +2187,160 @@ func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
 		}
 	}
 	assert.ElementsMatch(t, []string{"1.1.1.1/32", "3.3.3.3/32"}, allIPs, "merged AP must reflect updated sibling CIDRs")
+}
+
+// TestPolicyDeletedWhenOneOfTwoParentRefsRemoved verifies that when an HTTPRoute has two parents
+// (Istio + Traefik) and one parentRef is removed, only the policy for the removed parent is deleted
+// while the policy for the remaining parent is kept.
+func TestPolicyDeletedWhenOneOfTwoParentRefsRemoved(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet"},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{
+					parentRef("istio-gw", ""),
+					parentRef("traefik-gw", ""),
+				},
+			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	istioGwClass := newIstioGatewayClass("istio")
+	traefikGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "traefik"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: gatewayApiv1.GatewayController(writers.TraefikControllerName)},
+	}
+	istioGw := newTestGateway("istio-gw", "ns", "istio")
+	traefikGw := newTestGateway("traefik-gw", "ns", "traefik")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).
+		WithObjects(cidr, route, istioGwClass, traefikGwClass, istioGw, traefikGw).Build()
+
+	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		Client: k8sClient, APIReader: k8sClient,
+		CidrResolver: resolver, Scheme: extendedScheme,
+		L7Writers: writers.L7WriterRegistry{
+			writers.IstioControllerName:   writers.NewIstioL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+			writers.TraefikControllerName: writers.NewTraefikL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+		},
+	}
+
+	// First reconcile — both AP and Middleware are created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, ap), "Istio AP must exist after first reconcile")
+	mw := &writers.TraefikMiddleware{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw), "Traefik Middleware must exist after first reconcile")
+
+	// Remove only the Traefik parentRef — Istio parent stays.
+	route.Spec.ParentRefs = []gatewayApiv1.ParentReference{parentRef("istio-gw", "")}
+	require.NoError(t, k8sClient.Update(context.Background(), route))
+
+	// Second reconcile — Traefik Middleware must be deleted, Istio AP must remain.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, ap), "Istio AP must remain after Traefik parent removed")
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw)
+	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "Traefik Middleware must be deleted when its parentRef is removed")
+}
+
+// TestIstioAPDeletedWhenParentRefRemoved verifies that removing an Istio gateway parentRef from
+// an HTTPRoute causes the previously-created AuthorizationPolicy to be deleted on the next reconcile.
+func TestIstioAPDeletedWhenParentRefRemoved(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet"},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{parentRef("istio-gw", "")},
+			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("istio-gw", "ns", "istio")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, gwClass, gw).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	// First reconcile — AP is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, ap), "AP must exist after first reconcile")
+
+	// Remove the Istio parentRef — route no longer points to the gateway.
+	route.Spec.ParentRefs = nil
+	require.NoError(t, k8sClient.Update(context.Background(), route))
+
+	// Second reconcile — AP must be deleted because the parent is gone.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "istio-gw-my-route", Namespace: "ns"}, ap)
+	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "AP must be deleted when parentRef is removed")
+}
+
+// TestTraefikMiddlewareDeletedWhenParentRefRemoved verifies that removing a Traefik gateway
+// parentRef from an HTTPRoute causes the previously-created Middleware to be deleted on the next reconcile.
+func TestTraefikMiddlewareDeletedWhenParentRefRemoved(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-route", Namespace: "ns",
+			Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet"},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
+				ParentRefs: []gatewayApiv1.ParentReference{parentRef("traefik-gw", "")},
+			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	traefikGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "traefik"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: gatewayApiv1.GatewayController(writers.TraefikControllerName)},
+	}
+	gw := newTestGateway("traefik-gw", "ns", "traefik")
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, traefikGwClass, gw).Build()
+
+	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		Client: k8sClient, APIReader: k8sClient,
+		CidrResolver: resolver, Scheme: extendedScheme,
+		L7Writers: writers.L7WriterRegistry{
+			writers.TraefikControllerName: writers.NewTraefikL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+		},
+	}
+
+	// First reconcile — Middleware is created.
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	mw := &writers.TraefikMiddleware{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw), "Middleware must exist after first reconcile")
+
+	// Remove the Traefik parentRef — route no longer points to the gateway.
+	route.Spec.ParentRefs = nil
+	require.NoError(t, k8sClient.Update(context.Background(), route))
+
+	// Second reconcile — Middleware must be deleted because the parent is gone.
+	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw)
+	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "Middleware must be deleted when parentRef is removed")
 }

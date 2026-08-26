@@ -17,16 +17,19 @@ rules:
   - "cidrs/status"
   - "clustercidrs/status"
   verbs: ["get", "list", "watch", "create", "update", "patch"]
+{{- if .Values.ingress.enabled }}
 - apiGroups: ["extensions"]
   resources: ["ingresses"]
-  verbs: ["list","get", "update", "watch"]
+  verbs: ["list", "get", "update", "watch"]
 - apiGroups: ["networking.k8s.io"]
-  resources:
-  - "ingresses"
-{{- if .Values.networkpolicy.enabled }}
-  - "networkpolicies"
+  resources: ["ingresses"]
+  verbs: ["list", "get", "update", "watch"]
 {{- end }}
-  verbs: ["list","get", "update", "watch"]
+{{- if .Values.networkpolicy.enabled }}
+- apiGroups: ["networking.k8s.io"]
+  resources: ["networkpolicies"]
+  verbs: ["list", "get", "update", "watch"]
+{{- end }}
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["list","get", "update", "create", "watch"]
@@ -45,11 +48,17 @@ rules:
 {{- end }}
 {{- if .Values.httproute.enabled }}
 - apiGroups: ["gateway.networking.k8s.io"]
-  resources: ["httproutes", "gateways", "gatewayclasses"]
-  verbs: ["list","get", "watch"]
+  resources: ["httproutes"]
+  verbs: ["list", "get", "watch", "update"]
+- apiGroups: ["gateway.networking.k8s.io"]
+  resources: ["gateways", "gatewayclasses"]
+  verbs: ["list", "get", "watch"]
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
   verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
+- apiGroups: ["traefik.io"]
+  resources: ["middlewares"]
+  verbs: ["list", "get", "watch", "create", "update", "delete"]
 {{- end }}
 ---
 apiVersion: v1

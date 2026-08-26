@@ -18,10 +18,18 @@ rules:
   resources:
   - gatewayclasses
   - gateways
+  verbs:
+  - get
+  - list
+  - watch
+- apiGroups:
+  - gateway.networking.k8s.io
+  resources:
   - httproutes
   verbs:
   - get
   - list
+  - update
   - watch
 - apiGroups:
   - ipam.adevinta.com
@@ -69,5 +77,16 @@ rules:
   - get
   - list
   - patch
+  - update
+  - watch
+- apiGroups:
+  - traefik.io
+  resources:
+  - middlewares
+  verbs:
+  - create
+  - delete
+  - get
+  - list
   - update
   - watch

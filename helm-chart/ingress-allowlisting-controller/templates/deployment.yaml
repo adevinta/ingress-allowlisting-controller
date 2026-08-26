@@ -34,6 +34,9 @@ spec:
         image: {{ .Values.image.fullyQualifiedURL }}
         imagePullPolicy: {{ .Values.pullPolicy }}
         args:
+{{- if not .Values.ingress.enabled }}
+        - "--ingress-support-enabled=false"
+{{- end }}
 {{- if .Values.gateway.enabled }}
         - "--gateway-support-enabled"
 {{- end }}
