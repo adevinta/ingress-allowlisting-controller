@@ -52,6 +52,12 @@ spec:
 {{- with .Values.annotationPrefix }}
         - "--annotation-prefix={{ . }}"
 {{- end }}
+{{- if not .Values.httpHeadersEnabled }}
+        - "--http-headers-enabled=false"
+{{- end }}
+{{- if and .Values.httpHeadersEnabled .Values.secretLabelSelector }}
+        - "--secret-label-selector={{ .Values.secretLabelSelector }}"
+{{- end }}
         ports:
         - containerPort: 8080
         resources:

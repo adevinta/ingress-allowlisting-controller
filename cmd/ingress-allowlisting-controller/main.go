@@ -30,6 +30,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/webhook"
 
 	authorizationv1 "k8s.io/api/authorization/v1"
+	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/labels"
 	"k8s.io/client-go/kubernetes"
@@ -57,8 +58,10 @@ func main() {
 	var networkPolicySupportEnabled bool
 	var httpRouteSupportEnabled bool
 	var httpRouteLabelSelector string
+	var secretLabelSelector string
 	var as string
 	var annotationPrefix string
+	var httpHeadersEnabled bool
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
@@ -67,9 +70,11 @@ func main() {
 	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
 	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
 	flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
+	flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
 	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
+	flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
 	flag.Parse()
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
@@ -87,7 +92,7 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, "preflight", annotationPrefix)
-	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, l4Writers, l7Writers)
+	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, httpHeadersEnabled, l4Writers, l7Writers)
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -98,24 +103,33 @@ func main() {
 		LeaderElection:   enableLeaderElection,
 		LeaderElectionID: "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
 	}
+	byObject := map[client.Object]cache.ByObject{}
 	if httpRouteSupportEnabled && httpRouteLabelSelector != "" {
 		selector, err := labels.Parse(httpRouteLabelSelector)
 		if err != nil {
 			setupLog.Fatal(err, "invalid --httproute-label-selector")
 		}
-		mgrOptions.Cache = cache.Options{
-			ByObject: map[client.Object]cache.ByObject{
-				&gatewayApiv1.HTTPRoute{}: {Label: selector},
-			},
-		}
+		byObject[&gatewayApiv1.HTTPRoute{}] = cache.ByObject{Label: selector}
 		setupLog.Infof("HTTPRoute informer cache restricted to label selector: %s", httpRouteLabelSelector)
+	}
+	if httpHeadersEnabled && secretLabelSelector != "" {
+		selector, err := labels.Parse(secretLabelSelector)
+		if err != nil {
+			setupLog.Fatal(err, "invalid --secret-label-selector")
+		}
+		byObject[&corev1.Secret{}] = cache.ByObject{Label: selector}
+		byObject[&corev1.ConfigMap{}] = cache.ByObject{Label: selector}
+		setupLog.Infof("Secret/ConfigMap informer cache restricted to label selector: %s", secretLabelSelector)
+	}
+	if len(byObject) > 0 {
+		mgrOptions.Cache = cache.Options{ByObject: byObject}
 	}
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
 	if err != nil {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 
@@ -126,18 +140,21 @@ func main() {
 	}
 }
 
-func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
+func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled, httpHeadersEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
 	cs := kubernetes.NewForConfigOrDie(restConfig)
 
 	var perms []writers.Permission
 
-	// Always required — CIDRs and secret/configmap sources used by all controllers.
 	perms = append(perms,
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Verb: "get"},
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Verb: "get"},
-		writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
-		writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
 	)
+	if httpHeadersEnabled {
+		perms = append(perms,
+			writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
+			writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
+		)
+	}
 
 	if gatewayEnabled {
 		perms = append(perms,

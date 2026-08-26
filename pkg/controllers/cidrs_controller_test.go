@@ -376,9 +376,10 @@ func TestCIDRsReconcileFromHTTP(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs, secret).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		CIDRs:              &ipamv1alpha1.CIDRs{},
+		CIDRsList:          &ipamv1alpha1.CIDRsList{},
+		Client:             fakeClient,
+		HTTPHeadersEnabled: true,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -870,6 +871,53 @@ func TestCIDRsReconcileFromHTTPWhenGetFails(t *testing.T) {
 	assert.Equal(t, v1.ConditionFalse, cidrs.GetStatus().Conditions[0].Status)
 	assert.Contains(t, cidrs.GetStatus().Conditions[0].Message, "Failed to get CIDRs from http source")
 	assert.Contains(t, cidrs.GetStatus().Conditions[0].Message, "403")
+}
+
+func TestCIDRsReconcileFromHTTPDoesNotReadSecretsWhenHeadersDisabled(t *testing.T) {
+	ctx := context.TODO()
+	testNamespaceName := "mynamespace"
+	scheme, err := Scheme("")
+	require.NoError(t, err)
+
+	headersReceived := http.Header{}
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		headersReceived = r.Header
+		w.WriteHeader(http.StatusOK)
+		w.Write([]byte(`["10.0.0.0/8"]`))
+	}))
+	defer server.Close()
+
+	cidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: testNamespaceName},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{
+				URI: server.URL,
+				HeadersFrom: []ipamv1alpha1.HeadersFrom{
+					{SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret"}},
+				},
+			},
+		}},
+	}
+	secret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "my-secret", Namespace: testNamespaceName},
+		Data:       map[string][]byte{"Authorization": []byte("Bearer secret-token")},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs, secret).WithStatusSubresource(cidrs).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs:              &ipamv1alpha1.CIDRs{},
+		CIDRsList:          &ipamv1alpha1.CIDRsList{},
+		Client:             fakeClient,
+		HTTPHeadersEnabled: false,
+	}
+
+	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+	require.NoError(t, err)
+	require.Equal(t, result, reconcile.Result{})
+
+	assert.Empty(t, headersReceived.Get("Authorization"), "secret headers must not be sent when HTTPHeadersEnabled=false")
+
+	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+	assert.Equal(t, []string{"10.0.0.0/8"}, cidrs.GetStatus().CIDRs)
 }
 
 func TestUpdateClientHeaders(t *testing.T) {
