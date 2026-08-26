@@ -1,6 +1,6 @@
-# Ingress Allowlisting Controller — Deep Dive
+# Ingress Allowlisting Controller — Architecture
 
-## Architecture: Reconcilers vs Writers
+## Reconcilers vs Writers
 
 The controller has two conceptually different types of components:
 
@@ -21,6 +21,7 @@ Writers are registered in a registry keyed by `GatewayClass.spec.controllerName`
 |---|---|---|---|
 | `IstioL4Writer` | `L4PolicyWriter` | `security.istio.io/v1 AuthorizationPolicy` (TargetRef → Gateway) | Istio |
 | `IstioL7Writer` | `L7PolicyWriter` + `MergeableL7PolicyWriter` | `security.istio.io/v1 AuthorizationPolicy` (TargetRef → Gateway, per HTTPRoute) | Istio |
+| `TraefikL7Writer` | `L7PolicyWriter` + `GatewayCIDRsMerger` | `traefik.io/v1alpha1 Middleware` (IPAllowList) + patches `HTTPRoute.spec.rules[].filters` | Traefik |
 
 ### Resolution chain for writers
 
@@ -37,12 +38,20 @@ HTTPRoute
 
 ### Why interfaces?
 
-Writers are registered by controller name. Adding support for a new ingress controller (e.g. Envoy Gateway, Traefik) requires only:
+Writers are registered by controller name. Adding support for a new ingress controller (e.g. Envoy Gateway) requires only:
 1. Implement `L4PolicyWriter` or `L7PolicyWriter`
 2. Add `RequiredPermissions()` so the RBAC preflight check covers it automatically
 3. Register in `controllers.go` — nothing else changes
 
 The reconciler (`HTTPRouteAllowlistingReconciler`, `GatewayAllowlistingReconciler`) is completely agnostic to the underlying enforcement technology.
+
+#### Optional interfaces
+
+| Interface | Purpose |
+|---|---|
+| `MergeableL7PolicyWriter` | Merge multiple HTTPRoutes sharing a gateway into one policy (Istio only) |
+| `GatewayCIDRsMerger` | Merge parent Gateway CIDRs into each child HTTPRoute's policy instead of writing a separate gateway-level policy (Traefik) |
+| `PathTranslator` | Control how HTTPRoute path matches are translated before being passed to `Apply` |
 
 ---
 
@@ -53,8 +62,8 @@ The reconciler (`HTTPRouteAllowlistingReconciler`, `GatewayAllowlistingReconcile
 | Controller | `GatewayClass.controllerName` | Creates | Granularity | Implemented |
 |---|---|---|---|---|
 | Istio | `istio.io/gateway-controller` | `AuthorizationPolicy` (TargetRef → Gateway) | Gateway | ✅ |
+| Traefik | `traefik.io/gateway-controller` | Merged into child HTTPRoute Middlewares (software) | HTTPRoute | ✅ via `GatewayCIDRsMerger` |
 | Envoy Gateway | `gateway.envoyproxy.io/gatewayclass-controller` | `SecurityPolicy` (TargetRef → Gateway) | Gateway | 🔲 TODO |
-| Traefik | `traefik.io/gateway-controller` | — (no L4 Gateway-level policy) | — | 🔲 TODO |
 | Cilium | `io.cilium/gateway-controller` | — (pod-selector based, not Gateway API aware) | — | ➖ N/A |
 
 ### Gateway API — L7 (HTTPRoute level)
@@ -62,7 +71,7 @@ The reconciler (`HTTPRouteAllowlistingReconciler`, `GatewayAllowlistingReconcile
 | Controller | `GatewayClass.controllerName` | Creates | Granularity | Merge support | Path support | Implemented |
 |---|---|---|---|---|---|---|
 | Istio | `istio.io/gateway-controller` | `AuthorizationPolicy` (TargetRef → Gateway, per route) | HTTPRoute + host + path | ✅ (`MergeableL7PolicyWriter`) | ✅ (`granularity` annotation) | ✅ |
-| Traefik | `traefik.io/gateway-controller` | `Middleware` (IPAllowList) | HTTPRoute | ➖ not supported | ➖ not applicable | 🔲 TODO |
+| Traefik | `traefik.io/gateway-controller` | `Middleware` (IPAllowList) | HTTPRoute | ➖ not supported | ➖ not applicable | ✅ |
 | Envoy Gateway | `gateway.envoyproxy.io/gatewayclass-controller` | `SecurityPolicy` (TargetRef → HTTPRoute) | HTTPRoute + host + path | 🔲 TODO | 🔲 TODO | 🔲 TODO |
 
 ### Legacy / Non-Gateway API
@@ -157,6 +166,5 @@ None of these can ever collide.
 | Priority | Item | Notes |
 |---|---|---|
 | 🟡 Medium | Envoy Gateway `SecurityPolicy` writer (L4 + L7) | Closest Istio equivalent; `targetRef` model is nearly identical |
-| 🟡 Medium | Traefik `Middleware` writer | IP allowlisting via `IPAllowList`; path filtering handled by HTTPRoute routing itself — no extra path restriction in the Middleware needed |
 | 🟠 Low | Cilium-native `CiliumNetworkPolicy` reconciler | Pod-selector based; separate reconciler pattern, not a writer |
 | 🟠 Low | Calico-native `NetworkPolicy` reconciler | Expression language differs from standard K8s; separate reconciler pattern |
