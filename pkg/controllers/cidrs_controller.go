@@ -541,7 +541,7 @@ func newObjectRefToCIDRsFuncMap(c client.Client, cidrsKind ipamv1alpha1.CIDRsGet
 				if namespace != object.GetNamespace() {
 					continue
 				}
-				if source.SecretRef.Name == objectRef.Name {
+				if object.GetName() == objectRef.Name {
 					requests = append(requests, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
 				}
 			}

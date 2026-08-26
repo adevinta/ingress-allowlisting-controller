@@ -1123,6 +1123,18 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 				},
 			)
 		})
+		t.Run("When the secret name does not match the reference", func(t *testing.T) {
+			testCaseObjectRefToCIDRsMapper(
+				t,
+				&ipamv1alpha1.CIDRsList{},
+				[]client.Object{
+					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref").withNamespace("secret-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
+				},
+				"secret-namespace",
+				"unrelated-secret",
+				[]client.ObjectKey{},
+			)
+		})
 		t.Run("When cidrs are in the other namespaces than the secret", func(t *testing.T) {
 			testCaseObjectRefToCIDRsMapper(
 				t,
@@ -1169,6 +1181,24 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 				[]client.ObjectKey{},
 			)
 		})
+	})
+	t.Run("when using a configmap reference", func(t *testing.T) {
+		scheme, err := Scheme("")
+		require.NoError(t, err)
+		cidrs := newCIDRBuilder(&ipamv1alpha1.CIDRs{}).
+			withName("cidr-with-configmap-ref").
+			withNamespace("configmap-namespace").
+			withConfigMapRef(ipamv1alpha1.ObjectRef{Name: "my-configmap"}).
+			build()
+		k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).Build()
+		mapper := newObjectRefToCIDRsFuncMap(k8sClient, &ipamv1alpha1.CIDRsList{}, configMapSource)
+
+		requests := mapper(context.Background(), &v1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
+			Namespace: "configmap-namespace",
+			Name:      "my-configmap",
+		}})
+
+		assert.Equal(t, []reconcile.Request{{NamespacedName: client.ObjectKeyFromObject(cidrs)}}, requests)
 	})
 }
 
