@@ -80,6 +80,16 @@ spec:
 The GitHub Contents API returns a JSON object; use a CEL expression to decode and extract the
 list if needed.
 
+## Controller flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations. Change this to run two instances of the controller side-by-side without annotation conflicts. |
+| `--http-headers-enabled` | `true` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field). Disabling this removes Secret/ConfigMap RBAC requirements entirely and skips reactive re-reconciliation when those objects change. |
+| `--secret-label-selector` | `""` | Label selector that restricts which Secrets and ConfigMaps are cached by the informer (e.g. `ipam.adevinta.com/cidr-header-source=true`). Only effective when `--http-headers-enabled=true`. Reduces memory usage on clusters with many Secrets. |
+
+---
+
 ## Resolved CIDR behaviour
 
 - The controller resolves all named objects, merges their `spec.cidrs` lists, deduplicates,

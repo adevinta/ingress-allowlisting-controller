@@ -1,5 +1,11 @@
 # Ingress
 
+> **⚠ Legacy — ingress-nginx is retiring**
+>
+> The Kubernetes project has [announced the retirement of ingress-nginx](https://www.kubernetes.dev/blog/2025/11/12/ingress-nginx-retirement/).
+> Ingress support in this controller is considered **legacy** and will receive only critical fixes.
+> **We strongly recommend migrating to the [Gateway API](gateway-api.md).**
+
 **Requires:** [nginx Ingress Controller](https://kubernetes.github.io/ingress-nginx/)
 
 The controller watches `Ingress` resources and maintains the
@@ -47,3 +53,9 @@ annotations:
 
 The CIDR list is always sorted and deduplicated. Removing the allowlist annotation removes
 the whitelist annotation.
+
+## Controller flags
+
+| Flag | Default | Description |
+|---|---|---|
+| `--ingress-support-enabled` | `true` | Enable or disable Ingress support. Unlike other reconcilers, Ingress is on by default and must be explicitly disabled if not needed. |
