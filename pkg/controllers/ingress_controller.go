@@ -49,6 +49,9 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	log.Infof("Ingress %s being reconciled. Creating/updating allowlist...", ingressMetadata.GetName())
 
+	const whitelistAnnotation = "nginx.ingress.kubernetes.io/whitelist-source-range"
+	originalWhitelist := netV1Ingress.Annotations[whitelistAnnotation]
+
 	updatedIngress, err := r.reconcileIngress(ctx, netV1Ingress)
 	if err != nil {
 		if err == r.CidrResolver.AnnotationNotFoundError() {
@@ -56,6 +59,10 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		}
 		log.Error(err, "Error creating or updating allowlist")
 		return ctrl.Result{}, err
+	}
+
+	if originalWhitelist == updatedIngress.Annotations[whitelistAnnotation] {
+		return ctrl.Result{}, nil
 	}
 
 	netV1Ingress.Annotations = updatedIngress.Annotations

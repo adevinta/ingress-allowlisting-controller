@@ -254,6 +254,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
 			return k8sCache, nil
 		},
+		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, "", t.Name(), "ipam.example.com", true))

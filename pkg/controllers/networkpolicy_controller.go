@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"reflect"
 	"strings"
 
 	netv1 "k8s.io/api/networking/v1"
@@ -61,6 +62,10 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		}
 		log.Error(err, "Error creating or updating networkpolicy")
 		return ctrl.Result{}, err
+	}
+
+	if reflect.DeepEqual(networkpolicy.Spec, updatedNetworkPolicy.Spec) {
+		return ctrl.Result{}, nil
 	}
 
 	networkpolicy = updatedNetworkPolicy
