@@ -41,9 +41,37 @@ type mergedTuple struct {
 func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error {
 	granularityAnnotation := w.annotationPrefix + "/granularity"
 
+	// Cache CIDR resolutions within this call: siblings sharing identical annotation values
+	// in the same namespace always resolve to the same CIDRs, so there is no need to hit
+	// the Kubernetes API more than once per unique annotation combination.
+	type cidrCacheKey struct{ ns, localAnn, clusterAnn string }
+	cidrCache := map[cidrCacheKey][]string{}
+	resolveCIDRs := func(sibling *gatewayApiv1.HTTPRoute) ([]string, error) {
+		anns := sibling.GetAnnotations()
+		key := cidrCacheKey{
+			localAnn:   anns[w.cidrResolver.Annotation()],
+			clusterAnn: anns[w.cidrResolver.ClusterAnnotation()],
+		}
+		// Namespace only affects resolution of local (namespaced) CIDRs.
+		// When no local annotation is present the result is namespace-independent,
+		// so omit ns from the key to get cache hits across namespaces in the same group.
+		if key.localAnn != "" {
+			key.ns = sibling.Namespace
+		}
+		if cached, ok := cidrCache[key]; ok {
+			return cached, nil
+		}
+		ips, err := w.cidrResolver.GetCidrsFromObject(ctx, sibling)
+		if err != nil {
+			return nil, err
+		}
+		cidrCache[key] = ips
+		return ips, nil
+	}
+
 	var tuples []mergedTuple
 	for _, sibling := range siblings {
-		ips, err := w.cidrResolver.GetCidrsFromObject(ctx, sibling)
+		ips, err := resolveCIDRs(sibling)
 		if err == w.cidrResolver.AnnotationNotFoundError() {
 			continue
 		}

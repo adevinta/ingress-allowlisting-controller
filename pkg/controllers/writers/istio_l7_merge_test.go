@@ -2,17 +2,43 @@ package writers
 
 import (
 	"context"
+	"fmt"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
+
+	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
+
+// countingGetClient wraps a client.Client and invokes onGet for every Get call,
+// letting tests assert how many times specific object types are fetched from the API.
+type countingGetClient struct {
+	client.Client
+	onGet func(obj client.Object)
+}
+
+func (c *countingGetClient) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+	if c.onGet != nil {
+		c.onGet(obj)
+	}
+	return c.Client.Get(ctx, key, obj, opts...)
+}
+
+func testClusterCIDRs(name string, cidrs ...string) *ipamv1alpha1.ClusterCIDRs {
+	return &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: name},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: cidrs},
+	}
+}
 
 // allPolicyHosts collects every host across all rules and to-blocks of a policy.
 func allPolicyHosts(p *istiosecurityv1.AuthorizationPolicy) []string {
@@ -299,4 +325,107 @@ func TestMergeTosByPaths_PathOrderIndependent(t *testing.T) {
 	require.Len(t, result, 1, "same paths in different order must compact into one To operation")
 	assert.ElementsMatch(t, []string{"host-a.example.com", "host-b.example.com"}, result[0].Operation.Hosts)
 	assert.ElementsMatch(t, []string{"/api", "/health"}, result[0].Operation.Paths)
+}
+
+// TestApplyMerged_MixedLocalAndClusterCIDRs verifies that two routes in different namespaces,
+// each carrying both a cluster annotation (shared) and a local annotation (namespace-specific),
+// produce two separate Istio Rules — one per unique resolved CIDR set.
+//
+// The resolved CIDR set for each route is the union of its local CIDRs and the shared cluster CIDRs.
+// Because the local CIDRs differ across namespaces, the two union sets are distinct, and the
+// security model requires separate Rules.
+func TestApplyMerged_MixedLocalAndClusterCIDRs(t *testing.T) {
+	clusterCIDR := testClusterCIDRs("global-net", "10.0.0.0/8")
+	localOne := testCIDRs("one", "ns-one", "192.168.1.0/24")
+	localTwo := testCIDRs("two", "ns-two", "192.168.2.0/24")
+
+	routeOne := testRoute("svc-one", "ns-one", "svc-one.example.com")
+	routeOne.Annotations["ipam.adevinta.com/allowlist-group"] = "one"
+	routeOne.Annotations["ipam.adevinta.com/cluster-allowlist-group"] = "global-net"
+
+	routeTwo := testRoute("svc-two", "ns-two", "svc-two.example.com")
+	routeTwo.Annotations["ipam.adevinta.com/allowlist-group"] = "two"
+	routeTwo.Annotations["ipam.adevinta.com/cluster-allowlist-group"] = "global-net"
+
+	gw := testGateway("my-gw", "gw-ns")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+		WithObjects(clusterCIDR, localOne, localTwo, routeOne, routeTwo, gw).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	err := w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{routeOne, routeTwo}, "shared-service")
+	require.NoError(t, err)
+
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy)
+	require.NoError(t, err)
+
+	// Each route resolves to a different CIDR set: cluster + namespace-local.
+	// Different CIDR sets must NOT share a `from` block → two Rules.
+	require.Len(t, policy.Spec.Rules, 2,
+		"routes with different local CIDRs must produce separate Rules even if they share a cluster annotation")
+
+	// Build a map from host → CIDRs for deterministic assertions.
+	hostToCIDRs := map[string][]string{}
+	for _, rule := range policy.Spec.Rules {
+		cidrs := rule.From[0].Source.RemoteIpBlocks
+		for _, to := range rule.To {
+			for _, h := range to.Operation.Hosts {
+				hostToCIDRs[h] = cidrs
+			}
+		}
+	}
+
+	assert.ElementsMatch(t, []string{"10.0.0.0/8", "192.168.1.0/24"}, hostToCIDRs["svc-one.example.com"],
+		"svc-one must be allowed from global-net + its own local CIDR")
+	assert.ElementsMatch(t, []string{"10.0.0.0/8", "192.168.2.0/24"}, hostToCIDRs["svc-two.example.com"],
+		"svc-two must be allowed from global-net + its own local CIDR")
+}
+
+// TestApplyMerged_CacheDeduplicatesResolutionsAcrossNamespaces verifies that ApplyMerged
+// resolves CIDRs exactly once when all siblings share the same cluster annotation value,
+// even when they are spread across different namespaces.
+//
+// Without the within-call cache (with namespace-ignoring key for cluster-only annotations),
+// each sibling triggers an independent GetCidrsFromObject call — one Get per sibling.
+// With the cache: the first sibling populates it; the rest are cache hits — one Get total.
+func TestApplyMerged_CacheDeduplicatesResolutionsAcrossNamespaces(t *testing.T) {
+	const siblingCount = 5
+	sharedCIDR := testClusterCIDRs("shared-vpn", "10.0.0.0/8")
+	gw := testGateway("my-gw", "gw-ns")
+
+	var siblings []*gatewayApiv1.HTTPRoute
+	objs := []client.Object{sharedCIDR, gw}
+	for i := 0; i < siblingCount; i++ {
+		r := testRoute(
+			fmt.Sprintf("svc.ns-%d.example.com", i),
+			fmt.Sprintf("ns-%d", i),
+			fmt.Sprintf("svc.ns-%d.example.com", i),
+		)
+		r.Annotations["ipam.adevinta.com/cluster-allowlist-group"] = "shared-vpn"
+		siblings = append(siblings, r)
+		objs = append(objs, r)
+	}
+
+	var clusterCIDRGetCount int
+	baseClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(objs...).Build()
+	counting := &countingGetClient{
+		Client: baseClient,
+		onGet: func(obj client.Object) {
+			if _, ok := obj.(*ipamv1alpha1.ClusterCIDRs); ok {
+				clusterCIDRGetCount++
+			}
+		},
+	}
+	resolver := resolvers.CidrResolver{Client: counting, AnnotationPrefix: resolvers.DefaultPrefix}
+	w := NewIstioL7Writer(counting, "ingress-allowlisting-controller", resolver)
+
+	err := w.ApplyMerged(context.Background(), gw, siblings, "my-service")
+	require.NoError(t, err)
+
+	// With the cache: 1 Get — all siblings share the same cluster annotation, namespace
+	// is excluded from the cache key for cluster-only annotations.
+	// Without the cache fix: 5 Gets — one per sibling due to per-namespace cache keys.
+	assert.Equal(t, 1, clusterCIDRGetCount,
+		"ClusterCIDRs must be fetched once across %d siblings with identical cluster annotations", siblingCount)
 }

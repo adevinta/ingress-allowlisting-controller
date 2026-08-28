@@ -97,3 +97,48 @@ list if needed.
 - Invalid CIDR strings (e.g. `10.0.0` without a mask) are logged as warnings and skipped.
 - If none of the named objects exist, the controller logs a warning and writes a deny-all
   policy (empty source range) to fail safe.
+
+---
+
+## Prefer `ClusterCIDRs` for CIDRs shared across namespaces
+
+If the same IP set is referenced by routes in more than one namespace, use a single `ClusterCIDRs`
+object instead of duplicating `CIDRs` objects per namespace.
+
+The controller caches CIDR resolutions within a single reconcile. When all routes in a merge group
+share the same `cluster-allowlist-group` value, the cluster object is fetched **once** regardless
+of how many namespaces are involved. Namespace-scoped `CIDRs` objects with the same content but
+different namespaces each require an independent lookup and do not benefit from this cache.
+
+**Instead of this:**
+
+```yaml
+apiVersion: ipam.adevinta.com/v1alpha1
+kind: CIDRs
+metadata:
+  name: vpn
+  namespace: ns-team-a
+spec:
+  cidrs: ["10.0.0.0/8"]
+---
+apiVersion: ipam.adevinta.com/v1alpha1
+kind: CIDRs
+metadata:
+  name: vpn
+  namespace: ns-team-b
+spec:
+  cidrs: ["10.0.0.0/8"]
+```
+
+**Prefer this:**
+
+```yaml
+apiVersion: ipam.adevinta.com/v1alpha1
+kind: ClusterCIDRs
+metadata:
+  name: vpn
+spec:
+  cidrs: ["10.0.0.0/8"]
+```
+
+And reference it with `ipam.adevinta.com/cluster-allowlist-group: vpn` on all HTTPRoutes.
