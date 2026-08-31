@@ -43,6 +43,28 @@ func (r *CidrResolver) Annotation() string {
 type cidrResolver interface {
 	ResolveCidrs(namespace string, name string) ([]string, error)
 	Kind() string
+	IsClusterScoped() bool
+}
+
+// ResolutionCache deduplicates Kubernetes API calls for CIDR lookups within a single reconcile.
+// Metrics and events are still emitted for every object; only the underlying Get is cached.
+type ResolutionCache struct {
+	m map[resolutionCacheKey]resolutionCacheEntry
+}
+
+type resolutionCacheKey struct {
+	kind      string
+	namespace string
+	name      string
+}
+
+type resolutionCacheEntry struct {
+	ips      []string
+	notFound bool
+}
+
+func NewResolutionCache() *ResolutionCache {
+	return &ResolutionCache{m: make(map[resolutionCacheKey]resolutionCacheEntry)}
 }
 
 type ClusterCIDRResolver struct {
@@ -68,9 +90,8 @@ func (r *ClusterCIDRResolver) ResolveCidrs(namespace string, name string) ([]str
 	return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.ClusterCIDRs{}.Kind}, name)
 }
 
-func (r *ClusterCIDRResolver) Kind() string {
-	return "ClusterCIDRs"
-}
+func (r *ClusterCIDRResolver) Kind() string        { return "ClusterCIDRs" }
+func (r *ClusterCIDRResolver) IsClusterScoped() bool { return true }
 
 func (r *NamespacedCIDRResolver) ResolveCidrs(namespace string, name string) ([]string, error) {
 	var candidates []ipamv1alpha1.CIDRsGetter = []ipamv1alpha1.CIDRsGetter{&ipamv1alpha1.CIDRs{}, &ipamv1alpha1_legacy.CIDRs{}}
@@ -87,7 +108,42 @@ func (r *NamespacedCIDRResolver) ResolveCidrs(namespace string, name string) ([]
 	return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.CIDRs{}.Kind}, name)
 }
 
-func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver cidrResolver, object client.Object, c client.Client) ([]string, error) {
+// resolveName fetches CIDRs for a single named group, using cache when provided.
+// Returns (ips, notFound, error): notFound=true means a 404 (caller emits event/metric);
+// non-nil error means a real API failure (never cached).
+func resolveName(namespace, name string, resolver cidrResolver, cache *ResolutionCache) ([]string, bool, error) {
+	if cache != nil {
+		ns := namespace
+		if resolver.IsClusterScoped() {
+			ns = ""
+		}
+		key := resolutionCacheKey{kind: resolver.Kind(), namespace: ns, name: name}
+		if entry, ok := cache.m[key]; ok {
+			return entry.ips, entry.notFound, nil
+		}
+		ips, err := resolver.ResolveCidrs(namespace, name)
+		if err != nil && client.IgnoreNotFound(err) == nil {
+			cache.m[key] = resolutionCacheEntry{notFound: true}
+			return nil, true, nil
+		}
+		if err != nil {
+			return nil, false, err
+		}
+		cache.m[key] = resolutionCacheEntry{ips: ips}
+		return ips, false, nil
+	}
+
+	ips, err := resolver.ResolveCidrs(namespace, name)
+	if err != nil && client.IgnoreNotFound(err) == nil {
+		return nil, true, nil
+	}
+	if err != nil {
+		return nil, false, err
+	}
+	return ips, false, nil
+}
+
+func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver cidrResolver, object client.Object, c client.Client, cache *ResolutionCache) ([]string, error) {
 	log := log.DefaultLogger.WithContext(ctx)
 	allowNames := strings.Split(annotationValue, ",")
 	var allowedIps []string
@@ -95,20 +151,19 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 		trimmedName := strings.TrimSpace(group)
 		log.Infof("resolving allowlist name %s", trimmedName)
 
-		ipList, err := resolver.ResolveCidrs(object.GetNamespace(), trimmedName)
+		ipList, notFound, err := resolveName(object.GetNamespace(), trimmedName, resolver, cache)
 
-		if err != nil && client.IgnoreNotFound(err) == nil {
-			err := notFoundEvent(c, object, resolver.Kind(), trimmedName)
-			if err != nil {
-				return nil, err
+		if notFound {
+			if evtErr := notFoundEvent(c, object, resolver.Kind(), trimmedName); evtErr != nil {
+				return nil, evtErr
 			}
 		}
 
-		if client.IgnoreNotFound(err) != nil {
+		if err != nil {
 			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
 			return nil, err
 		}
-		if len(ipList) == 0 {
+		if notFound || len(ipList) == 0 {
 			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
 		} else {
 			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(0.0)
@@ -121,7 +176,6 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 				continue
 			}
 
-			// Only append valid ip ranges
 			allowedIps = append(allowedIps, ipNet.String())
 		}
 	}
@@ -133,9 +187,8 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 	return allowedIps, nil
 }
 
-func (r *NamespacedCIDRResolver) Kind() string {
-	return "NamespacedCIDRs"
-}
+func (r *NamespacedCIDRResolver) Kind() string        { return "NamespacedCIDRs" }
+func (r *NamespacedCIDRResolver) IsClusterScoped() bool { return false }
 
 func notFoundEvent(c client.Client, owner client.Object, kind string, notFoundObject string) error {
 	evt := v1.Event{
@@ -180,6 +233,12 @@ type CidrResolver struct {
 }
 
 func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Object) ([]string, error) {
+	return r.GetCidrsFromObjectWithCache(ctx, object, nil)
+}
+
+// GetCidrsFromObjectWithCache resolves CIDRs for object, using cache to deduplicate Kubernetes
+// API calls across siblings. Metrics and events are emitted for every object regardless of cache hits.
+func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object client.Object, cache *ResolutionCache) ([]string, error) {
 	log := log.DefaultLogger.WithContext(ctx)
 	allowlistedGroups, okCidrAnnotation := object.GetAnnotations()[r.Annotation()]
 	allowlistedClusterGroups, okClusterCidrAnnotation := object.GetAnnotations()[r.ClusterAnnotation()]
@@ -191,7 +250,7 @@ func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Obj
 	var err error
 	if okCidrAnnotation {
 		namespacedCIDRResolver := &NamespacedCIDRResolver{Client: r.Client}
-		allowedIps, err = getIpsFromAnnotation(ctx, allowlistedGroups, namespacedCIDRResolver, object, r.Client)
+		allowedIps, err = getIpsFromAnnotation(ctx, allowlistedGroups, namespacedCIDRResolver, object, r.Client, cache)
 		if err != nil {
 			return []string{}, err
 		}
@@ -199,7 +258,7 @@ func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Obj
 	var allowedClusterIps []string
 	if okClusterCidrAnnotation {
 		clusterCIDRResolver := &ClusterCIDRResolver{Client: r.Client}
-		allowedClusterIps, err = getIpsFromAnnotation(ctx, allowlistedClusterGroups, clusterCIDRResolver, object, r.Client)
+		allowedClusterIps, err = getIpsFromAnnotation(ctx, allowlistedClusterGroups, clusterCIDRResolver, object, r.Client, cache)
 		if err != nil {
 			return []string{}, err
 		}
