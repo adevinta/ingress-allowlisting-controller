@@ -111,7 +111,7 @@ func (r *NamespacedCIDRResolver) ResolveCidrs(namespace string, name string) ([]
 // resolveName fetches CIDRs for a single named group, using cache when provided.
 // Returns (ips, notFound, error): notFound=true means a 404 (caller emits event/metric);
 // non-nil error means a real API failure (never cached).
-func resolveName(namespace, name string, resolver cidrResolver, cache *ResolutionCache) ([]string, bool, error) {
+func resolveName(ctx context.Context, namespace, name string, resolver cidrResolver, cache *ResolutionCache) ([]string, bool, error) {
 	if cache != nil {
 		ns := namespace
 		if resolver.IsClusterScoped() {
@@ -121,6 +121,7 @@ func resolveName(namespace, name string, resolver cidrResolver, cache *Resolutio
 		if entry, ok := cache.m[key]; ok {
 			return entry.ips, entry.notFound, nil
 		}
+		log.DefaultLogger.WithContext(ctx).Infof("resolving allowlist name %s", name)
 		ips, err := resolver.ResolveCidrs(namespace, name)
 		if err != nil && client.IgnoreNotFound(err) == nil {
 			cache.m[key] = resolutionCacheEntry{notFound: true}
@@ -133,6 +134,7 @@ func resolveName(namespace, name string, resolver cidrResolver, cache *Resolutio
 		return ips, false, nil
 	}
 
+	log.DefaultLogger.WithContext(ctx).Infof("resolving allowlist name %s", name)
 	ips, err := resolver.ResolveCidrs(namespace, name)
 	if err != nil && client.IgnoreNotFound(err) == nil {
 		return nil, true, nil
@@ -149,9 +151,8 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 	var allowedIps []string
 	for _, group := range allowNames {
 		trimmedName := strings.TrimSpace(group)
-		log.Infof("resolving allowlist name %s", trimmedName)
 
-		ipList, notFound, err := resolveName(object.GetNamespace(), trimmedName, resolver, cache)
+		ipList, notFound, err := resolveName(ctx, object.GetNamespace(), trimmedName, resolver, cache)
 
 		if notFound {
 			if evtErr := notFoundEvent(c, object, resolver.Kind(), trimmedName); evtErr != nil {
