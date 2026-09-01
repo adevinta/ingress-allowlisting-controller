@@ -100,10 +100,12 @@ list if needed.
 
 ---
 
-## Prefer `ClusterCIDRs` for CIDRs shared across namespaces
+## Prefer `ClusterCIDRs` for CIDRs shared across namespaces if possible
 
 If the same IP set is referenced by routes in more than one namespace, use a single `ClusterCIDRs`
-object instead of duplicating `CIDRs` objects per namespace.
+object instead of duplicating `CIDRs` objects per namespace. This depends on your tenancy model:
+`ClusterCIDRs` is cluster-scoped and requires a `ClusterRole` with write access, so teams that only
+hold namespace-level RBAC cannot create them and must use per-namespace `CIDRs` objects instead.
 
 The controller caches CIDR resolutions within a single reconcile. When all routes in a merge group
 share the same `cluster-allowlist-group` value, the cluster object is fetched **once** regardless
