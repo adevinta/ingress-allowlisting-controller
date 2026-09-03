@@ -96,14 +96,24 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
-	// Resolve CIDRs once — used by all per-route writers (always Traefik, Istio when no mergeKey).
-	allowedIps, cidrErr := r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
-
 	var hostnames []string
 	for _, h := range httproute.Spec.Hostnames {
 		hostnames = append(hostnames, string(h))
 	}
 	granularity := httproute.Annotations[r.granularityAnnotation()]
+
+	// Lazy CIDR resolution: only needed for per-route writers (Traefik always, Istio without mergeKey).
+	// Merge-mode routes (Istio + mergeKey) resolve all siblings' CIDRs inside ApplyMerged, so
+	// resolving the current route here would be wasted work if no per-route writer is present.
+	var allowedIps []string
+	var cidrErr error
+	var cidrResolved bool
+	resolveCIDRs := func() {
+		if !cidrResolved {
+			allowedIps, cidrErr = r.CidrResolver.GetCidrsFromObject(ctx, &httproute)
+			cidrResolved = true
+		}
+	}
 
 	// invokedWriters tracks which writers were used in this reconcile.
 	// Any registered writer not present here had its gateway removed from parentRefs
@@ -149,6 +159,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 
 		// Per-route apply path — Traefik always, Istio when no mergeKey.
+		resolveCIDRs()
 		if cidrErr == r.CidrResolver.AnnotationNotFoundError() {
 			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
 				return ctrl.Result{}, err
