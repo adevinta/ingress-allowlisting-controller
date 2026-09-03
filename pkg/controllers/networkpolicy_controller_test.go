@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
@@ -13,6 +14,7 @@ import (
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/apimachinery/pkg/util/intstr"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
@@ -720,4 +722,35 @@ func TestClusterCidrToNetworkPoliciesMapper(t *testing.T) {
 		assert.True(t, names["test1"])
 		assert.True(t, names["test2"])
 	})
+}
+
+func TestReconcileNetworkPolicySkipsUpdateWhenUnchanged(t *testing.T) {
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16"}},
+	}
+	networkPolicy := &netv1.NetworkPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test-policy",
+			Namespace: "mynamespace",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group": "localnet",
+			},
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeEgress},
+			Egress: []netv1.NetworkPolicyEgressRule{
+				{To: []netv1.NetworkPolicyPeer{{IPBlock: &netv1.IPBlock{CIDR: "192.168.0.0/16"}}}},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, networkPolicy).Build()
+	reconciler := newNetworkPolicyReconciler(t, k8sClient)
+
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "mynamespace", Name: "test-policy"}})
+	assert.NoError(t, err)
+
+	updated := &netv1.NetworkPolicy{}
+	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Namespace: "mynamespace", Name: "test-policy"}, updated))
+	assert.Equal(t, "999", updated.ResourceVersion, "Update should not have been called when spec is already correct")
 }

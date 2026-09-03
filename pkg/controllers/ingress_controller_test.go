@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
@@ -15,6 +16,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
@@ -494,6 +496,32 @@ func TestCidrToIngressMapper(t *testing.T) {
 		assert.Len(t, requests, 1)
 		assert.Equal(t, requests[0].Name, "test2")
 	})
+}
+
+func TestReconcileIngressSkipsUpdateWhenUnchanged(t *testing.T) {
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16"}},
+	}
+	ingress := &netv1.Ingress{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "test",
+			Namespace: "mynamespace",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/allowlist-group":                  "localnet",
+				"nginx.ingress.kubernetes.io/whitelist-source-range": "192.168.0.0/16",
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, ingress).Build()
+	reconciler := &IngressReconciler{Client: k8sClient, CidrResolver: resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}}
+
+	_, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Namespace: "mynamespace", Name: "test"}})
+	assert.NoError(t, err)
+
+	updated := &netv1.Ingress{}
+	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Namespace: "mynamespace", Name: "test"}, updated))
+	assert.Equal(t, "999", updated.ResourceVersion, "Update should not have been called when annotation is already correct")
 }
 
 func TestClusterCidrToIngressMapper(t *testing.T) {
