@@ -112,35 +112,35 @@ func (r *NamespacedCIDRResolver) ResolveCidrs(namespace string, name string) ([]
 // Returns (ips, notFound, error): notFound=true means a 404 (caller emits event/metric);
 // non-nil error means a real API failure (never cached).
 func resolveName(ctx context.Context, namespace, name string, resolver cidrResolver, cache *ResolutionCache) ([]string, bool, error) {
+	// Cache lookup. The key drops the namespace for cluster-scoped resolvers so the same
+	// ClusterCIDRs object is shared across namespaces. On a hit we're done; otherwise fall
+	// through to resolve and, if caching, record the result below.
+	var key resolutionCacheKey
 	if cache != nil {
 		ns := namespace
 		if resolver.IsClusterScoped() {
 			ns = ""
 		}
-		key := resolutionCacheKey{kind: resolver.Kind(), namespace: ns, name: name}
+		key = resolutionCacheKey{kind: resolver.Kind(), namespace: ns, name: name}
 		if entry, ok := cache.m[key]; ok {
 			return entry.ips, entry.notFound, nil
 		}
-		log.DefaultLogger.WithContext(ctx).Infof("resolving allowlist name %s", name)
-		ips, err := resolver.ResolveCidrs(namespace, name)
-		if err != nil && client.IgnoreNotFound(err) == nil {
-			cache.m[key] = resolutionCacheEntry{notFound: true}
-			return nil, true, nil
-		}
-		if err != nil {
-			return nil, false, err
-		}
-		cache.m[key] = resolutionCacheEntry{ips: ips}
-		return ips, false, nil
 	}
 
 	log.DefaultLogger.WithContext(ctx).Infof("resolving allowlist name %s", name)
 	ips, err := resolver.ResolveCidrs(namespace, name)
 	if err != nil && client.IgnoreNotFound(err) == nil {
+		if cache != nil {
+			cache.m[key] = resolutionCacheEntry{notFound: true}
+		}
 		return nil, true, nil
 	}
 	if err != nil {
+		// Real API failure: never cached, so a transient error is retried next reconcile.
 		return nil, false, err
+	}
+	if cache != nil {
+		cache.m[key] = resolutionCacheEntry{ips: ips}
 	}
 	return ips, false, nil
 }
