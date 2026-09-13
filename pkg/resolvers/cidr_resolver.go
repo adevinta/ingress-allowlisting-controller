@@ -41,7 +41,7 @@ func (r *CidrResolver) Annotation() string {
 }
 
 type cidrResolver interface {
-	ResolveCidrs(namespace string, name string) ([]string, error)
+	ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error)
 	Kind() string
 }
 
@@ -53,10 +53,10 @@ type NamespacedCIDRResolver struct {
 	client.Client
 }
 
-func (r *ClusterCIDRResolver) ResolveCidrs(namespace string, name string) ([]string, error) {
+func (r *ClusterCIDRResolver) ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error) {
 	var candidates []ipamv1alpha1.CIDRsGetter = []ipamv1alpha1.CIDRsGetter{&ipamv1alpha1.ClusterCIDRs{}, &ipamv1alpha1_legacy.ClusterCIDRs{}}
 	for _, cidrObj := range candidates {
-		err := r.Client.Get(context.Background(), types.NamespacedName{Name: name}, cidrObj)
+		err := r.Client.Get(ctx, types.NamespacedName{Name: name}, cidrObj)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -72,10 +72,10 @@ func (r *ClusterCIDRResolver) Kind() string {
 	return "ClusterCIDRs"
 }
 
-func (r *NamespacedCIDRResolver) ResolveCidrs(namespace string, name string) ([]string, error) {
+func (r *NamespacedCIDRResolver) ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error) {
 	var candidates []ipamv1alpha1.CIDRsGetter = []ipamv1alpha1.CIDRsGetter{&ipamv1alpha1.CIDRs{}, &ipamv1alpha1_legacy.CIDRs{}}
 	for _, cidrObj := range candidates {
-		err := r.Client.Get(context.Background(), types.NamespacedName{Namespace: namespace, Name: name}, cidrObj)
+		err := r.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cidrObj)
 		if apierrors.IsNotFound(err) {
 			continue
 		}
@@ -95,10 +95,10 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 		trimmedName := strings.TrimSpace(group)
 		log.Infof("resolving allowlist name %s", trimmedName)
 
-		ipList, err := resolver.ResolveCidrs(object.GetNamespace(), trimmedName)
+		ipList, err := resolver.ResolveCidrs(ctx, object.GetNamespace(), trimmedName)
 
 		if err != nil && client.IgnoreNotFound(err) == nil {
-			err := notFoundEvent(c, object, resolver.Kind(), trimmedName)
+			err := notFoundEvent(ctx, c, object, resolver.Kind(), trimmedName)
 			if err != nil {
 				return nil, err
 			}
@@ -137,7 +137,7 @@ func (r *NamespacedCIDRResolver) Kind() string {
 	return "NamespacedCIDRs"
 }
 
-func notFoundEvent(c client.Client, owner client.Object, kind string, notFoundObject string) error {
+func notFoundEvent(ctx context.Context, c client.Client, owner client.Object, kind string, notFoundObject string) error {
 	evt := v1.Event{
 		ObjectMeta: metav1.ObjectMeta{
 			Namespace:    owner.GetNamespace(),
@@ -145,7 +145,7 @@ func notFoundEvent(c client.Client, owner client.Object, kind string, notFoundOb
 		},
 	}
 
-	_, err := ctrl.CreateOrUpdate(context.TODO(), c, &evt, func() error {
+	_, err := ctrl.CreateOrUpdate(ctx, c, &evt, func() error {
 		evt.Message = fmt.Sprintf("Couldn't update %s %s:%s allowlist because CIDR Group %s:%s was not found", owner.GetObjectKind().GroupVersionKind().Kind, owner.GetNamespace(), owner.GetName(), kind, notFoundObject)
 		evt.Action = "LookupAllowListingGroup"
 		if evt.Series == nil {

@@ -3,7 +3,6 @@ package controllers
 import (
 	"context"
 	"reflect"
-	"strings"
 
 	corev1 "k8s.io/api/core/v1"
 
@@ -13,11 +12,9 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type ServiceReconciler struct {
@@ -117,29 +114,5 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string
 }
 
 func newServicesFromCIDRFuncMap(c client.Client, annotation string) handler.MapFunc {
-	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
-		services := &corev1.ServiceList{}
-		options := client.ListOptions{
-			Namespace: cidr.GetNamespace(),
-		}
-		err := c.List(context.Background(), services, &options)
-		if err != nil {
-			return []reconcile.Request{}
-		}
-		var requests []reconcile.Request
-		for _, svc := range services.Items {
-			val, ok := svc.Annotations[annotation]
-			if !ok {
-				continue
-			}
-			cidrsFound := map[string]struct{}{}
-			for _, cidr := range strings.Split(val, ",") {
-				cidrsFound[strings.TrimSpace(cidr)] = struct{}{}
-			}
-			if _, found := cidrsFound[cidr.GetName()]; found {
-				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: svc.Namespace, Name: svc.Name}})
-			}
-		}
-		return requests
-	}
+	return newObjectsFromCIDRFuncMap(c, func() client.ObjectList { return &corev1.ServiceList{} }, annotation)
 }

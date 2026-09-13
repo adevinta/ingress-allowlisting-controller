@@ -2,14 +2,12 @@ package controllers
 
 import (
 	"context"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -112,29 +110,5 @@ func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nameP
 }
 
 func newGatewaysFromCIDRFuncMap(c client.Client, annotation string) handler.MapFunc {
-	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
-		gateways := &gatewayApiv1.GatewayList{}
-		options := client.ListOptions{
-			Namespace: cidr.GetNamespace(),
-		}
-		err := c.List(ctx, gateways, &options)
-		if err != nil {
-			return []reconcile.Request{}
-		}
-		var requests []reconcile.Request
-		for _, gateway := range gateways.Items {
-			val, ok := gateway.Annotations[annotation]
-			if !ok {
-				continue
-			}
-			cidrsFound := map[string]struct{}{}
-			for _, cidr := range strings.Split(val, ",") {
-				cidrsFound[strings.TrimSpace(cidr)] = struct{}{}
-			}
-			if _, found := cidrsFound[cidr.GetName()]; found {
-				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: gateway.Namespace, Name: gateway.Name}})
-			}
-		}
-		return requests
-	}
+	return newObjectsFromCIDRFuncMap(c, func() client.ObjectList { return &gatewayApiv1.GatewayList{} }, annotation)
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"regexp"
-	"strings"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -570,29 +569,5 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 }
 
 func newHTTPRoutesFromCIDRFuncMap(c client.Client, annotation string) handler.MapFunc {
-	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
-		httproutes := &gatewayApiv1.HTTPRouteList{}
-		options := client.ListOptions{
-			Namespace: cidr.GetNamespace(),
-		}
-		err := c.List(ctx, httproutes, &options)
-		if err != nil {
-			return []reconcile.Request{}
-		}
-		var requests []reconcile.Request
-		for _, httproute := range httproutes.Items {
-			val, ok := httproute.Annotations[annotation]
-			if !ok {
-				continue
-			}
-			cidrsFound := map[string]struct{}{}
-			for _, cidrName := range strings.Split(val, ",") {
-				cidrsFound[strings.TrimSpace(cidrName)] = struct{}{}
-			}
-			if _, found := cidrsFound[cidr.GetName()]; found {
-				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: httproute.Namespace, Name: httproute.Name}})
-			}
-		}
-		return requests
-	}
+	return newObjectsFromCIDRFuncMap(c, func() client.ObjectList { return &gatewayApiv1.HTTPRouteList{} }, annotation)
 }
