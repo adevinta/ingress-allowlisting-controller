@@ -13,11 +13,9 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 // IngressReconciler reconciles a Ingress object
@@ -112,29 +110,5 @@ func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string
 }
 
 func newIngressesFromCIDRFuncMap(c client.Client, annotation string) handler.MapFunc {
-	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
-		ingresses := &netv1.IngressList{}
-		options := client.ListOptions{
-			Namespace: cidr.GetNamespace(),
-		}
-		err := c.List(context.Background(), ingresses, &options)
-		if err != nil {
-			return []reconcile.Request{}
-		}
-		var requests []reconcile.Request
-		for _, ingress := range ingresses.Items {
-			val, ok := ingress.Annotations[annotation]
-			if !ok {
-				continue
-			}
-			cidrsFound := map[string]struct{}{}
-			for _, cidr := range strings.Split(val, ",") {
-				cidrsFound[strings.TrimSpace(cidr)] = struct{}{}
-			}
-			if _, found := cidrsFound[cidr.GetName()]; found {
-				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: ingress.Namespace, Name: ingress.Name}})
-			}
-		}
-		return requests
-	}
+	return newObjectsFromCIDRFuncMap(c, func() client.ObjectList { return &netv1.IngressList{} }, annotation)
 }

@@ -1,6 +1,9 @@
 package controllers
 
 import (
+	"context"
+	"strings"
+
 	"github.com/go-logr/logr"
 	log "github.com/adevinta/go-log-toolkit"
 	corev1 "k8s.io/api/core/v1"
@@ -8,8 +11,11 @@ import (
 	"k8s.io/apimachinery/pkg/api/meta"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
@@ -233,4 +239,44 @@ func Scheme(legacyGroupVersion string) (*runtime.Scheme, error) {
 	}
 
 	return scheme, nil
+}
+
+// newObjectsFromCIDRFuncMap is the shared core behind the per-type watch mappers
+// (newServicesFromCIDRFuncMap and its ingress/networkpolicy/gateway/httproute siblings).
+// When a watched CIDRs/ClusterCIDRs object changes, it enqueues every object of the list
+// type produced by newList — in the same namespace as the changed object — whose
+// annotation lists the changed object by name.
+//
+// newList must return a fresh, empty list each call; the closure is reused across events.
+// Only the listed object type differs between the per-type mappers, so they are thin shims
+// over this function.
+func newObjectsFromCIDRFuncMap(c client.Client, newList func() client.ObjectList, annotation string) handler.MapFunc {
+	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
+		list := newList()
+		options := client.ListOptions{
+			Namespace: cidr.GetNamespace(),
+		}
+		if err := c.List(ctx, list, &options); err != nil {
+			return []reconcile.Request{}
+		}
+		var requests []reconcile.Request
+		_ = meta.EachListItem(list, func(o runtime.Object) error {
+			obj, ok := o.(client.Object)
+			if !ok {
+				return nil
+			}
+			val, ok := obj.GetAnnotations()[annotation]
+			if !ok {
+				return nil
+			}
+			for _, name := range strings.Split(val, ",") {
+				if strings.TrimSpace(name) == cidr.GetName() {
+					requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: obj.GetNamespace(), Name: obj.GetName()}})
+					break
+				}
+			}
+			return nil
+		})
+		return requests
+	}
 }
