@@ -11,6 +11,7 @@ A Kubernetes controller that manages IP allowlisting for Ingress, Gateway API, a
 | `kind: HTTPRoute` | `kind: AuthorizationPolicy` (L7, per-route) | Gateway API + Istio |
 | `kind: HTTPRoute` | `kind: Middleware` (IPAllowList, per-route) | Gateway API + Traefik |
 | `kind: NetworkPolicy` | `spec.ingress[].from[].ipBlock`<br>AND/OR<br>`spec.egress[].to[].ipBlock` | CNI with NetworkPolicy support (e.g. Calico, AWS VPC CNI) |
+| `kind: Service` | `spec.loadBalancerSourceRanges` | `type: LoadBalancer` + a load balancer that honours source ranges |
 
 Istio and Traefik support is **auto-detected** at startup — no flags needed. The controller checks which CRDs are installed and registers only the relevant writers.
 
@@ -32,6 +33,7 @@ kubectl get pods -n ingress-allowlisting
 - [Ingress](docs/ingress.md)
 - [Gateway API — Gateway & HTTPRoute (Istio + Traefik)](docs/gateway-api.md)
 - [NetworkPolicy](docs/networkpolicy.md)
+- [Service (loadBalancerSourceRanges)](docs/service.md)
 - [CIDRs & ClusterCIDRs CRDs](docs/cidrs.md)
 - [Security considerations](docs/security.md)
 - [Architecture & support matrix](docs/architecture.md)

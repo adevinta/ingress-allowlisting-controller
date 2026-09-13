@@ -59,7 +59,7 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool) error {
+func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool) error {
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
 	if ingressSupportEnabled {
@@ -149,6 +149,17 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		}
 		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "NetworkPolicy"}
+		}
+	}
+	if serviceSupportEnabled {
+		serviceReconciler := ServiceReconciler{
+			Client:             mgr.GetClient(),
+			Scheme:             mgr.GetScheme(),
+			LegacyGroupVersion: legacyGroupVersion,
+			CidrResolver:       cidrResolver,
+		}
+		if err := serviceReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+			return &setupError{error: err, controllerType: "Service"}
 		}
 	}
 

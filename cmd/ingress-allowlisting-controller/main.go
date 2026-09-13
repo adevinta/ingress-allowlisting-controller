@@ -58,6 +58,7 @@ func main() {
 	var ingressSupportEnabled bool
 	var gatewaySupportEnabled bool
 	var networkPolicySupportEnabled bool
+	var serviceSupportEnabled bool
 	var httpRouteSupportEnabled bool
 	var httpRouteLabelSelector string
 	var secretLabelSelector string
@@ -71,6 +72,7 @@ func main() {
 	flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
 	flag.BoolVar(&gatewaySupportEnabled, "gateway-support-enabled", false, "Enable gateway support for the controller")
 	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
+	flag.BoolVar(&serviceSupportEnabled, "service-support-enabled", false, "Enable Service loadBalancerSourceRanges support for the controller")
 	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
 	flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
 	flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
@@ -106,7 +108,7 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
-	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, httpHeadersEnabled, l4Writers, l7Writers)
+	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, httpHeadersEnabled, l4Writers, l7Writers)
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -143,7 +145,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 
@@ -154,7 +156,7 @@ func main() {
 	}
 }
 
-func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, httpRouteEnabled, httpHeadersEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
+func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, serviceEnabled, httpRouteEnabled, httpHeadersEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
 	cs := kubernetes.NewForConfigOrDie(restConfig)
 
 	var perms []writers.Permission
@@ -199,6 +201,13 @@ func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, ht
 		perms = append(perms,
 			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get"},
 			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update"},
+		)
+	}
+
+	if serviceEnabled {
+		perms = append(perms,
+			writers.Permission{Group: "", Resource: "services", Verb: "get"},
+			writers.Permission{Group: "", Resource: "services", Verb: "update"},
 		)
 	}
 

@@ -257,7 +257,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, "", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, "", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -329,7 +329,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, "", t.Name(), "legacy.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, "", t.Name(), "legacy.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -403,7 +403,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -474,7 +474,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, "", t.Name(), "ipam.adevinta.com", false))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -525,7 +525,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, "", t.Name(), "ipam.adevinta.com", true))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -596,7 +596,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
