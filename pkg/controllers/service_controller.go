@@ -71,19 +71,23 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 func (r *ServiceReconciler) reconcileService(ctx context.Context, service corev1.Service) (corev1.Service, error) {
 	log := log.DefaultLogger.WithContext(ctx)
 
+	// loadBalancerSourceRanges is only valid for type=LoadBalancer Services; the API
+	// server rejects it on any other type. Skip other types before resolving CIDRs, so a
+	// non-LoadBalancer Service never emits a not-found Event or sets the cidrsNotFound
+	// metric for something we don't manage. Logged at debug: the Service watch has no
+	// annotation filter, so every non-LoadBalancer Service in the cluster reaches this and
+	// it would be noise at a higher level.
+	if service.Spec.Type != corev1.ServiceTypeLoadBalancer {
+		log.Debugf("Service %s/%s is not of type LoadBalancer (%s); skipping loadBalancerSourceRanges", service.GetNamespace(), service.GetName(), service.Spec.Type)
+		return service, nil
+	}
+
 	cidrs, err := r.CidrResolver.GetCidrsFromObject(ctx, &service)
 	if err == r.CidrResolver.AnnotationNotFoundError() {
 		return service, err
 	}
 	if err != nil {
 		return corev1.Service{}, err
-	}
-
-	// loadBalancerSourceRanges is only valid for type=LoadBalancer Services; the API
-	// server rejects it on any other type. Skip other types rather than fail reconcile.
-	if service.Spec.Type != corev1.ServiceTypeLoadBalancer {
-		log.Warnf("Service %s/%s has the allowlist annotation but is not of type LoadBalancer (%s); skipping loadBalancerSourceRanges", service.GetNamespace(), service.GetName(), service.Spec.Type)
-		return service, nil
 	}
 
 	service.Spec.LoadBalancerSourceRanges = cidrs
