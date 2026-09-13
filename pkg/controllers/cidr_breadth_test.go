@@ -59,6 +59,18 @@ func TestGuardExternalBreadth_RejectsOneBadEntryAmongGood(t *testing.T) {
 	}, 0, 0))
 }
 
+// TestGuardExternalBreadth_RejectsV4Mapped verifies IPv4-mapped IPv6 prefixes are measured in
+// IPv4 space, so a mapped block that covers all of IPv4 is rejected rather than read as a narrow
+// /96. ::ffff:0.0.0.0/96 covers the entire IPv4 range; ::ffff:0.0.0.0/104 is the mapped /8 limit.
+func TestGuardExternalBreadth_RejectsV4Mapped(t *testing.T) {
+	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/96"}, 0, 0),
+		"::ffff:0.0.0.0/96 covers all of IPv4 and must be rejected")
+	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/100"}, 0, 0),
+		"::ffff:0.0.0.0/100 (mapped /4) must be rejected")
+	assert.NoError(t, guardExternalBreadth([]string{"::ffff:10.0.0.0/104"}, 0, 0),
+		"::ffff:10.0.0.0/104 (mapped /8) is exactly at the limit and must pass")
+}
+
 // TestGuardExternalBreadth_IgnoresInvalidEntries verifies non-CIDR, non-IP entries are skipped.
 func TestGuardExternalBreadth_IgnoresInvalidEntries(t *testing.T) {
 	assert.NoError(t, guardExternalBreadth([]string{"not-a-cidr", "", "10.0.0.0/8"}, 0, 0))
@@ -91,6 +103,8 @@ func TestPrefixLen(t *testing.T) {
 		{"2001:db8::/48", 48, false, true},
 		{"::/0", 0, false, true},
 		{"2001:db8::1", 128, false, true},
+		{"::ffff:0.0.0.0/96", 0, true, true},    // mapped: all of IPv4 → /0 in v4 space
+		{"::ffff:10.0.0.0/104", 8, true, true},  // mapped: /8 in v4 space
 		{"garbage", 0, false, false},
 	}
 	for _, c := range cases {

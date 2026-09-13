@@ -205,6 +205,13 @@ Notes:
   coverage across many narrow blocks — an accepted trade-off for a fast, allocation-light check.
 - It applies **only** to remotely fetched CIDRs. Inline `spec.cidrs` is trusted; an admin may
   deliberately allow `0.0.0.0/0` there.
+- **Known gap — deprecated v4-in-v6 notations.** A prefix is scored by its IPv6 mask width, and
+  only the v4-mapped form (`::ffff:0.0.0.0/96`) is re-scored in IPv4 space. The deprecated 6to4
+  (`2002::/16`) and IPv4-compatible (`::/96`) forms are not, so a block like `::/96` or
+  `2002:c000::/20` reads as a narrow IPv6 prefix and passes even though it encodes a broad IPv4
+  range. `::/0` and `::/16`-scale blunders are still caught (their IPv6 mask is below the limit).
+  This is left as-is on purpose: both notations are deprecated (RFC 7526, RFC 4291) and no trusted
+  feed emits them, so it is not a realistic human mistake.
 - Defaults are calibrated against real feeds: the widest prefix observed is `/11` for IPv4 (AWS
   `ip-ranges.json` and Akamai) and `/24` for IPv6 (Akamai; AWS tops out at `/32`), so the `/8` and
   `/20` defaults do not reject legitimate feeds and keep headroom above the widest real block.

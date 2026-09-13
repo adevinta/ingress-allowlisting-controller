@@ -75,8 +75,15 @@ func guardExternalBreadth(cidrs []string, minMaskV4, minMaskV6 int) error {
 // the value is neither a CIDR nor an IP.
 func prefixLen(s string) (ones int, is4 bool, ok bool) {
 	if _, ipNet, err := net.ParseCIDR(s); err == nil {
-		o, _ := ipNet.Mask.Size()
-		return o, ipNet.IP.To4() != nil, true
+		ones, bits := ipNet.Mask.Size()
+		if ipNet.IP.To4() != nil {
+			// v4-mapped prefixes (e.g. ::ffff:0.0.0.0/96) carry a 128-bit mask.
+			// Express it in IPv4 space so the mask is measured against the same
+			// 32-bit scale as the IPv4 threshold — otherwise /96 (which covers all
+			// of IPv4) would read as a narrow /96 and slip past the /8 guard.
+			return ones - (bits - 32), true, true
+		}
+		return ones, false, true
 	}
 	if ip := net.ParseIP(s); ip != nil {
 		if ip.To4() != nil {
