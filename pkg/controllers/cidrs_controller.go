@@ -27,6 +27,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
+	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 )
 
@@ -34,9 +35,15 @@ var ipv4RegExp = regexp.MustCompile(`^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$`)
 
 type CIDRReconciler struct {
 	client.Client
-	CIDRs                ipamv1alpha1.CIDRsGetter
-	CIDRsList            ipamv1alpha1.CIDRsGetterList
+	CIDRs              ipamv1alpha1.CIDRsGetter
+	CIDRsList          ipamv1alpha1.CIDRsGetterList
 	HTTPHeadersEnabled bool
+	// MinMaskIPv4 / MinMaskIPv6 are the widest mask an externally-fetched
+	// (HTTP-source) CIDR may use, per address family. A prefix wider than this is
+	// rejected. A non-positive value falls back to the package defaults (see
+	// cidr_breadth.go). Inline spec.cidrs authored by an admin is never checked.
+	MinMaskIPv4 int
+	MinMaskIPv6 int
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
@@ -396,6 +403,22 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if err != nil {
 		return err
 	}
+
+	// Breadth guard against human mistakes. We trust the source itself (AWS,
+	// Akamai, ...), so this is not an attacker defence — a tailor-made /32 from a
+	// trusted feed is allowed by design. It runs on the CEL/JSONPath output, so it
+	// only sees what the processor already selected, and rejects the fetch if a
+	// misconfiguration produced a prefix wider than the minimum mask (e.g. a
+	// stray 0.0.0.0/0). An admin may still allow 0.0.0.0/0 inline. Returning an
+	// error here preserves the last-known-good status.
+	if err := guardExternalBreadth(cidrValues, r.MinMaskIPv4, r.MinMaskIPv6); err != nil {
+		log.DefaultLogger.WithContext(ctx).
+			WithField("cidrs", cidrs.GetName()).
+			WithField("uri", spec.CIDRsSource.Location.URI).
+			Error(err, "rejecting external CIDR source: coverage too broad, keeping last-known-good allowlist")
+		return err
+	}
+
 	status.CIDRs = append(status.CIDRs, cidrValues...)
 
 	return nil
