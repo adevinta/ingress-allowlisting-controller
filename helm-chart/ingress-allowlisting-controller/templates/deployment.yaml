@@ -43,6 +43,9 @@ spec:
 {{- if .Values.networkpolicy.enabled }}
         - "--networkpolicy-support-enabled"
 {{- end }}
+{{- if .Values.service.enabled }}
+        - "--service-support-enabled"
+{{- end }}
 {{- if .Values.httproute.enabled }}
         - "--httproute-support-enabled"
 {{- with .Values.httproute.labelSelector }}

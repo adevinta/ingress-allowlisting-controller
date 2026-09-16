@@ -34,6 +34,9 @@ httproute:
 networkpolicy:
   enabled: false
 
+service:
+  enabled: false
+
 podMonitor:
   additionalLabels: {}
 

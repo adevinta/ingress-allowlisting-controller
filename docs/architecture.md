@@ -12,6 +12,7 @@ The object is owned by someone else — the reconciler only mutates part of its 
 |---|---|---|---|
 | `IngressReconciler` | `networking.k8s.io/v1 Ingress` | `nginx.ingress.kubernetes.io/whitelist-source-range` annotation | Nginx / cloud LB controllers |
 | `NetworkPolicyReconciler` | `networking.k8s.io/v1 NetworkPolicy` | `spec.ingress[].from[].ipBlock` | Any CNI enforcing standard NetworkPolicy |
+| `ServiceReconciler` | `v1 Service` (`type: LoadBalancer`) | `spec.loadBalancerSourceRanges` | Load balancers honouring source ranges (AWS, GCP, Azure, MetalLB) |
 
 ### Writers (creator-driven, Gateway API)
 Resolve a Gateway API object chain (`HTTPRoute → Gateway → GatewayClass → controllerName`) and **create a new enforcement object** specific to the ingress controller in use.
@@ -80,6 +81,7 @@ The reconciler (`HTTPRouteAllowlistingReconciler`, `GatewayAllowlistingReconcile
 |---|---|---|---|---|---|
 | `IngressReconciler` | `networking.k8s.io/v1 Ingress` | Nginx, cloud LBs | L7 | Ingress object | Patches annotation in place |
 | `NetworkPolicyReconciler` | `networking.k8s.io/v1 NetworkPolicy` | Any standard-compliant CNI | L3/L4 | Pod selector | See CNI support below |
+| `ServiceReconciler` | `v1 Service` (`type: LoadBalancer`) | Cloud/LB implementation (AWS, GCP, Azure, MetalLB) | L3/L4 | Service object | Patches `spec.loadBalancerSourceRanges` in place |
 
 ### CNI support via `networking.k8s.io/v1 NetworkPolicy`
 
