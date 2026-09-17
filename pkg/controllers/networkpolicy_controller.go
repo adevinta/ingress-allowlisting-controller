@@ -46,8 +46,6 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	log.Infof("Networkpolicy %s being reconciled. Creating/updating allowlist...", networkPolicyMetadata.GetName())
-
 	updatedNetworkPolicy, err := r.reconcileNetworkPolicy(ctx, networkpolicy)
 	if err != nil {
 		if err == r.CidrResolver.AnnotationNotFoundError() {
@@ -64,6 +62,8 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 	if reflect.DeepEqual(networkpolicy.Spec, updatedNetworkPolicy.Spec) {
 		return ctrl.Result{}, nil
 	}
+
+	log.Infof("Networkpolicy %s allowlist changed; updating ipBlock rules...", networkPolicyMetadata.GetName())
 
 	networkpolicy = updatedNetworkPolicy
 	if err := r.Client.Update(ctx, &networkpolicy); err != nil {
