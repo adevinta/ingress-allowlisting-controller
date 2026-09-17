@@ -39,7 +39,7 @@ func TestResolveCidrs(t *testing.T) {
 
 		resolver := resolvers.NamespacedCIDRResolver{reconciller.Client}
 
-		result, err := resolver.ResolveCidrs(namespace, name)
+		result, err := resolver.ResolveCidrs(context.Background(), namespace, name)
 
 		assert.NoError(t, err)
 		assert.Equal(t, expected, result)
@@ -58,7 +58,7 @@ func TestResolveCidrs(t *testing.T) {
 
 		resolver := resolvers.ClusterCIDRResolver{reconciller.Client}
 
-		result, err := resolver.ResolveCidrs(namespace, name)
+		result, err := resolver.ResolveCidrs(context.Background(), namespace, name)
 
 		assert.NoError(t, err)
 		assert.Equal(t, expected, result)
