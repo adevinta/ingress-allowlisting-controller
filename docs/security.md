@@ -177,3 +177,44 @@ with Traefik will hit this loop unless an ignore rule is configured.
 **Fix:** configure your tooling to ignore the controller-injected `extensionRef` filters. See
 [Declarative tooling conflict](gateway-api.md#declarative-tooling-conflict-argocd-flux-helm)
 in the Gateway API docs for the exact configuration for ArgoCD, Flux, and Helm.
+
+---
+
+## Breadth limit on remote CIDR sources
+
+**Applies to:** `CIDRs`/`ClusterCIDRs` objects with a remote `location.uri` source.
+
+A remote source can silently widen an allowlist to the entire internet if it breaks, changes
+format, or is fed a bad transform expression. The controller requires every externally-fetched
+prefix to be **no wider than a minimum mask** — `/8` for IPv4 and `/20` for IPv6 by default. If
+any entry is wider (`0.0.0.0/0`, any `/1`, `/3`, …), the fetch is rejected wholesale, the object
+keeps its last-known-good status, and the breach is logged.
+
+**This is a guardrail against human mistakes, not a security control.** We trust the sources we
+fetch from (AWS, Akamai, …); a well-tailored single `/32` from a trusted feed is allowed by
+design, and there is no defending against a source you have chosen to trust. What the check
+prevents is the common accident where a feed breaks, a transform expression misfires, or a feed
+is misconfigured to return `0.0.0.0/0` — and the firewall effectively turns off without anyone
+noticing. Treat it as blast-radius containment for misconfiguration, alongside the trust you
+already place in the source.
+
+Notes:
+
+- It is a **per-entry mask check**, not an address-count sum. It catches every single over-broad
+  block (including the `/1`/`/3` splits, whose masks are themselves too wide) but does not add up
+  coverage across many narrow blocks — an accepted trade-off for a fast, allocation-light check.
+- It applies **only** to remotely fetched CIDRs. Inline `spec.cidrs` is trusted; an admin may
+  deliberately allow `0.0.0.0/0` there.
+- **Known gap — deprecated v4-in-v6 notations.** A prefix is scored by its IPv6 mask width, and
+  only the v4-mapped form (`::ffff:0.0.0.0/96`) is re-scored in IPv4 space. The deprecated 6to4
+  (`2002::/16`) and IPv4-compatible (`::/96`) forms are not, so a block like `::/96` or
+  `2002:c000::/20` reads as a narrow IPv6 prefix and passes even though it encodes a broad IPv4
+  range. `::/0` and `::/16`-scale blunders are still caught (their IPv6 mask is below the limit).
+  This is left as-is on purpose: both notations are deprecated (RFC 7526, RFC 4291) and no trusted
+  feed emits them, so it is not a realistic human mistake.
+- Defaults are calibrated against real feeds: the widest prefix observed is `/11` for IPv4 (AWS
+  `ip-ranges.json` and Akamai) and `/24` for IPv6 (Akamai; AWS tops out at `/32`), so the `/8` and
+  `/20` defaults do not reject legitimate feeds and keep headroom above the widest real block.
+
+See [CIDRs — Breadth limit on remote sources](cidrs.md#breadth-limit-on-remote-sources) for
+the full behaviour.

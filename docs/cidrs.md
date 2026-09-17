@@ -80,6 +80,44 @@ spec:
 The GitHub Contents API returns a JSON object; use a CEL expression to decode and extract the
 list if needed.
 
+### Breadth limit on remote sources
+
+Every prefix from a remote fetch must be **no wider than a minimum mask**, per address family.
+If any entry is wider, the fetch is **rejected wholesale** — the object keeps its previous
+(last-known-good) status and the breach is logged.
+
+| Family | Default minimum mask | Rejects anything wider than |
+|---|---|---|
+| IPv4 | `/8` | ~16.7 million addresses |
+| IPv6 | `/20` | — |
+
+This is a **guardrail against human mistakes, not an attacker defence.** We trust the sources we
+fetch from (AWS, Akamai, …); a well-tailored single IP from a trusted feed is allowed by design,
+and there is no defending against a source you have chosen to trust. What it catches is the far
+more likely accident:
+
+- a source that changes format or breaks and dumps the whole address space,
+- a CEL/JSONPath expression that misfires and selects everything instead of a filtered subset,
+- a feed that is simply misconfigured to return `0.0.0.0/0` (or a broad `/1`, `/3`, …).
+
+In those cases the allowlist would silently widen to "the entire internet" and the firewall
+would effectively be off. The check turns that failure into a rejected fetch that preserves the
+last good allowlist instead.
+
+Key properties:
+
+- **Per-entry mask check.** Each prefix is compared against the minimum mask; nothing is summed.
+  This catches every single-block blunder — including the `/1`/`/3` "split" blocks, whose masks
+  are themselves too wide — but it does **not** add up coverage, so an aggregate built from many
+  individually-narrow blocks is not caught. That is an accepted trade-off for a fast, simple,
+  allocation-light check on the reconcile path.
+- **Remote sources only.** The check applies exclusively to CIDRs fetched via `location.uri`.
+  Inline `spec.cidrs` authored by a cluster admin is trusted and never limited — an admin may
+  deliberately allow `0.0.0.0/0` there.
+- **Calibrated against real feeds.** The widest prefix observed is `/11` for IPv4 (both AWS
+  `ip-ranges.json` and Akamai) and `/24` for IPv6 (Akamai; AWS tops out at `/32`). The `/8` and
+  `/20` defaults clear those with headroom while still rejecting internet-scale blocks.
+
 ## Controller flags
 
 | Flag | Default | Description |
