@@ -1193,6 +1193,60 @@ func TestReconcileHTTPRouteMergeSameNamespace(t *testing.T) {
 	assert.Equal(t, "my-gateway", policy.Spec.TargetRefs[0].Name)
 }
 
+// TestMergeOnlyRouteDoesNotEagerlyResolveCIDRs verifies that when all parentRefs lead to the
+// Istio merge path, GetCidrsFromObject is NOT called before the loop (eager, wasted resolution).
+//
+// Without the lazy-resolution fix, Reconcile calls GetCidrsFromObject unconditionally at line ~100,
+// then ApplyMerged calls it again for the same route as a sibling — two Gets for the same CIDR.
+// With the fix, the call is deferred: only ApplyMerged fetches it, so exactly one Get occurs.
+func TestMergeOnlyRouteDoesNotEagerlyResolveCIDRs(t *testing.T) {
+	clusterCIDR := &ipamv1alpha1.ClusterCIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	}
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{
+			Name: "my-svc.example.com", Namespace: "ns",
+			Annotations: map[string]string{
+				"ipam.adevinta.com/cluster-allowlist-group": "globalnet",
+				"ipam.adevinta.com/merge":                   "my-svc",
+			},
+		},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
+				{Name: "cross-ns-gw", Namespace: &gwNS},
+			}},
+			Hostnames: []gatewayApiv1.Hostname{"my-svc.example.com"},
+		},
+	}
+	gwClass := newIstioGatewayClass("istio")
+	gw := newTestGateway("cross-ns-gw", "gw-ns", "istio")
+
+	var clusterCIDRGetCount int
+	baseClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(clusterCIDR, route, gwClass, gw).Build()
+	counting := &testfunc{
+		WithWatch: baseClient,
+		getfunc: func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
+			if _, ok := obj.(*ipamv1alpha1.ClusterCIDRs); ok {
+				clusterCIDRGetCount++
+			}
+			return baseClient.Get(ctx, key, obj, opts...)
+		},
+	}
+
+	reconciler := newHTTPRouteReconciler(t, counting, extendedScheme)
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{
+		NamespacedName: client.ObjectKey{Name: "my-svc.example.com", Namespace: "ns"},
+	})
+	require.NoError(t, err)
+
+	// With lazy resolution: 1 Get — only inside ApplyMerged for the single sibling.
+	// Without the fix: 2 Gets — once eagerly before the parentRef loop, once inside ApplyMerged.
+	assert.Equal(t, 1, clusterCIDRGetCount,
+		"ClusterCIDRs must be fetched exactly once — the eager call before the parentRef loop is wasted for merge-only routes")
+}
+
 func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 	cidr := &ipamv1alpha1.CIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},

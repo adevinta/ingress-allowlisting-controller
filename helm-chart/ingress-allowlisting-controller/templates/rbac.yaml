@@ -30,6 +30,11 @@ rules:
   resources: ["networkpolicies"]
   verbs: ["list", "get", "update", "watch"]
 {{- end }}
+{{- if .Values.service.enabled }}
+- apiGroups: [""]
+  resources: ["services"]
+  verbs: ["list", "get", "update", "watch"]
+{{- end }}
 - apiGroups: [""]
   resources: ["events"]
   verbs: ["list","get", "update", "create", "watch"]

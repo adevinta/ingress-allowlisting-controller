@@ -10,6 +10,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
@@ -41,9 +42,11 @@ type mergedTuple struct {
 func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error {
 	granularityAnnotation := w.annotationPrefix + "/granularity"
 
+	cache := resolvers.NewResolutionCache()
+
 	var tuples []mergedTuple
 	for _, sibling := range siblings {
-		ips, err := w.cidrResolver.GetCidrsFromObject(ctx, sibling)
+		ips, err := w.cidrResolver.GetCidrsFromObjectWithCache(ctx, sibling, cache)
 		if err == w.cidrResolver.AnnotationNotFoundError() {
 			continue
 		}
