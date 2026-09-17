@@ -142,9 +142,10 @@ func (w *TraefikL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1
 	ownerNS := obj.GetLabels()[w.annotationPrefix+"/owner-namespace"]
 	ownerName := obj.GetLabels()[w.annotationPrefix+"/owner-name"]
 
+	// Labels are stored via LabelSafe(), so we must compare using LabelSafe() on both sides.
 	for i := range allRoutes {
 		r := &allRoutes[i]
-		if r.Namespace == ownerNS && r.Name == ownerName {
+		if LabelSafe(r.Namespace) == ownerNS && LabelSafe(r.Name) == ownerName {
 			return false
 		}
 	}
