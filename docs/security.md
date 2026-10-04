@@ -218,3 +218,38 @@ Notes:
 
 See [CIDRs — Breadth limit on remote sources](cidrs.md#breadth-limit-on-remote-sources) for
 the full behaviour.
+
+---
+
+## Resource limits on remote CIDR sources
+
+**Applies to:** `CIDRs`/`ClusterCIDRs` objects with a remote `location.uri` source.
+
+A remote fetch runs in the controller's single reconcile worker. A source that never answers,
+streams an enormous body, or is combined with a very expensive CEL expression would block every
+allowlist update in the cluster, or exhaust the pod's memory. The controller therefore applies a
+**30 s timeout** to the whole fetch, a **5 MiB cap** on the response body, and a **cost limit**
+on CEL evaluation. When one is hit, the fetch fails, the object keeps its last-known-good status,
+and the reason is shown in the object's condition. The values are configurable with the
+`--cidr-source-*` flags (Helm: `cidrSource`); see
+[CIDRs — Configuring the guardrails](cidrs.md#configuring-the-guardrails).
+
+**The limits above are guardrails, not access control.** Where `location.uri` may point is
+controlled separately:
+
+- **Destination guard (on by default).** Connections to non-public addresses — loopback, private,
+  link-local including the cloud metadata address, carrier-grade NAT — are refused, checked on the
+  address actually dialled. Use `--cidr-source-allow-private-destinations` only for feeds that are
+  really internal.
+- **Origin allowlist (optional).** `--cidr-source-allowlist` restricts fetches to the listed
+  `scheme://host[:port]` origins, with exact host matching and no wildcards. **When it is empty,
+  any public host is allowed**, and the controller logs a warning at startup. Set it to the feeds
+  you actually use.
+
+Without an allowlist, anyone who can create a `CIDRs` or `ClusterCIDRs` object can still make the
+controller request any public URL and read parts of the response through `status.cidrs`. Treat
+creating these objects as a privileged operation. See
+[CIDRs — Restricting where sources can be fetched from](cidrs.md#restricting-where-sources-can-be-fetched-from).
+
+See
+[CIDRs — Resource limits on remote sources](cidrs.md#resource-limits-on-remote-sources).

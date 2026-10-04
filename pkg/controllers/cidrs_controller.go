@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"time"
 
 	"github.com/google/cel-go/cel"
 	"github.com/google/cel-go/common/types"
@@ -38,12 +39,10 @@ type CIDRReconciler struct {
 	CIDRs              ipamv1alpha1.CIDRsGetter
 	CIDRsList          ipamv1alpha1.CIDRsGetterList
 	HTTPHeadersEnabled bool
-	// MinMaskIPv4 / MinMaskIPv6 are the widest mask an externally-fetched
-	// (HTTP-source) CIDR may use, per address family. A prefix wider than this is
-	// rejected. A non-positive value falls back to the package defaults (see
-	// cidr_breadth.go). Inline spec.cidrs authored by an admin is never checked.
-	MinMaskIPv4 int
-	MinMaskIPv6 int
+	// SourceOptions are the guardrails applied to CIDRs fetched from a remote source: breadth
+	// (minimum mask), fetch timeout, response size and CEL cost. Unset fields fall back to the
+	// defaults (see cidr_fetch_limits.go). Inline spec.cidrs authored by an admin is never checked.
+	SourceOptions CIDRSourceOptions
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
@@ -64,15 +63,18 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	status.CIDRs = specs.CIDRsSource.CIDRs
 
-	err := r.addHTTPSource(ctx, cidrs, &status)
+	fetchErr := r.addHTTPSource(ctx, cidrs, &status)
+	// retry is set when a remote source did not produce a usable list, so it is fetched again soon
+	// instead of waiting for the next watch event or resync.
+	retry := fetchErr != nil
 
-	if err != nil {
+	if fetchErr != nil {
 		status = cidrs.GetStatus()
 		status.State = ipamv1alpha1.CIDRsStateUpdateFailed
 		status.UpsertCondition(ipamv1alpha1.Condition{
 			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
 			Status:  v1.ConditionFalse,
-			Message: fmt.Sprintf("Failed to get CIDRs from http source: %v", err),
+			Message: fmt.Sprintf("Failed to get CIDRs from http source: %v", fetchErr),
 		})
 	} else {
 		status.UpsertCondition(ipamv1alpha1.Condition{
@@ -103,12 +105,26 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			Status:  v1.ConditionFalse,
 			Message: "Refusing to update removing all CIDRs",
 		})
+		// A feed that briefly returns an empty list is as much a failed fetch as an error. Inline
+		// spec.cidrs needs no retry: editing the object triggers a reconcile anyway.
+		retry = retry || specs.CIDRsSource.Location.URI != ""
 	}
 
 	cidrs.SetStatus(status)
 
 	if err := r.Status().Update(ctx, cidrs); err != nil {
 		return ctrl.Result{}, err
+	}
+
+	if retry {
+		// A failed fetch would otherwise wait for the next watch event or resync (hours), so retry
+		// it on a fixed interval: quick enough to recover from a short outage, slow enough not to
+		// hammer a broken feed. A shorter spec.requeueAfter wins.
+		after := r.SourceOptions.withDefaults().RetryInterval
+		if specs.RequeueAfter != nil && specs.RequeueAfter.Duration > 0 && specs.RequeueAfter.Duration < after {
+			after = specs.RequeueAfter.Duration
+		}
+		return ctrl.Result{RequeueAfter: after}, nil
 	}
 
 	if specs.RequeueAfter != nil && specs.RequeueAfter.Duration > 0 {
@@ -119,6 +135,11 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 }
 
 func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+	return applyProcessorWithCostLimit(reader, processing, defaultCELCostLimit)
+}
+
+// applyProcessorWithCostLimit is applyProcessor with an explicit cap on the cost of a CEL evaluation.
+func applyProcessorWithCostLimit(reader io.Reader, processing ipamv1alpha1.Processing, celCostLimit uint64) ([]string, error) {
 	// Default to YAML format if not specified (backward compatibility)
 	format := processing.Format
 	if format == "" {
@@ -131,7 +152,7 @@ func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]str
 		return processCSV(reader, processing)
 	// Handle YAML format (existing logic)
 	case ipamv1alpha1.YAML:
-		return processYAMLFormat(reader, processing)
+		return processYAMLFormat(reader, processing, celCostLimit)
 	default:
 		return nil, fmt.Errorf("unsupported format: %s", format)
 	}
@@ -170,7 +191,7 @@ func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string,
 }
 
 // processYAMLFormat handles YAML processing with optional CEL expression or JSONPath
-func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
+func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, celCostLimit uint64) ([]string, error) {
 	var data interface{}
 	err := yaml.NewDecoder(reader).Decode(&data)
 	if err != nil {
@@ -205,7 +226,7 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing) ([]
 		}
 
 		// Create the program
-		prg, err := env.Program(ast)
+		prg, err := env.Program(ast, cel.CostLimit(celCostLimit))
 		if err != nil {
 			return nil, fmt.Errorf("failed to create CEL program: %w", err)
 		}
@@ -367,7 +388,7 @@ func extractCIDRsFromCELValue(val ref.Val) ([]string, error) {
 	}
 }
 
-func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) error {
+func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) (err error) {
 	if status == nil {
 		return nil
 	}
@@ -375,8 +396,44 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if spec.CIDRsSource.Location.URI == "" {
 		return nil
 	}
-	req, err := http.NewRequest("GET", spec.CIDRsSource.Location.URI, nil)
+	// One deadline covers the whole fetch: connect, headers, reading the body and processing it
+	// (the request context also bounds body reads). Without it a slow or stalled server would hold
+	// the single reconcile worker, and with it every allowlist update, indefinitely.
+	opts := r.SourceOptions.withDefaults()
+	logCtx := ctx
+	ctx, cancel := context.WithTimeout(ctx, opts.FetchTimeout)
+	defer cancel()
+
+	// Failures caused by a guardrail or access control are logged by the files that own them (see
+	// reportPolicyDenial and reportLimitTripped), so an operator sees which control refused the
+	// source and what it was set to without opening the object. The error itself still goes to the
+	// caller, which records it in the condition and keeps the last-known-good status.
+	start := time.Now()
+	logFields := map[string]interface{}{
+		"cidrs":     cidrs.GetName(),
+		"namespace": cidrs.GetNamespace(),
+		"uri":       spec.CIDRsSource.Location.URI,
+	}
+	defer func() {
+		if err == nil {
+			return
+		}
+		if !reportPolicyDenial(logCtx, err, logFields) {
+			reportLimitTripped(logCtx, ctx, err, opts, logFields)
+		}
+	}()
+
+	req, err := http.NewRequestWithContext(ctx, "GET", spec.CIDRsSource.Location.URI, nil)
 	if err != nil {
+		return err
+	}
+	// Refuse a source that is not allowed before anything else happens — in particular before any
+	// Secret is read for headersFrom. Redirects are checked again by the client.
+	origins, err := parseAllowlist(opts.Allowlist)
+	if err != nil {
+		return err
+	}
+	if err := checkAllowed(origins, req.URL); err != nil {
 		return err
 	}
 	if r.HTTPHeadersEnabled {
@@ -385,7 +442,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 			return err
 		}
 	}
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := newSourceHTTPClient(opts, origins).Do(req)
 	if err != nil {
 		return err
 	}
@@ -394,12 +451,23 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
+	// Cap the body before any parser sees it. The overflow is checked after processing whatever the
+	// parser returned, so a truncated document can never be accepted as a complete one.
+	capped := newCappedBody(resp.Body, opts.MaxResponseBytes)
+	resp.Body = capped
+
 	body, err := getHTTPResponseBody(resp)
 	if err != nil {
+		if overflow := capped.exceeded(); overflow != nil {
+			return overflow
+		}
 		return err
 	}
 
-	cidrValues, err := applyProcessor(body, spec.CIDRsSource.Location.Processing)
+	cidrValues, err := applyProcessorWithCostLimit(body, spec.CIDRsSource.Location.Processing, opts.CELCostLimit)
+	if overflow := capped.exceeded(); overflow != nil {
+		return overflow
+	}
 	if err != nil {
 		return err
 	}
@@ -411,13 +479,15 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	// misconfiguration produced a prefix wider than the minimum mask (e.g. a
 	// stray 0.0.0.0/0). An admin may still allow 0.0.0.0/0 inline. Returning an
 	// error here preserves the last-known-good status.
-	if err := guardExternalBreadth(cidrValues, r.MinMaskIPv4, r.MinMaskIPv6); err != nil {
+	if err := guardExternalBreadth(cidrValues, opts.MinMaskIPv4, opts.MinMaskIPv6); err != nil {
 		log.DefaultLogger.WithContext(ctx).
 			WithField("cidrs", cidrs.GetName()).
 			WithField("uri", spec.CIDRsSource.Location.URI).
 			Error(err, "rejecting external CIDR source: coverage too broad, keeping last-known-good allowlist")
 		return err
 	}
+
+	logFetchCompleted(logCtx, logFields, capped, time.Since(start), len(cidrValues))
 
 	status.CIDRs = append(status.CIDRs, cidrValues...)
 

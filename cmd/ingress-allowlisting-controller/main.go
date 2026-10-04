@@ -20,6 +20,7 @@ import (
 	"context"
 	"flag"
 	"fmt"
+	"strings"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -65,23 +66,54 @@ func main() {
 	var as string
 	var annotationPrefix string
 	var httpHeadersEnabled bool
+	cidrSource := controllers.DefaultCIDRSourceOptions()
+	var allowlist stringListFlag
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
-	flag.BoolVar(&gatewaySupportEnabled, "gateway-support-enabled", false, "Enable gateway support for the controller")
-	flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
-	flag.BoolVar(&serviceSupportEnabled, "service-support-enabled", false, "Enable Service loadBalancerSourceRanges support for the controller")
-	flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
-	flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
-	flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
 	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
-	flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
+	flagGroup("CIDRs / ClusterCIDRs", func() {
+		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
+		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
+		flag.IntVar(&cidrSource.MinMaskIPv4, "cidr-source-min-mask-ipv4", cidrSource.MinMaskIPv4, "Widest IPv4 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-32.")
+		flag.IntVar(&cidrSource.MinMaskIPv6, "cidr-source-min-mask-ipv6", cidrSource.MinMaskIPv6, "Widest IPv6 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-128.")
+		flag.DurationVar(&cidrSource.FetchTimeout, "cidr-source-fetch-timeout", cidrSource.FetchTimeout, "Maximum time for fetching and processing one remote CIDR source (connect, response headers, body and processing).")
+		flag.Int64Var(&cidrSource.MaxResponseBytes, "cidr-source-max-response-bytes", cidrSource.MaxResponseBytes, "Maximum size in bytes of a remote CIDR source response body. A larger response fails the fetch; it is never truncated.")
+		flag.Uint64Var(&cidrSource.CELCostLimit, "cidr-source-cel-cost-limit", cidrSource.CELCostLimit, "Maximum estimated cost of one CEL expression evaluated on a remote CIDR source. Exceeding it fails the fetch.")
+		flag.DurationVar(&cidrSource.RetryInterval, "cidr-source-retry-interval", cidrSource.RetryInterval, "How soon a failed remote CIDR source fetch is retried. An object with a shorter spec.requeueAfter is retried at that interval instead.")
+		flag.Var(&allowlist, "cidr-source-allowlist", "Origin a remote CIDR source may be fetched from, as scheme://host[:port]; a bare host[:port] means https. Repeat the flag or comma-separate to allow several (e.g. https://ip-ranges.amazonaws.com,http://ip-ranges.amazonaws.com). Exact host match: no wildcards, no path or prefix matching. Redirect targets are checked too. When empty, any host is allowed (a warning is logged at startup).")
+		flag.BoolVar(&cidrSource.AllowPrivateDestinations, "cidr-source-allow-private-destinations", cidrSource.AllowPrivateDestinations, "Allow remote CIDR sources to connect to non-public addresses (loopback, link-local incl. cloud metadata, private, CGNAT). By default such connections are refused. Enable only for feeds that are really internal.")
+	})
+	flagGroup("Gateway (Istio)", func() {
+		flag.BoolVar(&gatewaySupportEnabled, "gateway-support-enabled", false, "Enable gateway support for the controller")
+	})
+	flagGroup("HTTPRoute (Istio / Traefik)", func() {
+		flag.BoolVar(&httpRouteSupportEnabled, "httproute-support-enabled", false, "Enable HTTPRoute support for the controller")
+		flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
+	})
+	flagGroup("Ingress (nginx)", func() {
+		flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
+	})
+	flagGroup("NetworkPolicy", func() {
+		flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
+	})
+	flagGroup("Service (LoadBalancer)", func() {
+		flag.BoolVar(&serviceSupportEnabled, "service-support-enabled", false, "Enable Service loadBalancerSourceRanges support for the controller")
+	})
+	flag.Usage = func() { printUsage(flag.CommandLine, flagGroups) }
 	flag.Parse()
+	cidrSource.Allowlist = allowlist
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
+
+	if err := cidrSource.Validate(); err != nil {
+		setupLog.Fatal(err, " <- invalid --cidr-source-* flags, fix them and restart")
+	}
+	// These are protections: loosening them widens the blast radius of a broken feed, so the
+	// effective values (and warnings about permissive ones) are always in the startup log.
+	cidrSource.LogEffective()
 
 	var err error
 	scheme, err := controllers.Scheme(legacyGroupVersion)
@@ -145,7 +177,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled, cidrSource); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 
@@ -154,6 +186,20 @@ func main() {
 	if err := mgr.Start(ctx); err != nil {
 		setupLog.Fatal(err, "problem running manager")
 	}
+}
+
+// stringListFlag is a flag that can be repeated and also accepts comma-separated values.
+type stringListFlag []string
+
+func (f *stringListFlag) String() string { return strings.Join(*f, ",") }
+
+func (f *stringListFlag) Set(value string) error {
+	for _, part := range strings.Split(value, ",") {
+		if part = strings.TrimSpace(part); part != "" {
+			*f = append(*f, part)
+		}
+	}
+	return nil
 }
 
 func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, serviceEnabled, httpRouteEnabled, httpHeadersEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {

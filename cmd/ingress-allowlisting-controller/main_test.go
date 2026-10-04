@@ -82,7 +82,7 @@ func installAllowlistingController(ctx context.Context, t *testing.T, k8sClient 
 
 func startMain(t *testing.T, legacyGroupVersion, as string) {
 	t.Helper()
-	os.Args = []string{"ingress-allowlisting-controller", "--legacy-group-version", legacyGroupVersion, "--as", as}
+	os.Args = []string{"ingress-allowlisting-controller", "--legacy-group-version", legacyGroupVersion, "--as", as, "--cidr-source-allow-private-destinations"} // the remote-CIDRs test serves from 127.0.0.1
 	go func() {
 		main()
 	}()
