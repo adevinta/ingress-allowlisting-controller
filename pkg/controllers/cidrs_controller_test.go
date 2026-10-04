@@ -376,6 +376,7 @@ func TestCIDRsReconcileFromHTTP(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs, secret).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
+		SourceOptions:      CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
 		CIDRs:              &ipamv1alpha1.CIDRs{},
 		CIDRsList:          &ipamv1alpha1.CIDRsList{},
 		Client:             fakeClient,
@@ -425,9 +426,10 @@ func TestCIDRsReconcileFromGitHubBase64HTTPResponse(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -472,9 +474,10 @@ func TestCIDRsReconcileFromGitHubNilEncodingHTTPResponse(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -520,9 +523,10 @@ func TestCIDRsReconcileFromGitHubPlainTextHTTPResponse(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -560,9 +564,10 @@ func TestCIDRsReconcileFromCSV(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -600,9 +605,10 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -640,9 +646,10 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -681,9 +688,10 @@ func TestCIDRsReconcileFromCSVWithBOM(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -721,9 +729,10 @@ func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -769,14 +778,15 @@ func TestCIDRsReconcileFromGitHubInvalidEncodingHTTPResponse(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
 	require.NoError(t, err)
-	require.Equal(t, result, reconcile.Result{})
+	require.Equal(t, reconcile.Result{RequeueAfter: defaultRetryInterval}, result, "a failed fetch is retried")
 
 	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
 
@@ -808,9 +818,10 @@ func TestCIDRsReconcileFromAWSRules(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
@@ -850,14 +861,15 @@ func TestCIDRsReconcileFromHTTPWhenGetFails(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		CIDRs:         &ipamv1alpha1.CIDRs{},
+		CIDRsList:     &ipamv1alpha1.CIDRsList{},
+		Client:        fakeClient,
 	}
 
 	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
 	require.NoError(t, err)
-	require.Equal(t, result, reconcile.Result{})
+	require.Equal(t, reconcile.Result{RequeueAfter: defaultRetryInterval}, result, "a failed fetch is retried")
 
 	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
 
@@ -904,6 +916,7 @@ func TestCIDRsReconcileFromHTTPDoesNotReadSecretsWhenHeadersDisabled(t *testing.
 	}
 	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs, secret).WithStatusSubresource(cidrs).Build()
 	reconciler := &CIDRReconciler{
+		SourceOptions:      CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
 		CIDRs:              &ipamv1alpha1.CIDRs{},
 		CIDRsList:          &ipamv1alpha1.CIDRsList{},
 		Client:             fakeClient,
@@ -945,7 +958,8 @@ func TestUpdateClientHeaders(t *testing.T) {
 	}
 	fakeClient := fake.NewClientBuilder().WithObjects(cm, secret).Build()
 	reconciler := &CIDRReconciler{
-		Client: fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // tests fetch from 127.0.0.1
+		Client:        fakeClient,
 	}
 
 	t.Run("When the referenced secret does not exist", func(t *testing.T) {

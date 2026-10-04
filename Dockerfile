@@ -11,7 +11,7 @@ COPY cmd/ cmd/
 COPY pkg/ pkg/
 
 # Build
-RUN CGO_ENABLED=0 go build -a -o manager cmd/ingress-allowlisting-controller/main.go
+RUN CGO_ENABLED=0 go build -a -o manager ./cmd/ingress-allowlisting-controller
 
 FROM ubuntu as ca-certificates
 
