@@ -21,11 +21,11 @@ test: generate fmt vet manifests
 
 # Build manager binary
 manager: generate fmt vet
-	go build -o bin/manager cmd/ingress-allowlisting-controller/main.go
+	go build -o bin/manager ./cmd/ingress-allowlisting-controller
 
 # Run against the configured Kubernetes cluster in ~/.kube/config
 run: generate fmt vet manifests
-	go run ./cmd/ingress-allowlisting-controller/main.go
+	go run ./cmd/ingress-allowlisting-controller
 
 # Install CRDs into a cluster
 install: manifests
