@@ -3,13 +3,16 @@ image:
   fullyQualifiedURL: ghcr.io/adevinta/ingress-allowlisting-controller:de26113a795d2b7b4f9011ebf2c68a08117b613e
 
 pullPolicy: IfNotPresent
+# Memory: a remote CIDR source needs roughly 25-30x its body size while it is decoded and
+# processed (the AWS ip-ranges.json feed, ~2.7 MB, needs ~50 MiB on top of the baseline).
+# 256Mi fits the default cidrSource.maxResponseBytes (5 MiB); raise both together.
 resources:
   limits:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi
   requests:
     cpu: 100m
-    memory: 128Mi
+    memory: 256Mi
 
 vpa:
   updateMode: "Recreate"
@@ -19,7 +22,7 @@ vpa:
       memory: "1Gi"
     minAllowed:
       cpu: 100m
-      memory: 128M
+      memory: 256Mi   # below this a remote source at the default size cap can OOM the pod
 
 ingress:
   enabled: true
@@ -51,3 +54,25 @@ legacyGroupVersion: ""
 annotationPrefix: "ipam.adevinta.com"
 httpHeadersEnabled: true
 secretLabelSelector: ""
+
+# Guardrails for CIDRs/ClusterCIDRs fetched from a remote source (spec.cidrsSource.location.uri).
+# Every key is optional: leave it unset to use the controller default shown here. These are
+# protections, so raising a value widens the blast radius of a broken or misbehaving feed.
+# They never apply to inline spec.cidrs.
+cidrSource: {}
+  # minMaskIPv4: 8                # widest IPv4 prefix accepted (1-32); wider prefixes reject the fetch
+  # minMaskIPv6: 20               # widest IPv6 prefix accepted (1-128)
+  # fetchTimeout: 30s             # whole fetch: connect, headers, body and processing
+  # maxResponseBytes: 5242880     # 5 MiB; a larger body fails the fetch (never truncated).
+  #                               # Needs ~25-30x in pod memory: raise resources.limits.memory with it
+  # celCostLimit: 1000000         # max estimated cost of one CEL evaluation
+  # retryInterval: 5m             # how soon a failed fetch is retried (a shorter requeueAfter wins)
+  #
+  # Where a source may be fetched from. Both are about the SSRF exposure of `location.uri`:
+  # allowlist:                      # origins a source may be fetched from, scheme://host[:port]
+  #   - https://ip-ranges.amazonaws.com   # bare "host" means https; list http:// separately if needed
+  #   - https://api.github.com            # exact host match: no wildcards, no path/prefix matching
+  #                                       # empty (default) = ANY host allowed; the controller logs a warning
+  # allowPrivateDestinations: false # default false: connections to loopback, link-local (cloud
+  #                                 # metadata), private and CGNAT addresses are refused. Set true
+  #                                 # only for feeds that are really internal.

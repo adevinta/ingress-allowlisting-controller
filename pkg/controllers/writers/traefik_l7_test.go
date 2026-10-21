@@ -257,6 +257,31 @@ func TestTraefikL7Writer_IsOrphaned(t *testing.T) {
 	assert.True(t, w.IsOrphaned(mw, []gatewayApiv1.HTTPRoute{}), "should be orphaned when no routes exist")
 }
 
+// TestTraefikL7Writer_IsOrphaned_LongName verifies that a live route whose name exceeds the
+// 63-character label limit is NOT treated as orphaned. Owner labels are written through
+// LabelSafe() (which truncates and hashes names over 63 chars), so IsOrphaned must compare
+// using LabelSafe() on both sides — otherwise a live route's Middleware is wrongly deleted.
+// HTTPRoute names may be up to 253 characters, so this is reachable in normal use.
+func TestTraefikL7Writer_IsOrphaned_LongName(t *testing.T) {
+	routeName := "my-really-long-httproute-name-that-definitely-exceeds-the-sixty-three-character-label-limit"
+	route := testTraefikRoute(routeName, "mynamespace")
+	gw := testTraefikGateway("my-gateway", "mynamespace")
+	k8sClient := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(route).Build()
+	w := newTraefikWriter(k8sClient)
+
+	// Apply writes the owner labels via LabelSafe().
+	err := w.Apply(context.Background(), traefikScheme, route, gw, []string{"10.0.0.0/8"}, nil, nil)
+	assert.NoError(t, err)
+
+	mw := &TraefikMiddleware{}
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: routeName, Namespace: "mynamespace"}, mw)
+	assert.NoError(t, err)
+
+	// The owner route still exists, so its Middleware must not be considered orphaned.
+	assert.False(t, w.IsOrphaned(mw, []gatewayApiv1.HTTPRoute{*route}),
+		"live route %q must not be treated as orphaned", routeName)
+}
+
 // TestTraefikL7Writer_DoesNotImplementMerge verifies TraefikL7Writer does not satisfy MergeableL7PolicyWriter.
 func TestTraefikL7Writer_DoesNotImplementMerge(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(traefikScheme).Build()

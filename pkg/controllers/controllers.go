@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"strings"
+	"fmt"
 
 	"github.com/go-logr/logr"
 	log "github.com/adevinta/go-log-toolkit"
@@ -65,7 +66,14 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool) error {
+func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
+	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops
+	// startup instead of silently weakening (or disabling) a protection.
+	cidrSource = cidrSource.withDefaults()
+	if err := cidrSource.Validate(); err != nil {
+		return fmt.Errorf("invalid CIDR source options: %w", err)
+	}
+
 	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
 
 	if ingressSupportEnabled {
@@ -84,6 +92,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		CIDRs:              &ipamv1alpha1.CIDRs{},
 		CIDRsList:          &ipamv1alpha1.CIDRsList{},
 		HTTPHeadersEnabled: httpHeadersEnabled,
+		SourceOptions:      cidrSource,
 	}).SetupWithManager(mgr, namePrefix); err != nil {
 		return &setupError{error: err, controllerType: "CIDRs"}
 	}
@@ -92,6 +101,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		CIDRs:              &ipamv1alpha1.ClusterCIDRs{},
 		CIDRsList:          &ipamv1alpha1.ClusterCIDRsList{},
 		HTTPHeadersEnabled: httpHeadersEnabled,
+		SourceOptions:      cidrSource,
 	}).SetupWithManager(mgr, namePrefix); err != nil {
 		return &setupError{error: err, controllerType: "ClusterCIDRs"}
 	}
@@ -102,6 +112,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 			CIDRs:              &ipamv1alpha1_legacy.CIDRs{},
 			CIDRsList:          &ipamv1alpha1_legacy.CIDRsList{},
 			HTTPHeadersEnabled: httpHeadersEnabled,
+			SourceOptions:      cidrSource,
 		}).SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "LegacyCIDRs"}
 		}
@@ -110,6 +121,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 			CIDRs:              &ipamv1alpha1_legacy.ClusterCIDRs{},
 			CIDRsList:          &ipamv1alpha1_legacy.ClusterCIDRsList{},
 			HTTPHeadersEnabled: httpHeadersEnabled,
+			SourceOptions:      cidrSource,
 		}).SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "LegacyClusterCIDRs"}
 		}
