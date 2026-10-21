@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"reflect"
-	"strings"
 
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -15,11 +14,9 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
-	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
 type NetworkPolicyReconciler struct {
@@ -158,29 +155,5 @@ func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix 
 }
 
 func newNetworkPoliciesFromCIDRFuncMap(c client.Client, annotation string) handler.MapFunc {
-	return func(ctx context.Context, cidr client.Object) []reconcile.Request {
-		networkpolicies := &netv1.NetworkPolicyList{}
-		options := client.ListOptions{
-			Namespace: cidr.GetNamespace(),
-		}
-		err := c.List(context.Background(), networkpolicies, &options)
-		if err != nil {
-			return []reconcile.Request{}
-		}
-		var requests []reconcile.Request
-		for _, np := range networkpolicies.Items {
-			val, ok := np.Annotations[annotation]
-			if !ok {
-				continue
-			}
-			cidrsFound := map[string]struct{}{}
-			for _, cidr := range strings.Split(val, ",") {
-				cidrsFound[strings.TrimSpace(cidr)] = struct{}{}
-			}
-			if _, found := cidrsFound[cidr.GetName()]; found {
-				requests = append(requests, reconcile.Request{NamespacedName: types.NamespacedName{Namespace: np.Namespace, Name: np.Name}})
-			}
-		}
-		return requests
-	}
+	return newObjectsFromCIDRFuncMap(c, func() client.ObjectList { return &netv1.NetworkPolicyList{} }, annotation)
 }
