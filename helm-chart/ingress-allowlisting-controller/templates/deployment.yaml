@@ -64,6 +64,40 @@ spec:
 {{- if and .Values.httpHeadersEnabled .Values.secretLabelSelector }}
         - "--secret-label-selector={{ .Values.secretLabelSelector }}"
 {{- end }}
+{{- with .Values.cidrSource }}
+{{- with .minMaskIPv4 }}
+        - "--cidr-source-min-mask-ipv4={{ . | int }}"
+{{- end }}
+{{- with .minMaskIPv6 }}
+        - "--cidr-source-min-mask-ipv6={{ . | int }}"
+{{- end }}
+{{- with .fetchTimeout }}
+        - "--cidr-source-fetch-timeout={{ . }}"
+{{- end }}
+{{- with .maxResponseBytes }}
+        - "--cidr-source-max-response-bytes={{ . | int64 }}"
+{{- end }}
+{{- with .celCostLimit }}
+        - "--cidr-source-cel-cost-limit={{ . | int64 }}"
+{{- end }}
+{{- with .retryInterval }}
+        - "--cidr-source-retry-interval={{ . }}"
+{{- end }}
+{{- range .allowlist }}
+        - "--cidr-source-allowlist={{ . }}"
+{{- end }}
+{{- if .allowPrivateDestinations }}
+        - "--cidr-source-allow-private-destinations"
+{{- end }}
+{{- end }}
+        env:
+        # Lets the Go GC work harder as the heap nears the container limit instead of being
+        # OOM-killed while a large remote CIDR source is being processed. Without a memory limit it
+        # resolves to the node's allocatable memory.
+        - name: GOMEMLIMIT
+          valueFrom:
+            resourceFieldRef:
+              resource: limits.memory
         ports:
         - containerPort: 8080
         resources:
