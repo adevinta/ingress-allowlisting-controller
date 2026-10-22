@@ -112,6 +112,14 @@ controller startup.
 
 **Multiple gateways**: one AP is created per parentRef, each prefixed with the gateway name.
 
+**`hostnames` is required.** An HTTPRoute without `hostnames` gets no AP, with or without
+paths, and an AP created for it earlier is deleted. Such an AP would have no `to.hosts`, and
+paths alone don't limit it to a host. It would allow the route's CIDRs on every host of the
+gateway, including hosts of other routes and namespaces. The controller logs a warning on each
+reconcile of such a route. In merge mode, the route is left out of the merged AP, and the rest
+of the group still applies. If the route's AP was the only ALLOW policy on that gateway, removing
+it puts the gateway back to Istio's default, which allows all traffic.
+
 ### Granularity
 
 By default one AP is created per HTTPRoute rule (per path set). Use the

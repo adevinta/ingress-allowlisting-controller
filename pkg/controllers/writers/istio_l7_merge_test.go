@@ -554,3 +554,71 @@ func TestDeleteMerged_KeepsForeignPolicy(t *testing.T) {
 		})
 	}
 }
+
+// TestApplyMerged_SkipsSiblingWithoutHostnames verifies that a sibling without hostnames is left
+// out of the merged AP (its rule would have no `to.hosts` and cover every host of the gateway),
+// while the rest of the group still gets its rules.
+func TestApplyMerged_SkipsSiblingWithoutHostnames(t *testing.T) {
+	cidr0 := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
+	cidr1 := testCIDRs("allowlist", "ns-b", "0.0.0.0/0")
+	route0 := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	route0.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	hostless := testRoute("no-hosts", "ns-b")
+	hostless.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	gw := testGateway("my-gw", "gw-ns")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+		WithObjects(cidr0, cidr1, route0, hostless, gw).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route0, hostless}, "shared-service"))
+
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy))
+	assert.Equal(t, []string{"1.2.3.4/32"}, allPolicyCIDRs(policy), "the hostless sibling's CIDRs must not be in the AP")
+	for _, rule := range policy.Spec.Rules {
+		assert.NotEmpty(t, rule.To, "every rule must be scoped to hosts")
+	}
+}
+
+// TestApplyMerged_DeletesPolicyWhenOnlyHostlessSiblingsLeft verifies that a merged AP written
+// before (e.g. a catch-all from an older version) is removed once only hostless siblings remain.
+func TestApplyMerged_DeletesPolicyWhenOnlyHostlessSiblingsLeft(t *testing.T) {
+	cidrs := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
+	route := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	route.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	gw := testGateway("my-gw", "gw-ns")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+		WithObjects(cidrs, route, gw).Build()
+	w := newIstioL7Writer(k8sClient)
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route}, "shared-service"))
+
+	hostless := route.DeepCopy()
+	hostless.Spec.Hostnames = nil
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{hostless}, "shared-service"))
+
+	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted, got %v", err)
+}
+
+// TestIsOrphaned_RouteWithoutHostnames verifies that the cleanup treats a per-route AP as orphaned
+// once its route has no hostnames, since Apply no longer produces one for it.
+func TestIsOrphaned_RouteWithoutHostnames(t *testing.T) {
+	route := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	route.Spec.ParentRefs = []gatewayApiv1.ParentReference{{Name: "my-gw"}}
+	w := newIstioL7Writer(fake.NewClientBuilder().WithScheme(istioL7Scheme).Build())
+
+	targets := w.policyTargetsForRoute(route)
+	require.Len(t, targets, 1)
+	ap := existingPolicy(targets[0].name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
+		"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+		"ipam.adevinta.com/owner-namespace": "ns-a",
+		"ipam.adevinta.com/owner-name":      "svc-a",
+	})
+	ap.Namespace = targets[0].namespace
+	require.False(t, w.IsOrphaned(ap, []gatewayApiv1.HTTPRoute{*route}), "precondition: route with hostnames owns its AP")
+
+	route.Spec.Hostnames = nil
+	assert.True(t, w.IsOrphaned(ap, []gatewayApiv1.HTTPRoute{*route}))
+}

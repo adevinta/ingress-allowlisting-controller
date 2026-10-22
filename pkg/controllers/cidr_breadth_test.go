@@ -22,7 +22,7 @@ func TestGuardExternalBreadth_AllowsRealFeedMasks(t *testing.T) {
 // TestGuardExternalBreadth_AllowsTypicalAllowlist verifies ordinary narrow allowlists pass.
 func TestGuardExternalBreadth_AllowsTypicalAllowlist(t *testing.T) {
 	assert.NoError(t, guardExternalBreadth([]string{
-		"10.0.0.0/8",     // exactly at the v4 limit
+		"10.0.0.0/8", // exactly at the v4 limit
 		"192.168.0.0/16",
 		"203.0.113.5/32",
 		"2001:db8::/48",
@@ -103,8 +103,8 @@ func TestPrefixLen(t *testing.T) {
 		{"2001:db8::/48", 48, false, true},
 		{"::/0", 0, false, true},
 		{"2001:db8::1", 128, false, true},
-		{"::ffff:0.0.0.0/96", 0, true, true},    // mapped: all of IPv4 → /0 in v4 space
-		{"::ffff:10.0.0.0/104", 8, true, true},  // mapped: /8 in v4 space
+		{"::ffff:0.0.0.0/96", 0, true, true},   // mapped: all of IPv4 → /0 in v4 space
+		{"::ffff:10.0.0.0/104", 8, true, true}, // mapped: /8 in v4 space
 		{"garbage", 0, false, false},
 	}
 	for _, c := range cases {

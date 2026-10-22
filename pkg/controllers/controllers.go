@@ -2,11 +2,11 @@ package controllers
 
 import (
 	"context"
-	"strings"
 	"fmt"
+	"strings"
 
-	"github.com/go-logr/logr"
 	log "github.com/adevinta/go-log-toolkit"
+	"github.com/go-logr/logr"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	"k8s.io/apimachinery/pkg/api/meta"
