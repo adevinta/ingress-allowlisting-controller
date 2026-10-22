@@ -1,0 +1,9 @@
+{{- /*
+legacyGroupVersion used to render copies of the CIDRs/ClusterCIDRs CRDs under a second API group
+from this chart's templates. Support for it was removed. Rendering without that template would make
+helm upgrade delete those CRDs, and every object in them, so refuse to render until the value is
+unset on purpose.
+*/ -}}
+{{- if .Values.legacyGroupVersion }}
+{{- fail (printf "legacyGroupVersion (%s) is no longer supported. Upgrading would delete the legacy CIDRs/ClusterCIDRs CRDs and every object in them. Move the objects to ipam.adevinta.com, then unset legacyGroupVersion." .Values.legacyGroupVersion) }}
+{{- end }}

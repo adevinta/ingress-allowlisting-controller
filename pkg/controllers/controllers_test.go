@@ -13,13 +13,11 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers"
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	netv1 "k8s.io/api/networking/v1"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	"k8s.io/apimachinery/pkg/api/meta"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
@@ -162,65 +160,8 @@ func (c *testCache) IndexField(ctx context.Context, obj client.Object, field str
 	return errors.New("IndexField not implemented")
 }
 
-func TestLegacyWorks(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
-	require.NoError(t, err)
-
-	cidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "brand-new-cidr", Namespace: "test"},
-		Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}}},
-	}
-	legacycidrs := &ipamv1alpha1_legacy.CIDRs{
-		CIDRs: ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "legacy-cidr", Namespace: "test"},
-			Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"192.168.0.0/24", "172.16.0.0/24", "10.0.0.0/24"}}},
-		},
-	}
-
-	clustercidrs := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "brand-new-cluster-cidr"},
-		Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}}},
-	}
-	legacyclustercidrs := &ipamv1alpha1_legacy.ClusterCIDRs{
-		ClusterCIDRs: ipamv1alpha1.ClusterCIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "legacy-cluster-cidr"},
-			Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"192.168.0.0/24", "172.16.0.0/24", "10.0.0.0/24"}}},
-		},
-	}
-
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, legacycidrs, clustercidrs, legacyclustercidrs).Build()
-
-	readCidr := &ipamv1alpha1.CIDRs{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "brand-new-cidr", Namespace: "test"}, readCidr)
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, readCidr.Spec.CIDRsSource.CIDRs, cidrs.Spec.CIDRsSource.CIDRs)
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-cidr", Namespace: "test"}, readCidr)
-	assert.True(t, apierrors.IsNotFound(err))
-
-	readClusterCidr := &ipamv1alpha1.ClusterCIDRs{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "brand-new-cluster-cidr"}, readClusterCidr)
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, readClusterCidr.Spec.CIDRsSource.CIDRs, clustercidrs.Spec.CIDRsSource.CIDRs)
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-cluster-cidr"}, readClusterCidr)
-	assert.True(t, apierrors.IsNotFound(err))
-
-	readLegCidr := &ipamv1alpha1_legacy.CIDRs{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "brand-new-cidr", Namespace: "test"}, readLegCidr)
-	assert.True(t, apierrors.IsNotFound(err))
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-cidr", Namespace: "test"}, readLegCidr)
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, readLegCidr.Spec.CIDRsSource.CIDRs, legacycidrs.Spec.CIDRsSource.CIDRs)
-
-	readLegClusterCidr := &ipamv1alpha1_legacy.ClusterCIDRs{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "brand-new-cluster-cidr"}, readLegClusterCidr)
-	assert.True(t, apierrors.IsNotFound(err))
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "legacy-cluster-cidr"}, readLegClusterCidr)
-	assert.NoError(t, err)
-	assert.ElementsMatch(t, readLegClusterCidr.Spec.CIDRsSource.CIDRs, legacyclustercidrs.Spec.CIDRsSource.CIDRs)
-}
-
 func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
+	extendedScheme, err := controllers.Scheme()
 	assert.NoError(t, err)
 
 	currentNamespaceName := "namespace-" + uuid.New().String()[:8]
@@ -257,7 +198,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, "", t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -300,7 +241,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 }
 
 func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
+	extendedScheme, err := controllers.Scheme()
 	assert.NoError(t, err)
 
 	cidrs := &ipamv1alpha1.ClusterCIDRs{
@@ -329,7 +270,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, "", t.Name(), "legacy.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, t.Name(), "custom.example.com", true, controllers.DefaultCIDRSourceOptions()))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -359,7 +300,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 }
 
 func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
+	extendedScheme, err := controllers.Scheme()
 	assert.NoError(t, err)
 
 	currentNamespaceName := "namespace-" + uuid.New().String()[:8]
@@ -403,7 +344,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -454,7 +395,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 }
 
 func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("")
+	extendedScheme, err := controllers.Scheme()
 	require.NoError(t, err)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).Build()
@@ -474,7 +415,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, "", t.Name(), "ipam.adevinta.com", false, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, t.Name(), "ipam.adevinta.com", false, controllers.DefaultCIDRSourceOptions()))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -505,7 +446,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 }
 
 func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("")
+	extendedScheme, err := controllers.Scheme()
 	require.NoError(t, err)
 
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).Build()
@@ -525,7 +466,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, "", t.Name(), "ipam.adevinta.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, t.Name(), "ipam.adevinta.com", true, controllers.DefaultCIDRSourceOptions()))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -552,7 +493,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 }
 
 func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
-	extendedScheme, err := controllers.Scheme("legacy.ipam.com/v1alpha1")
+	extendedScheme, err := controllers.Scheme()
 	assert.NoError(t, err)
 
 	currentNamespaceName := "namespace-" + uuid.New().String()[:8]
@@ -596,7 +537,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, "legacy.ipam.com/v1alpha1", t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))

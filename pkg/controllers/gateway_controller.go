@@ -14,18 +14,16 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
 type GatewayAllowlistingReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	LegacyGroupVersion string
-	Prefix             string
-	CidrResolver       resolvers.CidrResolver
-	L4Writers          writers.L4WriterRegistry
+	Scheme       *runtime.Scheme
+	Prefix       string
+	CidrResolver resolvers.CidrResolver
+	L4Writers    writers.L4WriterRegistry
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
@@ -101,10 +99,6 @@ func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nameP
 			handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-gateway")
-	}
-	if r.LegacyGroupVersion != "" {
-		build = build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
-			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newGatewaysFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
 }

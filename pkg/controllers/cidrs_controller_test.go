@@ -23,7 +23,7 @@ import (
 
 func TestReconcileDoesNotFullyRemoveCIDRs(t *testing.T) {
 	ctx := context.TODO()
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 	cidrs := &ipamv1alpha1.CIDRs{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: "mynamespace"},
@@ -63,7 +63,7 @@ func TestReconcileDoesNotFullyRemoveCIDRs(t *testing.T) {
 
 func TestCIDRsReconciler(t *testing.T) {
 	ctx := context.TODO()
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 	cidrs := &ipamv1alpha1.CIDRs{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: "mynamespace"},
@@ -341,7 +341,7 @@ func testJSONPathBackwardCompatibility(t *testing.T, serialize func(*testing.T, 
 func TestCIDRsReconcileFromHTTP(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -395,7 +395,7 @@ func TestCIDRsReconcileFromHTTP(t *testing.T) {
 func TestCIDRsReconcileFromGitHubBase64HTTPResponse(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -444,7 +444,7 @@ func TestCIDRsReconcileFromGitHubBase64HTTPResponse(t *testing.T) {
 func TestCIDRsReconcileFromGitHubNilEncodingHTTPResponse(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -492,7 +492,7 @@ func TestCIDRsReconcileFromGitHubNilEncodingHTTPResponse(t *testing.T) {
 func TestCIDRsReconcileFromGitHubPlainTextHTTPResponse(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -541,7 +541,7 @@ func TestCIDRsReconcileFromGitHubPlainTextHTTPResponse(t *testing.T) {
 func TestCIDRsReconcileFromCSV(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -582,7 +582,7 @@ func TestCIDRsReconcileFromCSV(t *testing.T) {
 func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -623,7 +623,7 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -664,7 +664,7 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 func TestCIDRsReconcileFromCSVWithBOM(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Akamai-style CSV: UTF-8 BOM at the start, trailing spaces, CRLF line endings.
@@ -706,7 +706,7 @@ func TestCIDRsReconcileFromCSVWithBOM(t *testing.T) {
 func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -747,7 +747,7 @@ func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 func TestCIDRsReconcileFromGitHubInvalidEncodingHTTPResponse(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -802,7 +802,7 @@ func TestCIDRsReconcileFromGitHubInvalidEncodingHTTPResponse(t *testing.T) {
 func TestCIDRsReconcileFromAWSRules(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	cidrs := &ipamv1alpha1.CIDRs{
@@ -836,7 +836,7 @@ func TestCIDRsReconcileFromAWSRules(t *testing.T) {
 func TestCIDRsReconcileFromHTTPWhenGetFails(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	// Mock HTTP server
@@ -888,7 +888,7 @@ func TestCIDRsReconcileFromHTTPWhenGetFails(t *testing.T) {
 func TestCIDRsReconcileFromHTTPDoesNotReadSecretsWhenHeadersDisabled(t *testing.T) {
 	ctx := context.TODO()
 	testNamespaceName := "mynamespace"
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	headersReceived := http.Header{}
@@ -1197,7 +1197,7 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 		})
 	})
 	t.Run("when using a configmap reference", func(t *testing.T) {
-		scheme, err := Scheme("")
+		scheme, err := Scheme()
 		require.NoError(t, err)
 		cidrs := newCIDRBuilder(&ipamv1alpha1.CIDRs{}).
 			withName("cidr-with-configmap-ref").
@@ -1218,7 +1218,7 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 
 func testCaseObjectRefToCIDRsMapper(t *testing.T, cidrsList ipamv1alpha1.CIDRsGetterList, objects []client.Object, secretNamespace, secretName string, expectedRequestKeys []client.ObjectKey) {
 	t.Helper()
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 	k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(
 		objects...,

@@ -10,7 +10,6 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -21,9 +20,8 @@ import (
 
 type NetworkPolicyReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	LegacyGroupVersion string
-	CidrResolver       resolvers.CidrResolver
+	Scheme       *runtime.Scheme
+	CidrResolver resolvers.CidrResolver
 }
 
 var ErrMultipleRulesNotSupported = errors.New("Networkpolicy with multiple egress or ingress rules is not supported")
@@ -146,10 +144,6 @@ func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix 
 			handler.EnqueueRequestsFromMapFunc(newNetworkPoliciesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-networkpolicy")
-	}
-	if r.LegacyGroupVersion != "" {
-		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newNetworkPoliciesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
-			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newNetworkPoliciesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
 }

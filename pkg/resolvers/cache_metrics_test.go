@@ -5,7 +5,6 @@ import (
 	"testing"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	"github.com/stretchr/testify/assert"
@@ -13,10 +12,8 @@ import (
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
-	"k8s.io/apimachinery/pkg/runtime/schema"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
-	ctrlscheme "sigs.k8s.io/controller-runtime/pkg/scheme"
 )
 
 var cacheMetricsTestScheme *runtime.Scheme
@@ -27,15 +24,6 @@ func init() {
 		panic(err)
 	}
 	if err := ipamv1alpha1.AddToScheme(cacheMetricsTestScheme); err != nil {
-		panic(err)
-	}
-	gv, err := schema.ParseGroupVersion("legacy.ipam.com/v1alpha1")
-	if err != nil {
-		panic(err)
-	}
-	sb := &ctrlscheme.Builder{GroupVersion: gv}
-	sb.Register(&ipamv1alpha1_legacy.CIDRs{}, &ipamv1alpha1_legacy.ClusterCIDRs{}, &ipamv1alpha1_legacy.CIDRsList{}, &ipamv1alpha1_legacy.ClusterCIDRsList{})
-	if err := sb.AddToScheme(cacheMetricsTestScheme); err != nil {
 		panic(err)
 	}
 }

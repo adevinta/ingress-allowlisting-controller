@@ -19,12 +19,10 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
-	ctrlscheme "sigs.k8s.io/controller-runtime/pkg/scheme"
 
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -66,7 +64,7 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, legacyGroupVersion, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
+func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
 	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops
 	// startup instead of silently weakening (or disabling) a protection.
 	cidrSource = cidrSource.withDefaults()
@@ -78,10 +76,9 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 
 	if ingressSupportEnabled {
 		if err := (&IngressReconciler{
-			Client:             mgr.GetClient(),
-			Scheme:             mgr.GetScheme(),
-			LegacyGroupVersion: legacyGroupVersion,
-			CidrResolver:       cidrResolver,
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			CidrResolver: cidrResolver,
 		}).SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Ingress"}
 		}
@@ -106,27 +103,6 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		return &setupError{error: err, controllerType: "ClusterCIDRs"}
 	}
 
-	if legacyGroupVersion != "" {
-		if err := (&CIDRReconciler{
-			Client:             mgr.GetClient(),
-			CIDRs:              &ipamv1alpha1_legacy.CIDRs{},
-			CIDRsList:          &ipamv1alpha1_legacy.CIDRsList{},
-			HTTPHeadersEnabled: httpHeadersEnabled,
-			SourceOptions:      cidrSource,
-		}).SetupWithManager(mgr, namePrefix); err != nil {
-			return &setupError{error: err, controllerType: "LegacyCIDRs"}
-		}
-		if err := (&CIDRReconciler{
-			Client:             mgr.GetClient(),
-			CIDRs:              &ipamv1alpha1_legacy.ClusterCIDRs{},
-			CIDRsList:          &ipamv1alpha1_legacy.ClusterCIDRsList{},
-			HTTPHeadersEnabled: httpHeadersEnabled,
-			SourceOptions:      cidrSource,
-		}).SetupWithManager(mgr, namePrefix); err != nil {
-			return &setupError{error: err, controllerType: "LegacyClusterCIDRs"}
-		}
-	}
-
 	managedBy := "ingress-allowlisting-controller"
 	if namePrefix != "" {
 		managedBy = namePrefix + "-ingress-allowlisting-controller"
@@ -148,11 +124,10 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 
 	if gatewaySupportEnabled {
 		gatewayReconciler := GatewayAllowlistingReconciler{
-			Client:             mgr.GetClient(),
-			Scheme:             mgr.GetScheme(),
-			LegacyGroupVersion: legacyGroupVersion,
-			CidrResolver:       cidrResolver,
-			L4Writers:          l4Writers,
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			CidrResolver: cidrResolver,
+			L4Writers:    l4Writers,
 		}
 		if err := gatewayReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
@@ -160,10 +135,9 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 	}
 	if networkPolicySupportEnabled {
 		networkPolicyReconciler := NetworkPolicyReconciler{
-			Client:             mgr.GetClient(),
-			Scheme:             mgr.GetScheme(),
-			LegacyGroupVersion: legacyGroupVersion,
-			CidrResolver:       cidrResolver,
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			CidrResolver: cidrResolver,
 		}
 		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "NetworkPolicy"}
@@ -171,10 +145,9 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 	}
 	if serviceSupportEnabled {
 		serviceReconciler := ServiceReconciler{
-			Client:             mgr.GetClient(),
-			Scheme:             mgr.GetScheme(),
-			LegacyGroupVersion: legacyGroupVersion,
-			CidrResolver:       cidrResolver,
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			CidrResolver: cidrResolver,
 		}
 		if err := serviceReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Service"}
@@ -183,11 +156,10 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 
 	if httpRouteSupportEnabled {
 		httpRouteReconciler := HTTPRouteAllowlistingReconciler{
-			Client:             mgr.GetClient(),
-			Scheme:             mgr.GetScheme(),
-			LegacyGroupVersion: legacyGroupVersion,
-			CidrResolver:       cidrResolver,
-			L7Writers:          l7Writers,
+			Client:       mgr.GetClient(),
+			Scheme:       mgr.GetScheme(),
+			CidrResolver: cidrResolver,
+			L7Writers:    l7Writers,
 		}
 		if err := httpRouteReconciler.SetupWithManager(mgr, namePrefix); err != nil {
 			return &setupError{error: err, controllerType: "HTTPRoute"}
@@ -197,26 +169,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 	return nil
 }
 
-func LegacyScheme(legacyGroupVersion string, scheme *runtime.Scheme) (*runtime.Scheme, error) {
-	// groupVersion is group version used to register these objects
-	groupVersion, err := schema.ParseGroupVersion(legacyGroupVersion)
-	if err != nil {
-		return nil, err
-	}
-
-	// SchemeBuilder is used to add go types to the GroupVersionKind scheme
-	schemeBuilder := &ctrlscheme.Builder{GroupVersion: groupVersion}
-	schemeBuilder.Register(&ipamv1alpha1_legacy.CIDRs{}, &ipamv1alpha1_legacy.ClusterCIDRs{}, &ipamv1alpha1_legacy.CIDRsList{}, &ipamv1alpha1_legacy.ClusterCIDRsList{})
-
-	// AddToScheme adds the types in this group-version to the given scheme.
-	if err := schemeBuilder.AddToScheme(scheme); err != nil {
-		return nil, err
-	}
-
-	return scheme, nil
-}
-
-func Scheme(legacyGroupVersion string) (*runtime.Scheme, error) {
+func Scheme() (*runtime.Scheme, error) {
 	scheme := runtime.NewScheme()
 
 	if err := clientgoscheme.AddToScheme(scheme); err != nil {
@@ -240,14 +193,6 @@ func Scheme(legacyGroupVersion string) (*runtime.Scheme, error) {
 	}
 	if err := writers.AddTraefikToScheme(scheme); err != nil {
 		return nil, err
-	}
-
-	if legacyGroupVersion != "" {
-		var err error
-		scheme, err = LegacyScheme(legacyGroupVersion, scheme)
-		if err != nil {
-			return nil, err
-		}
 	}
 
 	return scheme, nil

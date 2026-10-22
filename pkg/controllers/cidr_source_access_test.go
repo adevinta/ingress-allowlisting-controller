@@ -379,7 +379,7 @@ func TestRefusedSourceDoesNotReadSecrets(t *testing.T) {
 	// the Secret. It must fail on the allowlist instead, i.e. a refused source never reads Secrets.
 	server, hits := countingServer(t, yamlList("10.1.0.0/16"))
 	ctx := context.TODO()
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	cidrs := &ipamv1alpha1.CIDRs{
