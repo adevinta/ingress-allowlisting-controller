@@ -38,6 +38,7 @@ kubectl get pods -n ingress-allowlisting
 - [Security considerations](docs/security.md)
 - [Architecture & support matrix](docs/architecture.md)
 - [Metrics](docs/metrics.md)
+- [Functional tests (real cluster, local only)](docs/functional-tests.md)
 
 ## Quick start
 
