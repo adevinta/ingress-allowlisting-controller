@@ -2,9 +2,12 @@ package writers
 
 import (
 	"context"
+	"errors"
+	"fmt"
 	"strings"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -17,6 +20,10 @@ import (
 	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
+
+// ErrPolicyNotManaged is returned when an AuthorizationPolicy with the target name already exists
+// but was not created by this controller for the same purpose, so it must not be overwritten.
+var ErrPolicyNotManaged = errors.New("existing policy is not managed by this controller")
 
 // mergedTuple is a single (cidr-set, host-set, paths) entry emitted per rule during ApplyMerged grouping.
 type mergedTuple struct {
@@ -172,6 +179,13 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			ObjectMeta: metav1.ObjectMeta{Name: mergeKey, Namespace: gateway.Namespace},
 		}
 		_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+			// The merge key is user-chosen and doubles as the AP name, so it can point at any
+			// AP in the gateway namespace (e.g. an admin-authored DENY). Only the merged AP of
+			// this group may be taken over; ResourceVersion is set only when the AP exists.
+			if policy.ResourceVersion != "" && !w.isMergedPolicy(policy, mergeKey) {
+				return fmt.Errorf("%w: AuthorizationPolicy %s/%s is not the merged policy for merge key %q",
+					ErrPolicyNotManaged, policy.Namespace, policy.Name, mergeKey)
+			}
 			w.applyLabels(policy, "MERGED", mergeKey)
 			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
@@ -187,11 +201,28 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 }
 
 // DeleteMerged removes the merged AuthorizationPolicy for the given merge key.
+// An AP with that name that is not the merged policy of this group is left untouched.
 func (w *IstioL7Writer) DeleteMerged(ctx context.Context, namespace, mergeKey string) error {
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	policy.Name = mergeKey
-	policy.Namespace = namespace
-	return client.IgnoreNotFound(w.client.Delete(ctx, policy))
+	if err := w.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: mergeKey}, policy); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !w.isMergedPolicy(policy, mergeKey) {
+		return nil
+	}
+	// The UID precondition makes sure we delete the object we just checked, not one recreated
+	// under the same name in between.
+	return client.IgnoreNotFound(w.client.Delete(ctx, policy, client.Preconditions{UID: &policy.UID}))
+}
+
+// isMergedPolicy reports whether the AP is the merged policy this writer created for mergeKey.
+// Merged APs have no single owner route, so ownership is the group: managed by us, owner
+// namespace "MERGED", owner name = the merge key (see applyLabels in ApplyMerged).
+func (w *IstioL7Writer) isMergedPolicy(policy *istiosecurityv1.AuthorizationPolicy, mergeKey string) bool {
+	labels := policy.GetLabels()
+	return labels["app.kubernetes.io/managed-by"] == w.managedBy &&
+		labels[w.annotationPrefix+"/owner-namespace"] == LabelSafe("MERGED") &&
+		labels[w.annotationPrefix+"/owner-name"] == LabelSafe(mergeKey)
 }
 
 // mergeTosByPaths compacts `to` operations sharing the same path set into one, merging their host lists.

@@ -7,10 +7,11 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	istioApiSecurityV1 "istio.io/api/security/v1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
@@ -428,4 +429,128 @@ func TestApplyMerged_CacheDeduplicatesResolutionsAcrossNamespaces(t *testing.T) 
 	// Without the cache fix: 5 Gets — one per sibling due to per-namespace cache keys.
 	assert.Equal(t, 1, clusterCIDRGetCount,
 		"ClusterCIDRs must be fetched once across %d siblings with identical cluster annotations", siblingCount)
+}
+
+// existingPolicy returns an AP in gw-ns with the given name, action and labels, to stand in for an
+// AP that already exists under the name a merge key points at.
+func existingPolicy(name string, action istioApiSecurityV1.AuthorizationPolicy_Action, labels map[string]string) *istiosecurityv1.AuthorizationPolicy {
+	return &istiosecurityv1.AuthorizationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "gw-ns", Labels: labels},
+		Spec:       istioApiSecurityV1.AuthorizationPolicy{Action: action},
+	}
+}
+
+// foreignPolicies are APs a merge key must never take over: they share the name, but are not the
+// merged policy of that merge group.
+func foreignPolicies(name string) map[string]*istiosecurityv1.AuthorizationPolicy {
+	return map[string]*istiosecurityv1.AuthorizationPolicy{
+		"admin-authored DENY without labels": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_DENY, nil),
+		"per-route AP of this controller": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
+			"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-namespace": "ns-a",
+			"ipam.adevinta.com/owner-name":      "svc-a",
+		}),
+		"merged AP of another merge key": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
+			"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-namespace": "MERGED",
+			"ipam.adevinta.com/owner-name":      "other-key",
+		}),
+		"merged AP of another controller instance": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
+			"app.kubernetes.io/managed-by":      "other-ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-namespace": "MERGED",
+			"ipam.adevinta.com/owner-name":      name,
+		}),
+	}
+}
+
+// TestApplyMerged_RefusesForeignPolicy verifies that a merge key naming an existing AP that is not
+// the merged policy of that group (e.g. the admin's protect-gateway-hostnames DENY) fails and
+// leaves the AP untouched, instead of turning it into an ALLOW with the route's rules.
+func TestApplyMerged_RefusesForeignPolicy(t *testing.T) {
+	const mergeKey = "protect-gateway-hostnames"
+	for name, existing := range foreignPolicies(mergeKey) {
+		t.Run(name, func(t *testing.T) {
+			cidrs := testCIDRs("allowlist", "ns-c", "0.0.0.0/0")
+			route := testRoute("attacker", "ns-c", "attacker.example.com")
+			route.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+			gw := testGateway("my-gw", "gw-ns")
+
+			k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+				WithObjects(cidrs, route, gw, existing.DeepCopy()).Build()
+			w := newIstioL7Writer(k8sClient)
+
+			err := w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route}, mergeKey)
+			require.ErrorIs(t, err, ErrPolicyNotManaged)
+
+			policy := &istiosecurityv1.AuthorizationPolicy{}
+			require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergeKey, Namespace: "gw-ns"}, policy))
+			assert.Equal(t, existing.Spec.Action, policy.Spec.Action, "action must not change")
+			assert.Empty(t, policy.Spec.Rules, "rules must not be written")
+			assert.Equal(t, existing.Labels, policy.Labels, "labels must not change")
+		})
+	}
+}
+
+// TestApplyMerged_UpdatesOwnMergedPolicy verifies that the merged AP stays shared: a later
+// reconcile with more siblings updates the AP the group created.
+func TestApplyMerged_UpdatesOwnMergedPolicy(t *testing.T) {
+	cidr0 := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
+	cidr1 := testCIDRs("allowlist", "ns-b", "5.6.7.8/32")
+	route0 := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	route0.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	route1 := testRoute("svc-b", "ns-b", "svc-b.example.com")
+	route1.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	gw := testGateway("my-gw", "gw-ns")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+		WithObjects(cidr0, cidr1, route0, route1, gw).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route0}, "shared-service"))
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route0, route1}, "shared-service"))
+
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy))
+	assert.ElementsMatch(t, []string{"1.2.3.4/32", "5.6.7.8/32"}, allPolicyCIDRs(policy))
+	assert.ElementsMatch(t, []string{"svc-a.example.com", "svc-b.example.com"}, allPolicyHosts(policy))
+}
+
+// TestDeleteMerged_DeletesOwnMergedPolicy verifies that the group's merged AP is deleted, and that
+// a missing AP is not an error.
+func TestDeleteMerged_DeletesOwnMergedPolicy(t *testing.T) {
+	cidrs := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
+	route := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	route.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	gw := testGateway("my-gw", "gw-ns")
+
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+		WithObjects(cidrs, route, gw).Build()
+	w := newIstioL7Writer(k8sClient)
+
+	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route}, "shared-service"))
+	require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", "shared-service"))
+
+	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted, got %v", err)
+
+	require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", "shared-service"), "deleting a missing AP is a no-op")
+}
+
+// TestDeleteMerged_KeepsForeignPolicy verifies that emptying a merge group whose key names a
+// foreign AP does not delete that AP.
+func TestDeleteMerged_KeepsForeignPolicy(t *testing.T) {
+	const mergeKey = "protect-gateway-hostnames"
+	for name, existing := range foreignPolicies(mergeKey) {
+		t.Run(name, func(t *testing.T) {
+			k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
+				WithObjects(existing.DeepCopy()).Build()
+			w := newIstioL7Writer(k8sClient)
+
+			require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", mergeKey))
+
+			policy := &istiosecurityv1.AuthorizationPolicy{}
+			require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergeKey, Namespace: "gw-ns"}, policy), "foreign AP must not be deleted")
+			assert.Equal(t, existing.Spec.Action, policy.Spec.Action)
+		})
+	}
 }
