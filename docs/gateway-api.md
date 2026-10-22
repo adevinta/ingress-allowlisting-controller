@@ -120,6 +120,30 @@ reconcile of such a route. In merge mode, the route is left out of the merged AP
 of the group still applies. If the route's AP was the only ALLOW policy on that gateway, removing
 it puts the gateway back to Istio's default, which allows all traffic.
 
+**The Gateway must accept the route.** A policy is written only for a parentRef whose Gateway
+accepts the route, as its listeners' `allowedRoutes` say. This applies to every route, in the
+same namespace as the Gateway or not, and to Traefik too. Without the check, a route from any
+namespace could get an AP into the gateway's namespace that applies to the gateway by host,
+including other namespaces' hosts, even though the Gateway rejects the route itself. For the
+listeners the parentRef targets (`sectionName`, `port`), the controller checks:
+
+- `allowedRoutes.kinds`: must include `HTTPRoute`. Without kinds, only `HTTP` and `HTTPS`
+  listeners accept HTTPRoutes.
+- `allowedRoutes.namespaces`: `Same` (the default), `All`, `None`, or `Selector`. For `Selector`
+  the controller reads the route namespace's labels, with no watch, and keeps them for 10 minutes.
+
+A route the Gateway doesn't accept gets no AP or Middleware on that Gateway, and one written
+earlier is deleted. The controller logs a warning, and in merge mode the route is left out of the
+merged AP. Things to know:
+
+- The check runs when the route reconciles: on a change to the route or its CIDRs, or the
+  periodic resync. Changing a Gateway's `allowedRoutes` or a namespace's labels doesn't trigger
+  it, so a revoked route keeps its policy until then (plus up to 10 minutes for labels).
+- Listener hostnames are not checked. On a Gateway whose listeners set `hostname`, a route's AP
+  still gets all the route's hostnames.
+- Routes the Gateway accepts can still claim the same hostnames as each other. Gateway API leaves
+  hostname ownership to the implementation.
+
 ### Granularity
 
 By default one AP is created per HTTPRoute rule (per path set). Use the
