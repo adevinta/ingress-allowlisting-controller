@@ -233,6 +233,8 @@ func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, se
 			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verb: "get"},
 			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gateways", Verb: "get"},
 			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gatewayclasses", Verb: "get"},
+			// Namespace labels for the Gateways' allowedRoutes namespace selectors.
+			writers.Permission{Group: "", Resource: "namespaces", Verb: "get"},
 		)
 		for _, w := range l7Writers {
 			if pp, ok := w.(writers.PermissionProvider); ok {

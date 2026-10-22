@@ -3,7 +3,10 @@ package controllers
 import (
 	"context"
 	"fmt"
+	"reflect"
 	"regexp"
+	"slices"
+	"sync"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -29,13 +32,17 @@ import (
 
 type HTTPRouteAllowlistingReconciler struct {
 	client.Client
-	APIReader    client.Reader // bypasses cache — used only by startup cleanup to confirm deletions
+	APIReader    client.Reader // bypasses cache — used by startup cleanup to confirm deletions and for namespace labels
 	Scheme       *runtime.Scheme
 	Prefix       string
 	CidrResolver resolvers.CidrResolver
 	L7Writers    writers.L7WriterRegistry
+
+	nsLabelsOnce sync.Once
+	nsLabels     *namespaceLabelCache // allowedRoutes namespace selectors, see namespaceLabels()
 }
 
+// +kubebuilder:rbac:groups="",resources=namespaces,verbs=get
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=httproutes,verbs=get;list;watch;update
@@ -116,6 +123,8 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	// Any registered writer not present here had its gateway removed from parentRefs
 	// and must have its stale policies cleaned up after the loop.
 	invokedWriters := map[string]struct{}{}
+	// refusedRefs are the parentRefs whose Gateway doesn't accept the route.
+	var refusedRefs []gatewayApiv1.ParentReference
 
 	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
@@ -145,13 +154,33 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 		controllerName := string(gwClass.Spec.ControllerName)
 
+		// No policy for a route the Gateway doesn't accept (listeners' allowedRoutes): an Istio AP
+		// for it would still apply to the Gateway by host, e.g. to other namespaces' hosts.
+		allowed, err := r.routeAllowedByParentRef(ctx, &httproute, ref, gateway)
+		if err != nil {
+			return ctrl.Result{}, err
+		}
+		if !allowed {
+			log.Warnf("HTTPRoute %s/%s is not allowed by the listeners of gateway %s/%s (allowedRoutes): no policy for it on this gateway",
+				httproute.Namespace, httproute.GetName(), gateway.Namespace, gateway.Name)
+		}
+
 		// Mergeable writers (e.g. Istio) with a merge annotation share one AP across the group.
 		// Non-mergeable writers (e.g. Traefik) always get a per-route policy regardless of mergeKey.
 		if mw, ok := writer.(writers.MergeableL7PolicyWriter); ok && mergeKey != "" {
+			// Even when this route isn't allowed: the merged AP is rewritten without it.
 			invokedWriters[controllerName] = struct{}{}
 			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey); err != nil {
 				return ctrl.Result{}, err
 			}
+			continue
+		}
+
+		if !allowed {
+			// Not marked as invoked: unless another accepted parentRef uses this writer, the
+			// cleanup after the loop deletes its policies for the route. Otherwise the stale
+			// cleanup below no longer counts this parentRef.
+			refusedRefs = append(refusedRefs, ref)
 			continue
 		}
 
@@ -217,6 +246,13 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	// (e.g. rule count reduced, granularity changed). Skipped for merge mode because
 	// mergeable writers manage their own AP lifecycle via ApplyMerged/DeleteMerged.
 	if mergeKey == "" {
+		// Judge the route without the parentRefs its Gateways refused, so their APs are orphaned.
+		produced := httproute.DeepCopy()
+		if len(refusedRefs) > 0 {
+			produced.Spec.ParentRefs = slices.DeleteFunc(produced.Spec.ParentRefs, func(ref gatewayApiv1.ParentReference) bool {
+				return slices.ContainsFunc(refusedRefs, func(refused gatewayApiv1.ParentReference) bool { return reflect.DeepEqual(ref, refused) })
+			})
+		}
 		for _, writer := range r.L7Writers {
 			managed, err := writer.ListManaged(ctx, r.managedByValue())
 			if err != nil {
@@ -228,7 +264,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				if ownerNS != writers.LabelSafe(httproute.Namespace) || ownerName != writers.LabelSafe(httproute.Name) {
 					continue
 				}
-				if writer.IsOrphaned(obj, []gatewayApiv1.HTTPRoute{httproute}) {
+				if writer.IsOrphaned(obj, []gatewayApiv1.HTTPRoute{*produced}) {
 					if err := writer.Delete(ctx, obj); err != nil {
 						return ctrl.Result{}, err
 					}
@@ -407,6 +443,14 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 		if !httproutePointsToGateway(sibling, gateway.Name, gateway.Namespace) {
 			continue
 		}
+		// Siblings the Gateway doesn't accept are left out of the merged AP.
+		allowed, err := r.routeAllowedByGateway(ctx, sibling, gateway)
+		if err != nil {
+			return err
+		}
+		if !allowed {
+			continue
+		}
 		siblings = append(siblings, sibling)
 	}
 
@@ -418,8 +462,15 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 			return err
 		}
 		for _, route := range confirmed.Items {
-			if route.Annotations[r.mergeAnnotation()] == mergeKey &&
-				httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
+			if route.Annotations[r.mergeAnnotation()] != mergeKey ||
+				!httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
+				continue
+			}
+			allowed, err := r.routeAllowedByGateway(ctx, &route, gateway)
+			if err != nil {
+				return err
+			}
+			if allowed {
 				return nil // cache was stale — sibling still exists, skip deletion
 			}
 		}
