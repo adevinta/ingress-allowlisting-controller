@@ -9,7 +9,6 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -21,9 +20,8 @@ import (
 // IngressReconciler reconciles a Ingress object
 type IngressReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	LegacyGroupVersion string
-	CidrResolver       resolvers.CidrResolver
+	Scheme       *runtime.Scheme
+	CidrResolver resolvers.CidrResolver
 }
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;create;update;patch;delete
@@ -102,10 +100,6 @@ func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string
 	}
 	build.Watches(&ipamv1alpha1.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	build.Watches(&ipamv1alpha1.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
-	if r.LegacyGroupVersion != "" {
-		build.Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
-		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
-	}
 	return build.Complete(r)
 }
 

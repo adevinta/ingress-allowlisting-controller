@@ -32,14 +32,6 @@ func (e erroredReader) List(ctx context.Context, list client.ObjectList, opts ..
 
 var extendedScheme = runtime.NewScheme()
 
-func init() {
-	var err error
-	extendedScheme, err = LegacyScheme("legacy.ipam.com/v1alpha1", extendedScheme)
-	if err != nil {
-		panic(err)
-	}
-}
-
 func newIngressReconciler(t *testing.T, k8sClient client.Client) *IngressReconciler {
 	t.Helper()
 	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}

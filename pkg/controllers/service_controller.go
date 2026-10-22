@@ -8,7 +8,6 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 
 	"k8s.io/apimachinery/pkg/runtime"
@@ -19,9 +18,8 @@ import (
 
 type ServiceReconciler struct {
 	client.Client
-	Scheme             *runtime.Scheme
-	LegacyGroupVersion string
-	CidrResolver       resolvers.CidrResolver
+	Scheme       *runtime.Scheme
+	CidrResolver resolvers.CidrResolver
 }
 
 // +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update;patch
@@ -105,10 +103,6 @@ func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string
 			handler.EnqueueRequestsFromMapFunc(newServicesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-service")
-	}
-	if r.LegacyGroupVersion != "" {
-		build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newServicesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
-			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newServicesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
 }

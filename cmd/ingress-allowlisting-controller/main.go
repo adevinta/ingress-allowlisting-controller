@@ -47,9 +47,8 @@ import (
 )
 
 var (
-	setupLog           = log.DefaultLogger.WithField("setup", "bootstrap")
-	legacyGroupVersion string
-	mainContext        = signals.SetupSignalHandler()
+	setupLog    = log.DefaultLogger.WithField("setup", "bootstrap")
+	mainContext = signals.SetupSignalHandler()
 )
 
 func main() {
@@ -72,7 +71,6 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
-	flag.StringVar(&legacyGroupVersion, "legacy-group-version", "", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
@@ -116,7 +114,7 @@ func main() {
 	cidrSource.LogEffective()
 
 	var err error
-	scheme, err := controllers.Scheme(legacyGroupVersion)
+	scheme, err := controllers.Scheme()
 	if err != nil {
 		setupLog.Fatal(err, "unable to register Scheme")
 	}
@@ -177,7 +175,7 @@ func main() {
 		setupLog.Fatal(err, "unable to start manager")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, legacyGroupVersion, "", annotationPrefix, httpHeadersEnabled, cidrSource); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, "", annotationPrefix, httpHeadersEnabled, cidrSource); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 

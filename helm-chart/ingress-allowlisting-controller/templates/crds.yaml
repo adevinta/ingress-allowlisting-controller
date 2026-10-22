@@ -1,9 +1,0 @@
----
-{{ if .Values.legacyGroupVersion }}
-{{ $apigroup := splitList "/" .Values.legacyGroupVersion | first }}
-{{ .Files.Get "crds/ipam.adevinta.com_cidrs.yaml"  |  replace "ipam.adevinta.com" $apigroup}}
----
-{{ .Files.Get "crds/ipam.adevinta.com_clustercidrs.yaml" |  replace "ipam.adevinta.com" $apigroup }}
-{{end}}
-
-

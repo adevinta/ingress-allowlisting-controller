@@ -22,7 +22,6 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
@@ -30,12 +29,11 @@ import (
 
 type HTTPRouteAllowlistingReconciler struct {
 	client.Client
-	APIReader          client.Reader // bypasses cache — used only by startup cleanup to confirm deletions
-	Scheme             *runtime.Scheme
-	LegacyGroupVersion string
-	Prefix             string
-	CidrResolver       resolvers.CidrResolver
-	L7Writers          writers.L7WriterRegistry
+	APIReader    client.Reader // bypasses cache — used only by startup cleanup to confirm deletions
+	Scheme       *runtime.Scheme
+	Prefix       string
+	CidrResolver resolvers.CidrResolver
+	L7Writers    writers.L7WriterRegistry
 }
 
 // +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch
@@ -571,10 +569,6 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 			}))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-httproute")
-	}
-	if r.LegacyGroupVersion != "" {
-		build = build.Watches(&ipamv1alpha1_legacy.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation()))).
-			Watches(&ipamv1alpha1_legacy.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newHTTPRoutesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
 	}
 	return build.Complete(r)
 }

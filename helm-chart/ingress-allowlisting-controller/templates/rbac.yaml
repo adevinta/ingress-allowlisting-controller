@@ -8,9 +8,6 @@ metadata:
 rules:
 - apiGroups: 
   - "ipam.adevinta.com"
-{{ if .Values.legacyGroupVersion }}
-  - {{ splitList "/" .Values.legacyGroupVersion | first | quote }}
-{{ end }}
   resources:
   - "cidrs"
   - "clustercidrs"

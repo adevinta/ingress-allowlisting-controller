@@ -12,7 +12,6 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 	v1 "k8s.io/api/core/v1"
 	apierrors "k8s.io/apimachinery/pkg/api/errors"
@@ -76,36 +75,28 @@ type NamespacedCIDRResolver struct {
 }
 
 func (r *ClusterCIDRResolver) ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error) {
-	var candidates []ipamv1alpha1.CIDRsGetter = []ipamv1alpha1.CIDRsGetter{&ipamv1alpha1.ClusterCIDRs{}, &ipamv1alpha1_legacy.ClusterCIDRs{}}
-	for _, cidrObj := range candidates {
-		err := r.Client.Get(ctx, types.NamespacedName{Name: name}, cidrObj)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
+	cidrObj := &ipamv1alpha1.ClusterCIDRs{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Name: name}, cidrObj); err != nil {
+		if !apierrors.IsNotFound(err) {
 			return nil, err
 		}
-		return cidrObj.GetStatus().CIDRs, nil
+		return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.ClusterCIDRs{}.Kind}, name)
 	}
-	return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.ClusterCIDRs{}.Kind}, name)
+	return cidrObj.GetStatus().CIDRs, nil
 }
 
 func (r *ClusterCIDRResolver) Kind() string          { return "ClusterCIDRs" }
 func (r *ClusterCIDRResolver) IsClusterScoped() bool { return true }
 
 func (r *NamespacedCIDRResolver) ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error) {
-	var candidates []ipamv1alpha1.CIDRsGetter = []ipamv1alpha1.CIDRsGetter{&ipamv1alpha1.CIDRs{}, &ipamv1alpha1_legacy.CIDRs{}}
-	for _, cidrObj := range candidates {
-		err := r.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cidrObj)
-		if apierrors.IsNotFound(err) {
-			continue
-		}
-		if err != nil {
+	cidrObj := &ipamv1alpha1.CIDRs{}
+	if err := r.Client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: name}, cidrObj); err != nil {
+		if !apierrors.IsNotFound(err) {
 			return nil, err
 		}
-		return cidrObj.GetStatus().CIDRs, nil
+		return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.CIDRs{}.Kind}, name)
 	}
-	return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.CIDRs{}.Kind}, name)
+	return cidrObj.GetStatus().CIDRs, nil
 }
 
 // resolveName fetches CIDRs for a single named group, using cache when provided.

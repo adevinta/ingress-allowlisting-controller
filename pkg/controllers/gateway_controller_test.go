@@ -27,7 +27,7 @@ import (
 
 func init() {
 	var err error
-	extendedScheme, err = Scheme("legacy.ipam.com/v1alpha1")
+	extendedScheme, err = Scheme()
 	if err != nil {
 		panic(err)
 	}

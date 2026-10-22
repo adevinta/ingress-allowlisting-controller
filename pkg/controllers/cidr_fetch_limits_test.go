@@ -78,7 +78,7 @@ func reconcileFromServer(t *testing.T, serverURL string, processing ipamv1alpha1
 func reconcileWithGuards(t *testing.T, serverURL string, processing ipamv1alpha1.Processing, opts CIDRSourceOptions) *ipamv1alpha1.CIDRs {
 	t.Helper()
 	ctx := context.TODO()
-	scheme, err := Scheme("")
+	scheme, err := Scheme()
 	require.NoError(t, err)
 
 	cidrs := &ipamv1alpha1.CIDRs{
@@ -330,7 +330,7 @@ func TestConfiguredMinMaskIsHonouredOnFetch(t *testing.T) {
 
 func TestSetupRejectsInvalidCIDRSourceOptions(t *testing.T) {
 	// SetupControllersWithManager must refuse options that would silently weaken a protection.
-	err := SetupControllersWithManager(nil, false, false, false, false, false, "", "", "ipam.adevinta.com", false,
+	err := SetupControllersWithManager(nil, false, false, false, false, false, "", "ipam.adevinta.com", false,
 		CIDRSourceOptions{MinMaskIPv4: 99})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "min-mask-ipv4")
@@ -417,7 +417,7 @@ func TestFailedFetchIsRetried(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.TODO()
-			scheme, err := Scheme("")
+			scheme, err := Scheme()
 			require.NoError(t, err)
 
 			cidrs := &ipamv1alpha1.CIDRs{

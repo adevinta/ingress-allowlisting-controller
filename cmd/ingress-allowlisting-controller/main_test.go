@@ -16,7 +16,6 @@ import (
 	k8s "github.com/adevinta/go-k8s-toolkit"
 	"github.com/adevinta/go-testutils-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
-	ipamv1alpha1_legacy "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/legacy/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -64,7 +63,7 @@ func deleteAllowlistingDeployment(t *testing.T, k8sClient client.Client) {
 	}))
 }
 
-func installAllowlistingController(ctx context.Context, t *testing.T, k8sClient client.Client, legacyGroupVersion string, args ...string) {
+func installAllowlistingController(ctx context.Context, t *testing.T, k8sClient client.Client, args ...string) {
 	t.Helper()
 	helmClient := helm.New(testenv.EnvConf().KubeconfigFile())
 
@@ -72,17 +71,14 @@ func installAllowlistingController(ctx context.Context, t *testing.T, k8sClient 
 		helm.WithName(releaseName),
 		helm.WithNamespace(allowListingNamespace),
 		helm.WithChart("../../helm-chart/ingress-allowlisting-controller"),
-		helm.WithArgs(
-			"--install",
-			"--set", "legacyGroupVersion="+legacyGroupVersion,
-		),
+		helm.WithArgs("--install"),
 		helm.WithArgs(args...),
 	))
 }
 
-func startMain(t *testing.T, legacyGroupVersion, as string) {
+func startMain(t *testing.T, as string) {
 	t.Helper()
-	os.Args = []string{"ingress-allowlisting-controller", "--legacy-group-version", legacyGroupVersion, "--as", as, "--cidr-source-allow-private-destinations"} // the remote-CIDRs test serves from 127.0.0.1
+	os.Args = []string{"ingress-allowlisting-controller", "--as", as, "--cidr-source-allow-private-destinations"} // the remote-CIDRs test serves from 127.0.0.1
 	go func() {
 		main()
 	}()
@@ -111,21 +107,17 @@ func TestDockerImage(t *testing.T) {
 	cmd.Dir = "../../"
 	require.NoError(t, cmd.Run())
 
-	legacyGroupVersion := "ipam.example.com/v1alpha1"
-
 	t.Setenv("KUBECONFIG", testenv.EnvConf().KubeconfigFile())
 	ctx := context.Background()
 
 	cfg, err := k8s.NewClientConfigBuilder().WithKubeConfigPath(testenv.EnvConf().KubeconfigFile()).Build()
 	require.NoError(t, err)
-	scheme, err := controllers.Scheme(
-		legacyGroupVersion,
-	)
+	scheme, err := controllers.Scheme()
 	require.NoError(t, err)
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	installAllowlistingController(ctx, t, k8sClient, legacyGroupVersion, "--set", "image.fullyQualifiedURL=ingress-allowlisting-controller:latest", "--set", "image.pullPolicy=Never")
+	installAllowlistingController(ctx, t, k8sClient, "--set", "image.fullyQualifiedURL=ingress-allowlisting-controller:latest", "--set", "image.pullPolicy=Never")
 	// Other tests are designed to run locally.
 	// Ensure that there is no more controller running inside the cluster
 	defer deleteAllowlistingDeployment(t, k8sClient)
@@ -187,18 +179,14 @@ func TestIngressAllowlistingController(t *testing.T) {
 	defer cancel()
 	mainContext = ctx
 
-	legacyGroupVersion := "ipam.example.com/v1alpha1"
-
 	cfg, err := k8s.NewClientConfigBuilder().WithKubeConfigPath(testenv.EnvConf().KubeconfigFile()).Build()
 	require.NoError(t, err)
-	scheme, err := controllers.Scheme(
-		legacyGroupVersion,
-	)
+	scheme, err := controllers.Scheme()
 	require.NoError(t, err)
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	installAllowlistingController(ctx, t, k8sClient, legacyGroupVersion)
+	installAllowlistingController(ctx, t, k8sClient)
 	deleteAllowlistingDeployment(t, k8sClient)
 
 	sa := &v1.ServiceAccount{
@@ -212,7 +200,7 @@ func TestIngressAllowlistingController(t *testing.T) {
 		return err == nil
 	}, 5*time.Minute, 5*time.Second)
 
-	startMain(t, legacyGroupVersion, fmt.Sprintf("system:serviceaccount:%s:%s", allowListingNamespace, releaseName))
+	startMain(t, fmt.Sprintf("system:serviceaccount:%s:%s", allowListingNamespace, releaseName))
 
 	t.Run("Local CIDRs should provide CIDRs in status", func(t *testing.T) {
 		testCIDRsStatusIsUpdated(
@@ -260,35 +248,13 @@ func TestIngressAllowlistingController(t *testing.T) {
 		)
 	})
 
-	t.Run("Local legacy CIDRs should provide CIDRs in status", func(t *testing.T) {
-		testCIDRsStatusIsUpdated(
-			ctx,
-			t,
-			k8sClient,
-			&ipamv1alpha1_legacy.CIDRs{
-				CIDRs: ipamv1alpha1.CIDRs{
-					ObjectMeta: metav1.ObjectMeta{
-						Name:      "local",
-						Namespace: testNamespace,
-					},
-					Spec: ipamv1alpha1.CIDRsSpec{
-						CIDRsSource: ipamv1alpha1.CIDRsSource{
-							CIDRs: []string{"10.0.0.1/32", "192.168.20.0/24"},
-						},
-					},
-				},
-			},
-			[]string{"10.0.0.1/32", "192.168.20.0/24"},
-		)
-	})
-
 	t.Run("Ingresses should be updated with CIDRs", func(t *testing.T) {
 		for _, object := range []client.Object{
-			newCIDRs(&ipamv1alpha1_legacy.CIDRs{}, "legacy-group", testNamespace, "1.2.3.4/32"),
-			newCIDRs(&ipamv1alpha1_legacy.ClusterCIDRs{}, "legacy-group", testNamespace, "2.3.4.5/32"),
+			newCIDRs(&ipamv1alpha1.CIDRs{}, "other-group", testNamespace, "1.2.3.4/32"),
+			newCIDRs(&ipamv1alpha1.ClusterCIDRs{}, "other-group", testNamespace, "2.3.4.5/32"),
 			newCIDRs(&ipamv1alpha1.CIDRs{}, "my-group", testNamespace, "3.4.5.6/32"),
 			newCIDRs(&ipamv1alpha1.ClusterCIDRs{}, "my-group", testNamespace, "4.5.6.8/32"),
-			newIngress(testNamespace, "ingress1", "my-group,legacy-group", "my-group,legacy-group"),
+			newIngress(testNamespace, "ingress1", "my-group,other-group", "my-group,other-group"),
 		} {
 			require.NoError(t, k8sClient.Create(ctx, object))
 		}
