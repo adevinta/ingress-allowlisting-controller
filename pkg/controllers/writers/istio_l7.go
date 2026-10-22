@@ -6,6 +6,7 @@ import (
 	"hash/fnv"
 	"regexp"
 
+	log "github.com/adevinta/go-log-toolkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
@@ -17,8 +18,8 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
-	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
 )
 
 // invalidLabelValue matches characters not allowed in k8s label values.
@@ -131,9 +132,16 @@ func (w *IstioL7Writer) RequiredPermissions() []Permission {
 // Apply creates or updates an AuthorizationPolicy for the given HTTPRoute+gateway+paths combination.
 // When paths is non-empty the AP name includes a hash suffix so each rule gets its own AP.
 // If ips is empty, any previously created AP for this route+paths is deleted instead.
+// If hosts is empty, the AP is deleted as well and a warning is logged: without `to.hosts` (paths
+// alone don't scope it) the AP would allow the CIDRs on every host of the gateway, including hosts
+// of other routes and namespaces.
 func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string) error {
 	apName, apNamespace, crossNamespace := policyName(route, gateway, paths)
-	if len(ips) == 0 {
+	if len(ips) == 0 || len(hosts) == 0 {
+		if len(hosts) == 0 {
+			log.DefaultLogger.WithContext(ctx).Warnf("HTTPRoute %s/%s has no hostnames: no AuthorizationPolicy for gateway %s/%s, it would allow its CIDRs on every host of the gateway",
+				route.Namespace, route.Name, gateway.Namespace, gateway.Name)
+		}
 		policy := &istiosecurityv1.AuthorizationPolicy{}
 		policy.Name = apName
 		policy.Namespace = apNamespace
@@ -249,6 +257,10 @@ type policyTarget struct {
 // non-merge reconcile path would produce for route — mirrors the Apply call-sites exactly.
 // Used by IsOrphaned for exact matching — no prefix heuristics.
 func (w *IstioL7Writer) policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []policyTarget {
+	// Apply writes no AP for a route without hostnames, so any left over is orphaned.
+	if len(route.Spec.Hostnames) == 0 {
+		return nil
+	}
 	granularity := route.Annotations[w.annotationPrefix+"/granularity"]
 
 	var targets []policyTarget
@@ -348,9 +360,8 @@ func (w *IstioL7Writer) TranslatePaths(matches []gatewayApiv1.HTTPRouteMatch) []
 			}
 		case gatewayApiv1.PathMatchExact:
 			paths = append(paths, v)
-		// RegularExpression: not supported by Istio AP — skip
+			// RegularExpression: not supported by Istio AP — skip
 		}
 	}
 	return paths
 }
-

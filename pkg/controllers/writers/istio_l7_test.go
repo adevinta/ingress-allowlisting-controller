@@ -133,6 +133,7 @@ func TestIsOrphaned_GranularityHost(t *testing.T) {
 			Annotations: map[string]string{"ipam.adevinta.com/granularity": "host"},
 		},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "gw", Namespace: &gwNS},
 			}},
@@ -179,6 +180,7 @@ func TestIsOrphaned_PathPrefixRoute(t *testing.T) {
 	route := gatewayApiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "ns"},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "gw", Namespace: &gwNS},
 			}},
@@ -287,6 +289,7 @@ func TestRoutePolicyPrefixOverlap(t *testing.T) {
 	routeApi := gatewayApiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "api", Namespace: "ns"},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "gw", Namespace: &gwNS},
 			}},
@@ -325,6 +328,7 @@ func TestIsOrphaned_CrossNamespace(t *testing.T) {
 	route := gatewayApiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "route-ns"},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "my-gw", Namespace: &gwNS},
 			}},
@@ -381,6 +385,7 @@ func TestIsOrphaned_LongRouteName(t *testing.T) {
 	route := gatewayApiv1.HTTPRoute{
 		ObjectMeta: metav1.ObjectMeta{Name: longName, Namespace: "ns"},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "gw", Namespace: &gwNS},
 			}},

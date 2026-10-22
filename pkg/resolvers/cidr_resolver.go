@@ -90,7 +90,7 @@ func (r *ClusterCIDRResolver) ResolveCidrs(ctx context.Context, namespace string
 	return []string{}, apierrors.NewNotFound(schema.GroupResource{Group: ipamv1alpha1.GroupVersion.Group, Resource: ipamv1alpha1.ClusterCIDRs{}.Kind}, name)
 }
 
-func (r *ClusterCIDRResolver) Kind() string        { return "ClusterCIDRs" }
+func (r *ClusterCIDRResolver) Kind() string          { return "ClusterCIDRs" }
 func (r *ClusterCIDRResolver) IsClusterScoped() bool { return true }
 
 func (r *NamespacedCIDRResolver) ResolveCidrs(ctx context.Context, namespace string, name string) ([]string, error) {
@@ -188,7 +188,7 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 	return allowedIps, nil
 }
 
-func (r *NamespacedCIDRResolver) Kind() string        { return "NamespacedCIDRs" }
+func (r *NamespacedCIDRResolver) Kind() string          { return "NamespacedCIDRs" }
 func (r *NamespacedCIDRResolver) IsClusterScoped() bool { return false }
 
 func notFoundEvent(ctx context.Context, c client.Client, owner client.Object, kind string, notFoundObject string) error {

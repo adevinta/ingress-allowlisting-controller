@@ -64,7 +64,7 @@ func (r *testHandlerRegistration) HasSyncedChecker() toolscache.DoneChecker {
 
 type testDoneChecker struct{ ch chan struct{} }
 
-func (d *testDoneChecker) Name() string         { return "testInformer" }
+func (d *testDoneChecker) Name() string          { return "testInformer" }
 func (d *testDoneChecker) Done() <-chan struct{} { return d.ch }
 
 type testInformer struct {
@@ -461,7 +461,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
 
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
-		Scheme: extendedScheme,
+		Scheme:  extendedScheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
 			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil
@@ -512,7 +512,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
 
 	mgr, err := manager.New(&rest.Config{}, manager.Options{
-		Scheme: extendedScheme,
+		Scheme:  extendedScheme,
 		Metrics: metricsserver.Options{BindAddress: "0"},
 		MapperProvider: func(c *rest.Config, httpClient *http.Client) (meta.RESTMapper, error) {
 			return meta.NewDefaultRESTMapper(extendedScheme.PrioritizedVersionsAllGroups()), nil

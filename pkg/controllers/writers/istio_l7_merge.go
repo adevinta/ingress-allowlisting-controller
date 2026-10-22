@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"strings"
 
+	log "github.com/adevinta/go-log-toolkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
@@ -52,7 +53,16 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 	cache := resolvers.NewResolutionCache()
 
 	var tuples []mergedTuple
+	skippedNoHostnames := false
 	for _, sibling := range siblings {
+		// A sibling without hostnames would add a rule with no `to.hosts`, allowing its CIDRs on
+		// every host of the gateway. It's left out; the rest of the group still applies.
+		if len(sibling.Spec.Hostnames) == 0 {
+			log.DefaultLogger.WithContext(ctx).Warnf("HTTPRoute %s/%s has no hostnames: left out of merged AuthorizationPolicy %s/%s, it would allow its CIDRs on every host of the gateway",
+				sibling.Namespace, sibling.Name, gateway.Namespace, mergeKey)
+			skippedNoHostnames = true
+			continue
+		}
 		ips, err := w.cidrResolver.GetCidrsFromObjectWithCache(ctx, sibling, cache)
 		if err == w.cidrResolver.AnnotationNotFoundError() {
 			continue
@@ -104,6 +114,11 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 	}
 
 	if len(tuples) == 0 {
+		// Only hostless siblings were left: an AP from before they were refused may still hold
+		// their catch-all rule, so remove it rather than keep it.
+		if skippedNoHostnames {
+			return w.DeleteMerged(ctx, gateway.Namespace, mergeKey)
+		}
 		return nil
 	}
 

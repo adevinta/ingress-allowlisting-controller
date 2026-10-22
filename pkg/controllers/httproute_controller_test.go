@@ -150,40 +150,53 @@ func TestReconcileHTTPRoute(t *testing.T) {
 	assert.Empty(t, events.Items)
 }
 
+// TestReconcileHTTPRouteNoHostnames verifies that an HTTPRoute without hostnames gets no Istio AP,
+// with or without paths: the AP would have no `to.hosts` and allow its CIDRs on every host of the
+// gateway. Removing the hostnames deletes the APs written before, without failing the reconcile.
 func TestReconcileHTTPRouteNoHostnames(t *testing.T) {
-	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
-		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+	cases := map[string]*gatewayApiv1.HTTPRoute{
+		"no rules":                newHTTPRouteWithPaths("test", "mynamespace", "my-gateway", ""),
+		"one AP per rule (paths)": newHTTPRouteWithPaths("test", "mynamespace", "my-gateway", "rule", "/api", "/admin"),
+		"granularity host":        newHTTPRouteWithPaths("test", "mynamespace", "my-gateway", "host", "/api"),
 	}
-	httproute := &gatewayApiv1.HTTPRoute{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
-			"ipam.adevinta.com/allowlist-group": "localnet",
-		}},
-		Spec: gatewayApiv1.HTTPRouteSpec{
-			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
-				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
-			},
-			// no Hostnames
-		},
+	for name, httproute := range cases {
+		t.Run(name, func(t *testing.T) {
+			localnetCidrs := &ipamv1alpha1.CIDRs{
+				ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+				Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
+			}
+			gwClass := newIstioGatewayClass("istio")
+			gw := newTestGateway("my-gateway", "mynamespace", "istio")
+			k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
+			reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+			req := reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}}
+
+			// With hostnames: APs are written.
+			_, err := reconciler.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			apList := &istiosecurityv1.AuthorizationPolicyList{}
+			require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("mynamespace")))
+			require.NotEmpty(t, apList.Items, "precondition: route with hostnames gets APs")
+
+			// Hostnames removed: no AP may be left, and the reconcile must not fail (no retry loop).
+			updated := &gatewayApiv1.HTTPRoute{}
+			require.NoError(t, k8sClient.Get(context.Background(), req.NamespacedName, updated))
+			updated.Spec.Hostnames = nil
+			require.NoError(t, k8sClient.Update(context.Background(), updated))
+
+			_, err = reconciler.Reconcile(context.Background(), req)
+			require.NoError(t, err)
+			require.NoError(t, k8sClient.List(context.Background(), apList, client.InNamespace("mynamespace")))
+			assert.Empty(t, apList.Items, "a route without hostnames must not keep any AP")
+		})
 	}
-	gwClass := newIstioGatewayClass("istio")
-	gw := newTestGateway("my-gateway", "mynamespace", "istio")
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, httproute, gwClass, gw).Build()
-	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
-
-	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
-	assert.NoError(t, err)
-
-	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-test", Namespace: "mynamespace"}, generatedPolicy)
-	assert.NoError(t, err)
-	assert.Nil(t, generatedPolicy.Spec.Rules[0].To, "To rule should be absent when no hostnames")
 }
 
 func TestReconcileHTTPRouteNoAllowlistAnnotation(t *testing.T) {
 	httproute := &gatewayApiv1.HTTPRoute{
 		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test"},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
@@ -276,6 +289,7 @@ func TestReconcileHTTPRouteWithClusterCIDR(t *testing.T) {
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 		},
 	}
 	gwClass := newIstioGatewayClass("istio")
@@ -311,6 +325,7 @@ func TestReconcileHTTPRoutePartialCIDRsNotFound(t *testing.T) {
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 		},
 	}
 	gwClass := newIstioGatewayClass("istio")
@@ -336,6 +351,7 @@ func TestReconcileHTTPRouteAllCIDRsNotFound(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
@@ -370,6 +386,7 @@ func TestReconcileHTTPRouteTargetRefs(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("specific-gateway", "")},
 			},
@@ -419,6 +436,7 @@ func TestReconcileHTTPRouteWithAnnotationSpaces(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet, dnssource",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
@@ -527,7 +545,6 @@ func TestGranularityHost(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err), "granularity=host must not create per-rule APs")
 }
 
-
 func TestGatewayParentRefs(t *testing.T) {
 	gwGroup := gatewayApiv1.Group("gateway.networking.k8s.io")
 	gwKind := gatewayApiv1.Kind("Gateway")
@@ -614,6 +631,7 @@ func TestReconcileHTTPRouteMultipleGateways(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{
 					parentRef("internal-gateway", ""),
@@ -656,10 +674,11 @@ func TestReconcileHTTPRouteMultipleGatewaysCrossNamespace(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{
-					parentRef("internal-gateway", ""),                   // same namespace → policy name = "test"
-					parentRef("external-gateway", "gateway-namespace"),  // cross-namespace → policy name = "mynamespace-test"
+					parentRef("internal-gateway", ""),                  // same namespace → policy name = "test"
+					parentRef("external-gateway", "gateway-namespace"), // cross-namespace → policy name = "mynamespace-test"
 				},
 			},
 		},
@@ -705,12 +724,12 @@ func TestValidateMergeKey(t *testing.T) {
 
 	invalid := []string{
 		"",
-		"MyApp",          // uppercase
-		"my_app",         // underscore
-		"my/app",         // slash
-		"-myapp",         // leading hyphen
-		"myapp-",         // trailing hyphen
-		"my app",         // space
+		"MyApp",                  // uppercase
+		"my_app",                 // underscore
+		"my/app",                 // slash
+		"-myapp",                 // leading hyphen
+		"myapp-",                 // trailing hyphen
+		"my app",                 // space
 		strings.Repeat("a", 254), // too long
 	}
 	for _, key := range invalid {
@@ -735,6 +754,7 @@ func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
 			},
 		},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "my-gw", Namespace: &gwNS},
 			}},
@@ -1007,6 +1027,7 @@ func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 				},
 			},
 			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames: []gatewayApiv1.Hostname{"example.com"},
 				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 					{Name: "cross-namespace-public", Namespace: &gwNS},
 				}},
@@ -1100,6 +1121,7 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 			},
 		},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "cross-namespace-public", Namespace: &gwNS},
 			}},
@@ -1259,6 +1281,7 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 				"ipam.adevinta.com/allowlist-group": "localnet",
 			}},
 			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames: []gatewayApiv1.Hostname{"example.com"},
 				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 				},
@@ -1287,6 +1310,7 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 				"ipam.adevinta.com/allowlist-group": "localnet",
 			}},
 			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames: []gatewayApiv1.Hostname{"example.com"},
 				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "gateway-namespace")},
 				},
@@ -1317,6 +1341,7 @@ func TestStartupOrphanCleanup(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("gateway-a", "")},
 			},
@@ -1365,6 +1390,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 		httproute := &gatewayApiv1.HTTPRoute{
 			ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-route"},
 			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames: []gatewayApiv1.Hostname{"example.com"},
 				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "")},
 				},
@@ -1398,6 +1424,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 		httproute := &gatewayApiv1.HTTPRoute{
 			ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-route"},
 			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames: []gatewayApiv1.Hostname{"example.com"},
 				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 					ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "gw-ns")},
 				},
@@ -1454,6 +1481,7 @@ func TestStartupCleanupAbortsOnEmptyHTTPRouteList(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gateway", "")},
 			},
@@ -1500,6 +1528,7 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 			},
 		},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{
 				{Name: "my-gateway", Namespace: &gwNS},
 			}},
@@ -2000,6 +2029,7 @@ func TestReconcileHTTPRouteMultipleGatewayClassesOneUnknown(t *testing.T) {
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.HTTPRouteSpec{
+			Hostnames: []gatewayApiv1.Hostname{"example.com"},
 			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{
 				ParentRefs: []gatewayApiv1.ParentReference{
 					parentRef("istio-gw", ""),
