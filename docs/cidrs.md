@@ -293,6 +293,12 @@ Every key is optional; an unset key keeps the default. Things to know:
 - The controller resolves all named objects, merges their `spec.cidrs` lists, deduplicates,
   and sorts the result before writing to any output resource.
 - Invalid CIDR strings (e.g. `10.0.0` without a mask) are logged as warnings and skipped.
+- Values from a remote source that are neither CIDRs nor IP addresses are dropped before they reach
+  `status.cidrs`, so the status never holds other parts of the response. The `UpToDate` condition
+  and a log line say how many were dropped, never which. If nothing usable is left, the previous
+  list is kept. CIDRs are kept as written (`10.0.0.5/8` is not changed to `10.0.0.0/8`).
+- A bare IP address becomes a host route, `/32` for IPv4 and `/128` for IPv6, in both remote and
+  inline values. Other inline values are kept as typed.
 - If none of the named objects exist, the controller logs a warning and writes a deny-all
   policy (empty source range) to fail safe.
 
