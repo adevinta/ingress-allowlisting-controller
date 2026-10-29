@@ -75,7 +75,8 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			return ctrl.Result{}, err
 		}
 		// Route not found — it was deleted or evicted from the cache (e.g. watch-selector label removed).
-		// Clean up any policies that were created for it.
+		// Clean up any policies that were created for it, and its metrics series.
+		resolvers.ForgetObject(req.Namespace, "HTTPRoute", req.Name)
 		for _, writer := range r.L7Writers {
 			if err := writer.DeleteForRoute(ctx, r.managedByValue(), req.Namespace, req.Name); err != nil {
 				return ctrl.Result{}, err

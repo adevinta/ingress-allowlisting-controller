@@ -20,6 +20,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
 )
 
 var DefaultPrefix = "ipam.adevinta.com"
@@ -138,6 +139,7 @@ func resolveName(ctx context.Context, namespace, name string, resolver cidrResol
 
 func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver cidrResolver, object client.Object, c client.Client, cache *ResolutionCache) ([]string, error) {
 	log := log.DefaultLogger.WithContext(ctx)
+	kind := metricKind(c, object)
 	allowNames := strings.Split(annotationValue, ",")
 	var allowedIps []string
 	for _, group := range allowNames {
@@ -152,13 +154,13 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 		}
 
 		if err != nil {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
+			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
 			return nil, err
 		}
 		if notFound || len(ipList) == 0 {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
+			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
 		} else {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": object.GetObjectKind().GroupVersionKind().Kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(0.0)
+			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(0.0)
 		}
 
 		for _, ip := range ipList {
@@ -181,6 +183,23 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 
 func (r *NamespacedCIDRResolver) Kind() string          { return "NamespacedCIDRs" }
 func (r *NamespacedCIDRResolver) IsClusterScoped() bool { return false }
+
+// metricKind is the "object" label: the object's kind, from the scheme when the object doesn't
+// carry it (typed objects don't always have TypeMeta set), so the label is the same however the
+// object was read and matches what ForgetObject is given.
+func metricKind(c client.Client, object client.Object) string {
+	if kind := object.GetObjectKind().GroupVersionKind().Kind; kind != "" {
+		return kind
+	}
+	if c == nil {
+		return ""
+	}
+	gvk, err := apiutil.GVKForObject(object, c.Scheme())
+	if err != nil {
+		return ""
+	}
+	return gvk.Kind
+}
 
 func notFoundEvent(ctx context.Context, c client.Client, owner client.Object, kind string, notFoundObject string) error {
 	evt := v1.Event{
@@ -232,6 +251,9 @@ func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Obj
 // API calls across siblings. Metrics and events are emitted for every object regardless of cache hits.
 func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object client.Object, cache *ResolutionCache) ([]string, error) {
 	log := log.DefaultLogger.WithContext(ctx)
+	// The series are rebuilt from the current annotation: a group removed from it, or the whole
+	// annotation, takes its series with it.
+	ForgetObject(object.GetNamespace(), metricKind(r.Client, object), object.GetName())
 	allowlistedGroups, okCidrAnnotation := object.GetAnnotations()[r.Annotation()]
 	allowlistedClusterGroups, okClusterCidrAnnotation := object.GetAnnotations()[r.ClusterAnnotation()]
 	if !okCidrAnnotation && !okClusterCidrAnnotation {

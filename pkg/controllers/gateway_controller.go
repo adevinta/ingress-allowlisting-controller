@@ -36,7 +36,12 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	log := log.DefaultLogger.WithContext(ctx).WithField("gateway", req.NamespacedName)
 	gateway := gatewayApiv1.Gateway{}
 	if err := r.Get(ctx, req.NamespacedName, &gateway); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		// Deleted: no reconcile would update its metrics series any more.
+		resolvers.ForgetObject(req.Namespace, "Gateway", req.Name)
+		return ctrl.Result{}, nil
 	}
 	log.Infof("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
 
