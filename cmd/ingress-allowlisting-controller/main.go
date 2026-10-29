@@ -45,6 +45,7 @@ import (
 	log "github.com/adevinta/go-log-toolkit"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	// +kubebuilder:scaffold:imports
 )
 
@@ -155,7 +156,7 @@ func main() {
 	}
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
-	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
+	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", resolvers.CidrResolver{AnnotationPrefix: annotationPrefix})
 	features := rbacFeatures{
 		ingress:        ingressSupportEnabled,
 		gateway:        gatewaySupportEnabled,
@@ -343,8 +344,8 @@ func requiredPermissions(f rbacFeatures, l4Writers writers.L4WriterRegistry, l7W
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Subresource: "status", Verb: "update"},
 		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Subresource: "status", Verb: "update"},
 	)
-	// Events for missing CIDRs objects, written with CreateOrUpdate through the cached client.
-	perms = append(perms, writers.Permissions("", "events", "get", "list", "watch", "create", "update")...)
+	// Events for missing CIDRs objects, written by the resolver's event recorder (no reads).
+	perms = append(perms, writers.Permissions("events.k8s.io", "events", "create", "patch")...)
 	if f.httpHeaders {
 		perms = append(perms, watched("", "secrets", "configmaps")...)
 	}

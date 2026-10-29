@@ -52,8 +52,7 @@ func (e *setupError) Log(logger logr.Logger) {
 // BuildWriterRegistries constructs the L4 and L7 writer registries for the CRDs that are
 // actually installed on the cluster. Called from main.go before the manager starts so
 // permissions can be checked. Pass the REST mapper from the pre-flight client.
-func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, annotationPrefix string) (writers.L4WriterRegistry, writers.L7WriterRegistry) {
-	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: c}
+func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy string, cidrResolver resolvers.CidrResolver) (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 	l4 := writers.L4WriterRegistry{}
 	l7 := writers.L7WriterRegistry{}
 	if isCRDInstalled(mapper, "security.istio.io", "v1", "AuthorizationPolicy") {
@@ -66,10 +65,11 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
-// Events for missing CIDRs objects (the resolver writes them with CreateOrUpdate through the
-// cached client), and the lease for --enable-leader-election.
-// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update;patch
+// Events for missing CIDRs objects, written by the shared resolver's recorder (events.k8s.io/v1).
+// +kubebuilder:rbac:groups=events.k8s.io,resources=events,verbs=create;patch
+// The lease for --enable-leader-election; leader election records its own Events with the core API.
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
+// +kubebuilder:rbac:groups="",resources=events,verbs=create;patch
 
 // logAnnotationRemoval logs when an in-place kind (Ingress, Service, NetworkPolicy) loses its
 // allowlist annotation. The controller then stops managing the object and leaves the last value it
@@ -111,7 +111,11 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		return fmt.Errorf("invalid CIDR source options: %w", err)
 	}
 
-	cidrResolver := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix, Client: mgr.GetClient()}
+	cidrResolver := resolvers.CidrResolver{
+		AnnotationPrefix: annotationPrefix,
+		Client:           mgr.GetClient(),
+		Recorder:         mgr.GetEventRecorder("ingress-allowlisting-controller"),
+	}
 
 	if ingressSupportEnabled {
 		if err := (&IngressReconciler{
@@ -148,7 +152,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 	}
 
 	mapper := mgr.GetRESTMapper()
-	l4Writers, l7Writers := BuildWriterRegistries(mgr.GetClient(), mapper, managedBy, annotationPrefix)
+	l4Writers, l7Writers := BuildWriterRegistries(mgr.GetClient(), mapper, managedBy, cidrResolver)
 
 	if _, ok := l4Writers[writers.IstioControllerName]; ok {
 		setupLog.Infof("detected Istio: enabling Istio writers")

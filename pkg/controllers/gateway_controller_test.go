@@ -14,7 +14,6 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -45,7 +44,7 @@ func newGatewayClass(name string) *gatewayApiv1.GatewayClass {
 
 func newGatewayReconciler(t *testing.T, k8sClient client.Client, scheme *runtime.Scheme) *GatewayAllowlistingReconciler {
 	t.Helper()
-	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	resolver := newTestCidrResolver(k8sClient)
 	l4Writers := writers.L4WriterRegistry{
 		writers.IstioControllerName: writers.NewIstioL4Writer(k8sClient),
 	}
@@ -125,9 +124,7 @@ func TestReconcileGateway(t *testing.T) {
 	assert.ElementsMatch(t, expectedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 	assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
@@ -184,9 +181,7 @@ func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
 	assert.ElementsMatch(t, expectedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 	assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileGatewayNoAnnotations(t *testing.T) {
@@ -205,9 +200,7 @@ func TestReconcileGatewayNoAnnotations(t *testing.T) {
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "test", Namespace: "mynamespace"}, generatedAuthorizationPolicy)
 	assert.True(t, apierrors.IsNotFound(err))
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileGatewayPartialNotFound(t *testing.T) {
@@ -316,9 +309,7 @@ func TestReconcileGatewayWithInvalidCIDRIpsNoError(t *testing.T) {
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, expectedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 	assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
@@ -367,23 +358,9 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 		assert.ElementsMatch(t, expectedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 		assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
-		events := &corev1.EventList{}
-		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-
-		expectedEvents := &corev1.EventList{
-			Items: []corev1.Event{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: "mynamespace",
-						Name:      "test-allowlist-cidrs-not-found",
-					},
-					Action: "LookupAllowListingGroup",
-				},
-			},
-		}
-
-		assert.NotEmpty(t, events.Items)
-		assert.Equal(t, events.Items[0].Action, expectedEvents.Items[0].Action)
+		events := recordedEvents(t, reconciler.CidrResolver)
+		require.NotEmpty(t, events, "a missing CIDRs object must be reported with an Event")
+		assert.Contains(t, events[0], "Warning AllowlistGroupNotFound")
 	})
 
 	t.Run("Cluster CIDR not found", func(t *testing.T) {
@@ -431,22 +408,9 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 		assert.ElementsMatch(t, expectedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, generatedAuthorizationPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 		assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
-		events := &corev1.EventList{}
-		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-
-		expectedEvents := &corev1.EventList{
-			Items: []corev1.Event{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: "mynamespace",
-						Name:      "ingresstest-allowlist-cidrs-not-found",
-					},
-					Action: "LookupAllowListingGroup",
-				},
-			},
-		}
-		assert.Len(t, events.Items, 2)
-		assert.Equal(t, events.Items[0].Action, expectedEvents.Items[0].Action)
+		events := recordedEvents(t, reconciler.CidrResolver)
+		require.NotEmpty(t, events, "a missing CIDRs object must be reported with an Event")
+		assert.Contains(t, events[0], "Warning AllowlistGroupNotFound")
 	})
 }
 
