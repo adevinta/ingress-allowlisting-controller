@@ -37,6 +37,13 @@ Both accept a comma-separated list. Apply them to the `Gateway` or `HTTPRoute` o
 
 ---
 
+> **Istio checks the client IP as the gateway determines it.** Behind a load balancer that is only
+> the real client IP with Proxy Protocol, or with a correct `numTrustedProxies`. A
+> `numTrustedProxies` that is too high lets clients pass the allowlist with a forged
+> `X-Forwarded-For` header. See
+> [AWS: preserving client IP for IP-based filtering](security.md#aws-preserving-client-ip-for-ip-based-filtering-istio),
+> including how to check it.
+
 ## Gateway → Istio AuthorizationPolicy (L4)
 
 The controller creates one `AuthorizationPolicy` per annotated Gateway, targeting the gateway

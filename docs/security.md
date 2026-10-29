@@ -120,6 +120,42 @@ metadata:
 Both annotations are required — the first enables Proxy Protocol on the AWS NLB, the second
 tells Envoy to parse the header and extract the real client IP for `remoteIpBlocks` matching.
 
+### Which IP is checked: `X-Forwarded-For` and `numTrustedProxies`
+
+`remoteIpBlocks` is matched against the client IP as Envoy on the gateway determines it, not
+always the IP of the TCP connection. That depends on the gateway's `numTrustedProxies`
+(`gatewayTopology.numTrustedProxies` in `proxy.istio.io/config`, or mesh-wide in
+`meshConfig.defaultConfig`). Envoy trusts that many entries from the right of the
+`X-Forwarded-For` header:
+
+| `numTrustedProxies` | Checked IP |
+|---|---|
+| `0` (the default) | the TCP peer, or the PROXY protocol address. `X-Forwarded-For` is ignored for this. |
+| the number of proxies in front that add to `X-Forwarded-For` | the real client IP |
+| **higher than that** | **an IP the client wrote itself.** A client sends `X-Forwarded-For: <an allowlisted IP>` and passes the allowlist. |
+| lower than that | a proxy's IP. Legitimate clients are refused, or, if the proxy's range is allowlisted, everyone gets in. |
+
+The controller only writes the CIDRs; which IP they are compared with is gateway configuration,
+and the controller can't see or check it.
+
+- **Recommended:** an NLB with Proxy Protocol as above, and `numTrustedProxies` left at `0`. The
+  real client IP is checked, and `X-Forwarded-For` can't be spoofed.
+- **Behind L7 proxies or a CDN that add `X-Forwarded-For`:** set `numTrustedProxies` to exactly
+  the number of those hops, and make sure nothing can reach the gateway around them.
+- **Another hop in front of the gateway** (an internal load balancer behind a CDN or proxy):
+  without Proxy Protocol from the client side or `numTrustedProxies`, the checked IP is that
+  hop's. Allowlist the hop's ranges (e.g. the CDN's), not the end users'.
+
+**Check it** from an IP that is *not* allowlisted. The forged header must not help:
+
+```bash
+curl -s -o /dev/null -w '%{http_code}\n' -H 'X-Forwarded-For: <an allowlisted IP>' https://<host>/
+# expected: 403
+```
+
+A `200` means the gateway trusts `X-Forwarded-For` from clients, so anyone can pass the
+allowlist.
+
 ---
 
 ## Merge mode security warning
