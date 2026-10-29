@@ -48,10 +48,25 @@ func newIstioGatewayClass(name string) *gatewayApiv1.GatewayClass {
 }
 
 // newTestGateway creates a Gateway with the given name, namespace, and GatewayClassName.
+// newTestGateway returns a Gateway with one HTTP listener that accepts HTTPRoutes from all
+// namespaces, so tests that aren't about allowedRoutes aren't affected by it.
 func newTestGateway(name, namespace, className string) *gatewayApiv1.Gateway {
+	return newTestGatewayWithListeners(name, namespace, className, httpListener("http", gatewayApiv1.NamespacesFromAll, nil))
+}
+
+// httpListener returns an HTTP listener on port 80 whose allowedRoutes accept HTTPRoutes from the
+// given namespaces (selector is only used with Selector).
+func httpListener(name string, from gatewayApiv1.FromNamespaces, selector *v1.LabelSelector) gatewayApiv1.Listener {
+	return gatewayApiv1.Listener{
+		Name: gatewayApiv1.SectionName(name), Protocol: gatewayApiv1.HTTPProtocolType, Port: 80,
+		AllowedRoutes: &gatewayApiv1.AllowedRoutes{Namespaces: &gatewayApiv1.RouteNamespaces{From: &from, Selector: selector}},
+	}
+}
+
+func newTestGatewayWithListeners(name, namespace, className string, listeners ...gatewayApiv1.Listener) *gatewayApiv1.Gateway {
 	return &gatewayApiv1.Gateway{
 		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: namespace},
-		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: gatewayApiv1.ObjectName(className)},
+		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: gatewayApiv1.ObjectName(className), Listeners: listeners},
 	}
 }
 

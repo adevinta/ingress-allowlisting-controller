@@ -55,6 +55,10 @@ rules:
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways", "gatewayclasses"]
   verbs: ["list", "get", "watch"]
+# Namespace labels for the Gateways' allowedRoutes namespace selectors (read on demand, no watch).
+- apiGroups: [""]
+  resources: ["namespaces"]
+  verbs: ["get"]
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
   verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
