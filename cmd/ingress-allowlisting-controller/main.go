@@ -138,7 +138,15 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
-	checkRBAC(restConfig, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, httpHeadersEnabled, l4Writers, l7Writers)
+	checkRBAC(restConfig, requiredPermissions(rbacFeatures{
+		ingress:        ingressSupportEnabled,
+		gateway:        gatewaySupportEnabled,
+		networkPolicy:  networkPolicySupportEnabled,
+		service:        serviceSupportEnabled,
+		httpRoute:      httpRouteSupportEnabled,
+		httpHeaders:    httpHeadersEnabled,
+		leaderElection: enableLeaderElection,
+	}, l4Writers, l7Writers))
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -200,40 +208,54 @@ func (f *stringListFlag) Set(value string) error {
 	return nil
 }
 
-func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, serviceEnabled, httpRouteEnabled, httpHeadersEnabled bool, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) {
-	cs := kubernetes.NewForConfigOrDie(restConfig)
+// rbacFeatures are the enabled features whose permissions the RBAC preflight checks.
+type rbacFeatures struct {
+	ingress, gateway, networkPolicy, service, httpRoute, httpHeaders, leaderElection bool
+}
 
+// watched is what a resource the controller reads through its cache needs: the informer lists and
+// watches it, and gets go to the cache.
+func watched(group string, resources ...string) []writers.Permission {
 	var perms []writers.Permission
-
-	perms = append(perms,
-		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Verb: "get"},
-		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Verb: "get"},
-	)
-	if httpHeadersEnabled {
-		perms = append(perms,
-			writers.Permission{Group: "", Resource: "secrets", Verb: "get"},
-			writers.Permission{Group: "", Resource: "configmaps", Verb: "get"},
-		)
+	for _, r := range resources {
+		perms = append(perms, writers.Permissions(group, r, "get", "list", "watch")...)
 	}
+	return perms
+}
 
-	if gatewayEnabled {
-		perms = append(perms,
-			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gateways", Verb: "get"},
-			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gatewayclasses", Verb: "get"},
-		)
+// requiredPermissions lists every permission the enabled features use, so a ClusterRole that
+// lacks one stops the controller at startup with a clear message instead of failing later (caches
+// that never sync, forbidden writes).
+func requiredPermissions(f rbacFeatures, l4Writers writers.L4WriterRegistry, l7Writers writers.L7WriterRegistry) []writers.Permission {
+	perms := watched("ipam.adevinta.com", "cidrs", "clustercidrs")
+	perms = append(perms,
+		writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Subresource: "status", Verb: "update"},
+		writers.Permission{Group: "ipam.adevinta.com", Resource: "clustercidrs", Subresource: "status", Verb: "update"},
+	)
+	// Events for missing CIDRs objects, written with CreateOrUpdate through the cached client.
+	perms = append(perms, writers.Permissions("", "events", "get", "list", "watch", "create", "update")...)
+	if f.httpHeaders {
+		perms = append(perms, watched("", "secrets", "configmaps")...)
+	}
+	if f.leaderElection {
+		perms = append(perms, writers.Permissions("coordination.k8s.io", "leases", "get", "create", "update")...)
+	}
+	if f.ingress {
+		perms = append(perms, watched("networking.k8s.io", "ingresses")...)
+		perms = append(perms, writers.Permissions("networking.k8s.io", "ingresses", "update")...)
+	}
+	if f.gateway {
+		perms = append(perms, watched("gateway.networking.k8s.io", "gateways", "gatewayclasses")...)
 		for _, w := range l4Writers {
 			if pp, ok := w.(writers.PermissionProvider); ok {
 				perms = append(perms, pp.RequiredPermissions()...)
 			}
 		}
 	}
-
-	if httpRouteEnabled {
+	if f.httpRoute {
+		perms = append(perms, watched("gateway.networking.k8s.io", "httproutes", "gateways", "gatewayclasses")...)
 		perms = append(perms,
-			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verb: "get"},
-			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gateways", Verb: "get"},
-			writers.Permission{Group: "gateway.networking.k8s.io", Resource: "gatewayclasses", Verb: "get"},
-			// Namespace labels for the Gateways' allowedRoutes namespace selectors.
+			// Namespace labels for the Gateways' allowedRoutes namespace selectors (no watch).
 			writers.Permission{Group: "", Resource: "namespaces", Verb: "get"},
 		)
 		for _, w := range l7Writers {
@@ -242,20 +264,19 @@ func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, se
 			}
 		}
 	}
-
-	if networkPolicyEnabled {
-		perms = append(perms,
-			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "get"},
-			writers.Permission{Group: "networking.k8s.io", Resource: "networkpolicies", Verb: "update"},
-		)
+	if f.networkPolicy {
+		perms = append(perms, watched("networking.k8s.io", "networkpolicies")...)
+		perms = append(perms, writers.Permissions("networking.k8s.io", "networkpolicies", "update")...)
 	}
-
-	if serviceEnabled {
-		perms = append(perms,
-			writers.Permission{Group: "", Resource: "services", Verb: "get"},
-			writers.Permission{Group: "", Resource: "services", Verb: "update"},
-		)
+	if f.service {
+		perms = append(perms, watched("", "services")...)
+		perms = append(perms, writers.Permissions("", "services", "update")...)
 	}
+	return perms
+}
+
+func checkRBAC(restConfig *rest.Config, perms []writers.Permission) {
+	cs := kubernetes.NewForConfigOrDie(restConfig)
 
 	// Deduplicate before checking.
 	seen := map[writers.Permission]struct{}{}
@@ -265,12 +286,17 @@ func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, se
 		}
 		seen[p] = struct{}{}
 
+		resource := p.Resource
+		if p.Subresource != "" {
+			resource += "/" + p.Subresource
+		}
 		sar := &authorizationv1.SelfSubjectAccessReview{
 			Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 				ResourceAttributes: &authorizationv1.ResourceAttributes{
-					Verb:     p.Verb,
-					Group:    p.Group,
-					Resource: p.Resource,
+					Verb:        p.Verb,
+					Group:       p.Group,
+					Resource:    p.Resource,
+					Subresource: p.Subresource,
 				},
 			},
 		}
@@ -278,10 +304,10 @@ func checkRBAC(restConfig *rest.Config, gatewayEnabled, networkPolicyEnabled, se
 			context.Background(), sar, metav1.CreateOptions{},
 		)
 		if err != nil {
-			setupLog.Fatal(fmt.Errorf("RBAC preflight: cannot check %s %s/%s: %w", p.Verb, p.Group, p.Resource, err), "preflight failed")
+			setupLog.Fatal(fmt.Errorf("RBAC preflight: cannot check %s %s/%s: %w", p.Verb, p.Group, resource, err), "preflight failed")
 		}
 		if !result.Status.Allowed {
-			setupLog.Fatal(fmt.Errorf("missing permission: cannot %s %s/%s — fix ClusterRole and redeploy", p.Verb, p.Group, p.Resource), "RBAC preflight failed")
+			setupLog.Fatal(fmt.Errorf("missing permission: cannot %s %s/%s — fix ClusterRole and redeploy", p.Verb, p.Group, resource), "RBAC preflight failed")
 		}
 	}
 }

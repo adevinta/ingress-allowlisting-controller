@@ -64,6 +64,11 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
+// Events for missing CIDRs objects (the resolver writes them with CreateOrUpdate through the
+// cached client), and the lease for --enable-leader-election.
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
+
 func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
 	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops
 	// startup instead of silently weakening (or disabling) a protection.

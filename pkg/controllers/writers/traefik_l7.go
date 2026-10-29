@@ -36,14 +36,10 @@ func NewTraefikL7Writer(c client.Client, managedBy string, cidrResolver resolver
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
 func (w *TraefikL7Writer) RequiredPermissions() []Permission {
-	return []Permission{
-		{Group: "traefik.io", Resource: "middlewares", Verb: "get"},
-		{Group: "traefik.io", Resource: "middlewares", Verb: "list"},
-		{Group: "traefik.io", Resource: "middlewares", Verb: "create"},
-		{Group: "traefik.io", Resource: "middlewares", Verb: "update"},
-		{Group: "traefik.io", Resource: "middlewares", Verb: "delete"},
-		{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verb: "update"},
-	}
+	// list/watch: the middlewares are watched (Owns) and read through the cache. The middleware
+	// filter is added to and removed from the HTTPRoute with a patch.
+	return append(Permissions("traefik.io", "middlewares", "get", "list", "watch", "create", "update", "delete"),
+		Permissions("gateway.networking.k8s.io", "httproutes", "patch")...)
 }
 
 func (w *TraefikL7Writer) applyLabels(middleware *TraefikMiddleware, ownerNamespace, ownerName string) {
