@@ -214,6 +214,10 @@ func newObjectsFromCIDRFuncMap(c client.Client, newList func() client.ObjectList
 			Namespace: cidr.GetNamespace(),
 		}
 		if err := c.List(ctx, list, &options); err != nil {
+			// The change can't be mapped to the objects referencing the CIDRs object, so they keep
+			// their current allowlist until their next change or the resync.
+			log.DefaultLogger.WithContext(ctx).Errorf("dropped change of %T %s: listing %T in namespace %q failed, objects referencing it are not updated until their next change or the resync: %v",
+				cidr, client.ObjectKeyFromObject(cidr), list, cidr.GetNamespace(), err)
 			return []reconcile.Request{}
 		}
 		var requests []reconcile.Request
