@@ -132,3 +132,26 @@ func TestGetCidrsFromObjectWithCidrsAndClusterCidrs(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expected, ips)
 }
+
+// TestGetCidrsFromObjectNotFoundFallsBackToDenyAll verifies that a reference to a missing CIDRs or
+// ClusterCIDRs object falls back to deny-all instead of failing the resolution (which would leave
+// the object with its previous allowlist).
+func TestGetCidrsFromObjectNotFoundFallsBackToDenyAll(t *testing.T) {
+	defaultScheme, err := controllers.Scheme()
+	assert.NoError(t, err)
+
+	for _, annotation := range []string{"ipam.adevinta.com/allowlist-group", "ipam.adevinta.com/cluster-allowlist-group"} {
+		t.Run(annotation, func(t *testing.T) {
+			k8sClient := fake.NewClientBuilder().WithScheme(defaultScheme).Build()
+			ingress := &netv1.Ingress{
+				ObjectMeta: v1.ObjectMeta{Name: "myingress", Namespace: "mynamespace", Annotations: map[string]string{annotation: "missing"}},
+			}
+			cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+
+			ips, err := cidrResolver.GetCidrsFromObject(context.Background(), ingress)
+
+			assert.NoError(t, err)
+			assert.Equal(t, []string{"127.0.0.2/32"}, ips)
+		})
+	}
+}
