@@ -230,7 +230,12 @@ func TestCELCostLimit(t *testing.T) {
 		}, defaultCELCostLimit)
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), "cost limit")
-		assert.Less(t, time.Since(start), 3*time.Second, "must be aborted early, not run to completion")
+		// Running it to completion would take far longer; the race detector slows CEL down 5-10x.
+		bound := 3 * time.Second
+		if raceEnabled {
+			bound = 30 * time.Second
+		}
+		assert.Less(t, time.Since(start), bound, "must be aborted early, not run to completion")
 	})
 
 	t.Run("limit is enforced from the configured value", func(t *testing.T) {

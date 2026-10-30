@@ -6,7 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"reflect"
+	"slices"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -65,15 +67,48 @@ type testDoneChecker struct{ ch chan struct{} }
 func (d *testDoneChecker) Name() string          { return "testInformer" }
 func (d *testDoneChecker) Done() <-chan struct{} { return d.ch }
 
+// testInformer is a fake informer. Like a real one, a handler registered after objects were added
+// still receives an Add for each of them, so tests don't depend on the order in which the
+// controllers start and register their handlers. Safe for concurrent use.
 type testInformer struct {
+	mu       sync.Mutex
 	handlers []toolscache.ResourceEventHandler
+	objects  []interface{}
+}
+
+func (i *testInformer) addHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
+	i.mu.Lock()
+	i.handlers = append(i.handlers, handler)
+	objects := slices.Clone(i.objects)
+	i.mu.Unlock()
+	for _, obj := range objects {
+		handler.OnAdd(obj, false)
+	}
+	return &testHandlerRegistration{}, nil
+}
+
+// Add sends obj to the registered handlers and keeps it for handlers registered later. Each handler
+// gets it exactly once: adding it and registering a handler each happen under the lock.
+func (i *testInformer) Add(obj interface{}) {
+	i.mu.Lock()
+	i.objects = append(i.objects, obj)
+	handlers := slices.Clone(i.handlers)
+	i.mu.Unlock()
+	for _, handler := range handlers {
+		handler.OnAdd(obj, false)
+	}
+}
+
+func (i *testInformer) handlerCount() int {
+	i.mu.Lock()
+	defer i.mu.Unlock()
+	return len(i.handlers)
 }
 
 var _ cache.Informer = &testInformer{}
 
 func (i *testInformer) AddEventHandler(handler toolscache.ResourceEventHandler) (toolscache.ResourceEventHandlerRegistration, error) {
-	i.handlers = append(i.handlers, handler)
-	return &testHandlerRegistration{}, nil
+	return i.addHandler(handler)
 }
 
 func (i *testInformer) RemoveEventHandler(handler toolscache.ResourceEventHandlerRegistration) error {
@@ -81,13 +116,11 @@ func (i *testInformer) RemoveEventHandler(handler toolscache.ResourceEventHandle
 }
 
 func (i *testInformer) AddEventHandlerWithResyncPeriod(handler toolscache.ResourceEventHandler, resyncPeriod time.Duration) (toolscache.ResourceEventHandlerRegistration, error) {
-	i.handlers = append(i.handlers, handler)
-	return &testHandlerRegistration{}, nil
+	return i.addHandler(handler)
 }
 
 func (i *testInformer) AddEventHandlerWithOptions(handler toolscache.ResourceEventHandler, options toolscache.HandlerOptions) (toolscache.ResourceEventHandlerRegistration, error) {
-	i.handlers = append(i.handlers, handler)
-	return &testHandlerRegistration{}, nil
+	return i.addHandler(handler)
 }
 
 func (i *testInformer) IsStopped() bool {
@@ -152,8 +185,24 @@ func (c *testCache) Start(ctx context.Context) error {
 }
 
 func (c *testCache) WaitForCacheSync(ctx context.Context) bool {
+	c.m.Lock()
+	defer c.m.Unlock()
 	c.synced = true
 	return true
+}
+
+// informer returns the informer for gvk, creating it if no controller asked for it yet.
+func (c *testCache) informer(gvk schema.GroupVersionKind) *testInformer {
+	i, _ := c.GetInformerForKind(context.Background(), gvk)
+	return i.(*testInformer)
+}
+
+// hasInformer reports whether a controller asked for an informer for gvk.
+func (c *testCache) hasInformer(gvk schema.GroupVersionKind) bool {
+	c.m.Lock()
+	defer c.m.Unlock()
+	_, ok := c.informers[gvk]
+	return ok
 }
 
 func (c *testCache) IndexField(ctx context.Context, obj client.Object, field string, extractValue client.IndexerFunc) error {
@@ -210,21 +259,14 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 	require.Eventually(
 		t,
 		func() bool {
-			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-			if ok && informer != nil && len(informer.handlers) > 0 {
-				return true
-			}
-			return false
+			return k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
 	)
 
 	// Simulate the addition of a CIDR in the list
-	informer := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-	for _, handler := range informer.handlers {
-		handler.OnAdd(cidrs, false)
-	}
+	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).Add(cidrs)
 
 	// Eventually the reconcilers will go through and update the objects
 	// Just give them some time to do so
@@ -282,21 +324,14 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 	require.Eventually(
 		t,
 		func() bool {
-			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")]
-			if ok && informer != nil && len(informer.handlers) > 0 {
-				return true
-			}
-			return false
+			return k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
 	)
 
 	// Simulate the addition of a CIDR in the list
-	informer := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-	for _, handler := range informer.handlers {
-		handler.OnAdd(cidrs, false)
-	}
+	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).Add(cidrs)
 }
 
 func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
@@ -356,21 +391,14 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	require.Eventually(
 		t,
 		func() bool {
-			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-			if ok && informer != nil && len(informer.handlers) > 0 {
-				return true
-			}
-			return false
+			return k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
 	)
 
 	// Simulate the addition of a CIDR in the list
-	informer := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-	for _, handler := range informer.handlers {
-		handler.OnAdd(cidrs, false)
-	}
+	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).Add(cidrs)
 
 	// Eventually the reconcilers will go through and update the objects
 	// Just give them some time to do so
@@ -426,21 +454,16 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 	require.Eventually(
 		t,
 		func() bool {
-			k8sCache.m.Lock()
-			defer k8sCache.m.Unlock()
-			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("CIDRs")]
-			return ok && informer != nil && len(informer.handlers) > 0
+			return k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
 	)
 
-	k8sCache.m.Lock()
-	defer k8sCache.m.Unlock()
 	secretGVK := schema.GroupVersionKind{Version: "v1", Kind: "Secret"}
 	configMapGVK := schema.GroupVersionKind{Version: "v1", Kind: "ConfigMap"}
-	_, secretWatched := k8sCache.informers[secretGVK]
-	_, configMapWatched := k8sCache.informers[configMapGVK]
+	secretWatched := k8sCache.hasInformer(secretGVK)
+	configMapWatched := k8sCache.hasInformer(configMapGVK)
 	assert.False(t, secretWatched, "Secret informer must not be registered when httpHeadersEnabled=false")
 	assert.False(t, configMapWatched, "ConfigMap informer must not be registered when httpHeadersEnabled=false")
 }
@@ -480,12 +503,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 	require.Eventually(
 		t,
 		func() bool {
-			k8sCache.m.Lock()
-			defer k8sCache.m.Unlock()
-			secret, secretOk := k8sCache.informers[secretGVK]
-			cm, cmOk := k8sCache.informers[configMapGVK]
-			return secretOk && secret != nil && len(secret.handlers) > 0 &&
-				cmOk && cm != nil && len(cm.handlers) > 0
+			return k8sCache.informer(secretGVK).handlerCount() > 0 && k8sCache.informer(configMapGVK).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
@@ -549,21 +567,14 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 	require.Eventually(
 		t,
 		func() bool {
-			informer, ok := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")]
-			if ok && informer != nil && len(informer.handlers) > 0 {
-				return true
-			}
-			return false
+			return k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")).handlerCount() > 0
 		},
 		5*time.Second,
 		100*time.Millisecond,
 	)
 
 	// Simulate the addition of a CIDR in the list
-	informer := k8sCache.informers[ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")]
-	for _, handler := range informer.handlers {
-		handler.OnAdd(cidrs, false)
-	}
+	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")).Add(cidrs)
 
 	// Eventually the reconcilers will go through and update the objects
 	// Just give them some time to do so
@@ -585,4 +596,35 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		5*time.Second,
 		100*time.Millisecond,
 	)
+}
+
+// TestTestInformerDeliversToLateHandlers checks the fake informer the manager tests rely on: every
+// handler gets every object exactly once, whether it registers before or after the object was
+// added, also when both happen concurrently (the controllers start in parallel). Without that, a
+// controller starting late misses the event and the test times out (the CI flake of #59).
+func TestTestInformerDeliversToLateHandlers(t *testing.T) {
+	const handlers, objects = 20, 20
+	informer := &testInformer{}
+	counts := make([]atomic.Int32, handlers)
+	var wg sync.WaitGroup
+	for h := 0; h < handlers; h++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, _ = informer.AddEventHandler(toolscache.ResourceEventHandlerFuncs{
+				AddFunc: func(obj interface{}) { counts[h].Add(1) },
+			})
+		}()
+	}
+	for o := 0; o < objects; o++ {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			informer.Add(o)
+		}()
+	}
+	wg.Wait()
+	for h := range counts {
+		assert.Equal(t, int32(objects), counts[h].Load(), "handler %d", h)
+	}
 }
