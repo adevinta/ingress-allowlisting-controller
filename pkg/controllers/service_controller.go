@@ -30,7 +30,12 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	service := corev1.Service{}
 
 	if err := r.Get(ctx, req.NamespacedName, &service); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		// Deleted: no reconcile would update its metrics series any more.
+		resolvers.ForgetObject(req.Namespace, "Service", req.Name)
+		return ctrl.Result{}, nil
 	}
 
 	if !service.ObjectMeta.DeletionTimestamp.IsZero() { // service being deleted

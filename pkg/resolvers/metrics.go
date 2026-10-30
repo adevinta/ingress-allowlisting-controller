@@ -19,3 +19,10 @@ var (
 func init() {
 	metrics.Registry.MustRegister(cidrsNotFound)
 }
+
+// ForgetObject removes the cidrsNotFound series of one object (kind as in the "object" label, e.g.
+// "Ingress"). Call it when the object is deleted: no reconcile would update its series any more, so
+// they would otherwise stay until a restart, e.g. as a missing-group alert that never clears.
+func ForgetObject(namespace, kind, name string) {
+	cidrsNotFound.DeletePartialMatch(prometheus.Labels{"namespace": namespace, "object": kind, "name": name})
+}

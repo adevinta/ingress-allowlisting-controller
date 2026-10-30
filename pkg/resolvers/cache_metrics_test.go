@@ -56,11 +56,12 @@ func TestGetCidrsFromObjectWithCache_MetricsEmittedOnCacheHit(t *testing.T) {
 	// Both objects must have cidrsNotFound = 1.0 (CIDR missing).
 	// If the cache skips getIpsFromAnnotation for hits, objB's gauge stays at 0.0 —
 	// a silent false-healthy reading.
+	// The object label is the kind from the scheme, also for objects without TypeMeta.
 	gaugeA := testutil.ToFloat64(cidrsNotFound.With(prometheus.Labels{
-		"namespace": "ns-a", "object": "", "name": "svc-a", "cidrs_name": "missing-vpn",
+		"namespace": "ns-a", "object": "Ingress", "name": "svc-a", "cidrs_name": "missing-vpn",
 	}))
 	gaugeB := testutil.ToFloat64(cidrsNotFound.With(prometheus.Labels{
-		"namespace": "ns-b", "object": "", "name": "svc-b", "cidrs_name": "missing-vpn",
+		"namespace": "ns-b", "object": "Ingress", "name": "svc-b", "cidrs_name": "missing-vpn",
 	}))
 
 	assert.Equal(t, 1.0, gaugeA, "svc-a: cidrsNotFound must be 1 (CIDR is missing)")

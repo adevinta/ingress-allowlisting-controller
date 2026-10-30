@@ -35,7 +35,12 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	netV1Ingress := netv1.Ingress{}
 
 	if err := r.Get(ctx, req.NamespacedName, &netV1Ingress); err != nil {
-		return ctrl.Result{}, client.IgnoreNotFound(err)
+		if client.IgnoreNotFound(err) != nil {
+			return ctrl.Result{}, err
+		}
+		// Deleted: no reconcile would update its metrics series any more.
+		resolvers.ForgetObject(req.Namespace, "Ingress", req.Name)
+		return ctrl.Result{}, nil
 	}
 	ingressMetadata = netV1Ingress.ObjectMeta
 
