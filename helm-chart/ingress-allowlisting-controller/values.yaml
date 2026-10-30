@@ -1,4 +1,10 @@
+# More than one replica needs leaderElection.enabled: only the leader reconciles, the others wait
+# and take over within seconds. A PodDisruptionBudget (maxUnavailable: 1) is added then.
 replicaCount: 1
+
+leaderElection:
+  # --enable-leader-election, with a namespaced Role for the lease and its Events.
+  enabled: false
 image:
   fullyQualifiedURL: ghcr.io/adevinta/ingress-allowlisting-controller:de26113a795d2b7b4f9011ebf2c68a08117b613e
 

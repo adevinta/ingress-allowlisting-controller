@@ -15,6 +15,7 @@ type Permission struct {
 	Group       string
 	Resource    string
 	Subresource string // e.g. "status"; empty for the resource itself
+	Namespace   string // the namespace it is needed in; empty for all namespaces
 	Verb        string
 }
 

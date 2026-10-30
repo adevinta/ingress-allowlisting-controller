@@ -18,8 +18,10 @@ package main
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"fmt"
+	"os"
 	"strings"
 
 	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
@@ -57,6 +59,7 @@ func main() {
 	var metricsAddr string
 	var healthProbeAddr string
 	var enableLeaderElection bool
+	var leaderElectionNamespace string
 	var ingressSupportEnabled bool
 	var gatewaySupportEnabled bool
 	var networkPolicySupportEnabled bool
@@ -74,6 +77,8 @@ func main() {
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
+	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
+		"Namespace of the leader election lease. Defaults to the controller's own namespace when it runs in a cluster.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
@@ -149,6 +154,9 @@ func main() {
 		httpRoute:      httpRouteSupportEnabled,
 		httpHeaders:    httpHeadersEnabled,
 		leaderElection: enableLeaderElection,
+		// Resolved like controller-runtime does for the lease, so the preflight checks the
+		// namespace the lease really lives in (the chart grants it with a namespaced Role).
+		leaderElectionNamespace: resolveLeaderElectionNamespace(enableLeaderElection, leaderElectionNamespace),
 	}, l4Writers, l7Writers))
 
 	mgrOptions := ctrl.Options{
@@ -156,10 +164,11 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		HealthProbeBindAddress: healthProbeAddr,
-		WebhookServer:          webhook.NewServer(webhook.Options{Port: 9443}),
-		LeaderElection:         enableLeaderElection,
-		LeaderElectionID:       "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
+		HealthProbeBindAddress:  healthProbeAddr,
+		WebhookServer:           webhook.NewServer(webhook.Options{Port: 9443}),
+		LeaderElection:          enableLeaderElection,
+		LeaderElectionNamespace: leaderElectionNamespace,
+		LeaderElectionID:        "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
 	}
 	byObject := map[client.Object]cache.ByObject{}
 	if httpRouteSupportEnabled && httpRouteLabelSelector != "" {
@@ -223,6 +232,25 @@ func (f *stringListFlag) Set(value string) error {
 // rbacFeatures are the enabled features whose permissions the RBAC preflight checks.
 type rbacFeatures struct {
 	ingress, gateway, networkPolicy, service, httpRoute, httpHeaders, leaderElection bool
+	// leaderElectionNamespace is where the lease and the leader election Events are written.
+	leaderElectionNamespace string
+}
+
+// inClusterNamespaceFile holds the pod's namespace (the ServiceAccount token mount).
+var inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// resolveLeaderElectionNamespace returns the flag value, or, like controller-runtime, the pod's own
+// namespace when running in a cluster. Without either, leader election can't start: the manager
+// would fail later with a less clear message, so stop here.
+func resolveLeaderElectionNamespace(enabled bool, flagValue string) string {
+	if !enabled || flagValue != "" {
+		return flagValue
+	}
+	ns, err := os.ReadFile(inClusterNamespaceFile)
+	if err != nil || strings.TrimSpace(string(ns)) == "" {
+		setupLog.Fatal(errors.New("--enable-leader-election needs --leader-election-namespace when not running in a cluster"), "RBAC preflight failed")
+	}
+	return strings.TrimSpace(string(ns))
 }
 
 // watched is what a resource the controller reads through its cache needs: the informer lists and
@@ -250,7 +278,13 @@ func requiredPermissions(f rbacFeatures, l4Writers writers.L4WriterRegistry, l7W
 		perms = append(perms, watched("", "secrets", "configmaps")...)
 	}
 	if f.leaderElection {
-		perms = append(perms, writers.Permissions("coordination.k8s.io", "leases", "get", "create", "update")...)
+		// The lease, and the Events leader election records with the core Events API, live in one
+		// namespace only.
+		for _, p := range append(writers.Permissions("coordination.k8s.io", "leases", "get", "create", "update"),
+			writers.Permissions("", "events", "create", "patch")...) {
+			p.Namespace = f.leaderElectionNamespace
+			perms = append(perms, p)
+		}
 	}
 	if f.ingress {
 		perms = append(perms, watched("networking.k8s.io", "ingresses")...)
@@ -302,6 +336,9 @@ func checkRBAC(restConfig *rest.Config, perms []writers.Permission) {
 		if p.Subresource != "" {
 			resource += "/" + p.Subresource
 		}
+		if p.Namespace != "" {
+			resource += " in namespace " + p.Namespace
+		}
 		sar := &authorizationv1.SelfSubjectAccessReview{
 			Spec: authorizationv1.SelfSubjectAccessReviewSpec{
 				ResourceAttributes: &authorizationv1.ResourceAttributes{
@@ -309,6 +346,7 @@ func checkRBAC(restConfig *rest.Config, perms []writers.Permission) {
 					Group:       p.Group,
 					Resource:    p.Resource,
 					Subresource: p.Subresource,
+					Namespace:   p.Namespace,
 				},
 			},
 		}

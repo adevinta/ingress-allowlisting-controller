@@ -66,7 +66,7 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 
 // Events for missing CIDRs objects (the resolver writes them with CreateOrUpdate through the
 // cached client), and the lease for --enable-leader-election.
-// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
 
 func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
