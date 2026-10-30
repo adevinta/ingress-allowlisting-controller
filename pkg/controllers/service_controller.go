@@ -12,6 +12,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
@@ -99,7 +100,7 @@ func (r *ServiceReconciler) reconcileService(ctx context.Context, service corev1
 
 func (r *ServiceReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&corev1.Service{}).
+		For(&corev1.Service{}, builder.WithPredicates(logAnnotationRemoval("Service", r.CidrResolver.AnnotationPrefix))).
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newServicesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).

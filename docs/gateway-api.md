@@ -35,6 +35,9 @@ Or directly: `--gateway-support-enabled --httproute-support-enabled`.
 
 Both accept a comma-separated list. Apply them to the `Gateway` or `HTTPRoute` object.
 
+Removing the annotation deletes the AuthorizationPolicy or Middleware the controller created for
+the object, so its allowlist is lifted. See [Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
+
 ---
 
 > **Istio checks the client IP as the gateway determines it.** Behind a load balancer that is only

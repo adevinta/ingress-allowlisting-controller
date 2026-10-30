@@ -24,6 +24,26 @@ Writers are registered in a registry keyed by `GatewayClass.spec.controllerName`
 | `IstioL7Writer` | `L7PolicyWriter` + `MergeableL7PolicyWriter` | `security.istio.io/v1 AuthorizationPolicy` (TargetRef → Gateway, per HTTPRoute) | Istio |
 | `TraefikL7Writer` | `L7PolicyWriter` + `GatewayCIDRsMerger` | `traefik.io/v1alpha1 Middleware` (IPAllowList) + patches `HTTPRoute.spec.rules[].filters` | Traefik |
 
+### Removing the allowlist annotation
+
+When an object loses its `allowlist-group` / `cluster-allowlist-group` annotation, the controller
+stops managing it and removes only what is clearly its own. The result depends on who owns the
+object the allowlist lives in:
+
+| Kind | What the controller wrote | On annotation removal |
+|---|---|---|
+| Ingress, Service, NetworkPolicy (reconcilers) | a field on **someone else's** object: the nginx `whitelist-source-range` annotation, `spec.loadBalancerSourceRanges`, the `ipBlock` entries | **the last value stays**, and a warning is logged |
+| Gateway, HTTPRoute with Istio (writers) | its **own** AuthorizationPolicy | **the policy is deleted**: the allowlist is lifted |
+| HTTPRoute with Traefik (writer) | its **own** Middleware, and an `extensionRef` filter on the route | **the Middleware is deleted** and only its own filter is removed from the route |
+
+The reconcilers can't undo their change: they overwrote a whole field and don't know what the
+owner had there before. Clearing it wouldn't be safe either: an empty field means "open to all" in
+all three cases. So the field keeps the last allowlist the controller wrote, and it is **frozen**:
+later changes to the CIDRs objects no longer reach it. An IP removed from a CIDRs object keeps
+access to that object until its owner edits or clears the field. The controller logs
+`<Kind> <ns>/<name>: allowlist annotation removed, the controller stopped managing it; …` once, at
+the removal.
+
 ### Resolution chain for writers
 
 ```

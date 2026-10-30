@@ -18,6 +18,9 @@ You define: `podSelector`, `policyTypes`, and optionally pre-configured `ports`.
 The controller manages: `ipBlock` entries in `spec.ingress[].from` and `spec.egress[].to`.
 Any existing `ipBlock` rules in those sections are overwritten on each reconcile.
 
+Removing the allowlist annotation leaves the last `ipBlock` entries in place: the controller
+stops managing the NetworkPolicy, and they no longer follow CIDRs changes. See [Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
+
 ## Examples
 
 **Ingress policy** — allow inbound traffic from a named CIDR set:

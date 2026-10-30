@@ -14,6 +14,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
@@ -140,7 +141,7 @@ func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, ne
 
 func (r *NetworkPolicyReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).
-		For(&netv1.NetworkPolicy{}).
+		For(&netv1.NetworkPolicy{}, builder.WithPredicates(logAnnotationRemoval("NetworkPolicy", r.CidrResolver.AnnotationPrefix))).
 		Watches(
 			&ipamv1alpha1.CIDRs{},
 			handler.EnqueueRequestsFromMapFunc(newNetworkPoliciesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation()))).

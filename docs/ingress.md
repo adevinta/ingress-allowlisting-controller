@@ -51,8 +51,10 @@ annotations:
   nginx.ingress.kubernetes.io/whitelist-source-range: "10.0.0.0/8,192.168.0.0/16"
 ```
 
-The CIDR list is always sorted and deduplicated. Removing the allowlist annotation removes
-the whitelist annotation.
+The CIDR list is always sorted and deduplicated. Removing the allowlist annotation does **not**
+remove the whitelist annotation: the controller stops managing the Ingress, and the last list
+stays and no longer follows CIDRs changes. Remove or edit `whitelist-source-range` yourself. See
+[Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
 
 ## Controller flags
 
