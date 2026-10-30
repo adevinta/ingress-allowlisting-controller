@@ -104,8 +104,8 @@ func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-ingress")
 	}
-	build.Watches(&ipamv1alpha1.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
-	build.Watches(&ipamv1alpha1.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
+	build = build.Watches(&ipamv1alpha1.CIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.Annotation())))
+	build = build.Watches(&ipamv1alpha1.ClusterCIDRs{}, handler.EnqueueRequestsFromMapFunc(newIngressesFromCIDRFuncMap(r.Client, r.CidrResolver.ClusterAnnotation())))
 	return build.Complete(r)
 }
 
