@@ -19,7 +19,7 @@ Istio and Traefik support is **auto-detected** at startup — no flags needed. T
 
 ```bash
 git clone https://github.com/adevinta/ingress-allowlisting-controller.git
-cd ingress-allowlisting-controller/helm-charts/ingress-allowlisting-controller
+cd ingress-allowlisting-controller/helm-chart/ingress-allowlisting-controller
 helm install ingress-allowlisting-controller ./ --namespace ingress-allowlisting --create-namespace
 ```
 

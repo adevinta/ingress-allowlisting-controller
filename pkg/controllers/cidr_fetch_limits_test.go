@@ -417,7 +417,7 @@ func TestFailedFetchIsRetried(t *testing.T) {
 		{"an empty list refused as removing all CIDRs is retried", empty.URL, 0, CIDRSourceOptions{}, reconcile.Result{RequeueAfter: defaultRetryInterval}},
 		{"an empty list with a shorter requeueAfter keeps it", empty.URL, time.Minute, CIDRSourceOptions{}, reconcile.Result{RequeueAfter: time.Minute}},
 		{"success without requeueAfter is not requeued", healthy.URL, 0, CIDRSourceOptions{}, reconcile.Result{}},
-		{"success keeps the normal requeueAfter", healthy.URL, 30 * time.Minute, CIDRSourceOptions{}, reconcile.Result{RequeueAfter: 30 * time.Minute, Requeue: true}},
+		{"success keeps the normal requeueAfter", healthy.URL, 30 * time.Minute, CIDRSourceOptions{}, reconcile.Result{RequeueAfter: 30 * time.Minute}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

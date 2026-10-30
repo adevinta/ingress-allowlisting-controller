@@ -168,7 +168,7 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	if specs.RequeueAfter != nil && specs.RequeueAfter.Duration > 0 {
-		return ctrl.Result{RequeueAfter: specs.RequeueAfter.Duration, Requeue: true}, nil
+		return ctrl.Result{RequeueAfter: specs.RequeueAfter.Duration}, nil
 	}
 
 	return ctrl.Result{}, nil

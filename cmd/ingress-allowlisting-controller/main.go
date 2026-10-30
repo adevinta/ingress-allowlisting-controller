@@ -24,7 +24,6 @@ import (
 	"os"
 	"strings"
 
-	_ "k8s.io/client-go/plugin/pkg/client/auth/gcp"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/cache"
 	"sigs.k8s.io/controller-runtime/pkg/client/apiutil"
@@ -80,7 +79,7 @@ func main() {
 	flag.StringVar(&leaderElectionNamespace, "leader-election-namespace", "",
 		"Namespace of the leader election lease. Defaults to the controller's own namespace when it runs in a cluster.")
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
-	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Enables coexistence of two CRDS with different groups for CIDR objects.")
+	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Prefix of the allowlist annotations the controller reads: <prefix>/allowlist-group and <prefix>/cluster-allowlist-group.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
 		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
 		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")

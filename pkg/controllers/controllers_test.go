@@ -286,12 +286,22 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 	extendedScheme, err := controllers.Scheme()
 	assert.NoError(t, err)
 
+	currentNamespaceName := "namespace-" + uuid.New().String()[:8]
+
 	cidrs := &ipamv1alpha1.ClusterCIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "group-name"},
-		Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}}},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
-
-	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs).Build()
+	ing := &netv1.Ingress{
+		ObjectMeta: v1.ObjectMeta{
+			Name:      "ing1",
+			Namespace: currentNamespaceName,
+			Annotations: map[string]string{
+				"custom.example.com/cluster-allowlist-group": "group-name",
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidrs, ing).Build()
 
 	k8sCache := &testCache{Client: k8sClient, scheme: extendedScheme}
 
@@ -307,9 +317,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		NewCache: func(config *rest.Config, opts cache.Options) (cache.Cache, error) {
 			return k8sCache, nil
 		},
-		Metrics: metricsserver.Options{
-			BindAddress: ":8081",
-		},
+		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
 	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, t.Name(), "custom.example.com", true, controllers.DefaultCIDRSourceOptions()))
@@ -330,8 +338,20 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		100*time.Millisecond,
 	)
 
-	// Simulate the addition of a CIDR in the list
-	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("CIDRs")).Add(cidrs)
+	// Simulate the addition of a ClusterCIDRs object
+	k8sCache.informer(ipamv1alpha1.GroupVersion.WithKind("ClusterCIDRs")).Add(cidrs)
+
+	// The Ingress referencing it gets its CIDRs.
+	assert.Eventually(
+		t,
+		func() bool {
+			ing := &netv1.Ingress{}
+			require.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Namespace: currentNamespaceName, Name: "ing1"}, ing))
+			return ing.Annotations["nginx.ingress.kubernetes.io/whitelist-source-range"] == "10.0.0.0/8,172.16.0.0/12,192.168.0.0/16"
+		},
+		5*time.Second,
+		100*time.Millisecond,
+	)
 }
 
 func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
