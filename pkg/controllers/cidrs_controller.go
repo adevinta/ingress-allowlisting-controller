@@ -9,6 +9,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"net"
 	"net/http"
 	"slices"
@@ -24,8 +25,11 @@ import (
 	v1 "k8s.io/api/core/v1"
 	"k8s.io/client-go/util/jsonpath"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	log "github.com/adevinta/go-log-toolkit"
@@ -586,6 +590,23 @@ func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace stri
 	return nil
 }
 
+// ignoreStatusOnlyUpdates drops updates of a CIDRs object that only changed its status. The
+// controller writes that status itself, so reconciling on it would only fetch the source again, and
+// with a changing condition message (e.g. a different error each time) it would loop without the
+// retry interval. Spec, label and annotation changes, creates, deletes and the periodic resync
+// (same resourceVersion) still reconcile.
+var ignoreStatusOnlyUpdates = predicate.Funcs{
+	UpdateFunc: func(e event.UpdateEvent) bool {
+		oldObj, newObj := e.ObjectOld, e.ObjectNew
+		if oldObj.GetResourceVersion() == newObj.GetResourceVersion() {
+			return true // periodic resync
+		}
+		return oldObj.GetGeneration() != newObj.GetGeneration() ||
+			!maps.Equal(oldObj.GetLabels(), newObj.GetLabels()) ||
+			!maps.Equal(oldObj.GetAnnotations(), newObj.GetAnnotations())
+	},
+}
+
 func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr)
 	if namePrefix != "" {
@@ -593,7 +614,7 @@ func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) e
 	} else {
 		build = build.Named(fmt.Sprintf("%T", r.CIDRs))
 	}
-	build = build.For(r.CIDRs)
+	build = build.For(r.CIDRs, builder.WithPredicates(ignoreStatusOnlyUpdates))
 	if r.HTTPHeadersEnabled {
 		build = build.Watches(
 			&v1.Secret{},

@@ -240,16 +240,21 @@ func (c *ClusterCIDRsList) DeepCopyCIDRs() CIDRsGetterList {
 	return c.DeepCopy()
 }
 
+// UpsertCondition sets the condition of its type, always with the latest message. As for
+// Kubernetes conditions, LastTransitionTime only changes when the status does.
 func (s *CIDRsStatus) UpsertCondition(condition Condition) {
-	condition.LastTransitionTime = metav1.Now()
 	for i, cd := range s.Conditions {
 		if cd.Type == condition.Type {
-			if cd.Status != condition.Status {
-				s.Conditions[i] = condition
+			if cd.Status == condition.Status {
+				condition.LastTransitionTime = cd.LastTransitionTime
+			} else {
+				condition.LastTransitionTime = metav1.Now()
 			}
+			s.Conditions[i] = condition
 			return
 		}
 	}
+	condition.LastTransitionTime = metav1.Now()
 	s.Conditions = append(s.Conditions, condition)
 }
 
