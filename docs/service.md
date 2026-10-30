@@ -23,6 +23,10 @@ You define: the `Service` (`type: LoadBalancer`, `ports`, `selector`, …).
 The controller manages: `spec.loadBalancerSourceRanges`. Any existing ranges in that
 field are overwritten on each reconcile.
 
+Removing the allowlist annotation leaves the last `loadBalancerSourceRanges` in place: the
+controller stops managing the Service, and the ranges no longer follow CIDRs changes. Clear them
+yourself if you want the load balancer open again. See [Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
+
 ## Example
 
 Allow inbound traffic to a LoadBalancer Service only from a named CIDR set:

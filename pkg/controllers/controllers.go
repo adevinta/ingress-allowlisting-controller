@@ -15,7 +15,9 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/event"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
+	"sigs.k8s.io/controller-runtime/pkg/predicate"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
@@ -68,6 +70,22 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 // cached client), and the lease for --enable-leader-election.
 // +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update;patch
 // +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
+
+// logAnnotationRemoval logs when an in-place kind (Ingress, Service, NetworkPolicy) loses its
+// allowlist annotation. The controller then stops managing the object and leaves the last value it
+// wrote: the object belongs to someone else, and clearing the field would open it to everyone.
+// That value no longer follows CIDRs changes, so say so once, at the removal. It filters nothing.
+func logAnnotationRemoval(kind, annotationPrefix string) predicate.Funcs {
+	return predicate.Funcs{
+		UpdateFunc: func(e event.UpdateEvent) bool {
+			if hasAllowlistAnnotation(annotationPrefix, e.ObjectOld) && !hasAllowlistAnnotation(annotationPrefix, e.ObjectNew) {
+				log.DefaultLogger.Warnf("%s %s/%s: allowlist annotation removed, the controller stopped managing it; the last allowlist it wrote stays in place and no longer follows CIDRs changes",
+					kind, e.ObjectNew.GetNamespace(), e.ObjectNew.GetName())
+			}
+			return true
+		},
+	}
+}
 
 func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
 	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops

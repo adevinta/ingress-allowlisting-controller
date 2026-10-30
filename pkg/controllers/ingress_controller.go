@@ -13,6 +13,7 @@ import (
 
 	"k8s.io/apimachinery/pkg/runtime"
 	ctrl "sigs.k8s.io/controller-runtime"
+	"sigs.k8s.io/controller-runtime/pkg/builder"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/handler"
 )
@@ -99,7 +100,7 @@ func (r *IngressReconciler) reconcileIngress(ctx context.Context, ingressMeta ne
 func (r *IngressReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	var ing client.Object = &netv1.Ingress{}
 
-	build := ctrl.NewControllerManagedBy(mgr).For(ing)
+	build := ctrl.NewControllerManagedBy(mgr).For(ing, builder.WithPredicates(logAnnotationRemoval("Ingress", r.CidrResolver.AnnotationPrefix)))
 	if namePrefix != "" {
 		build = build.Named(namePrefix + "-ingress")
 	}
