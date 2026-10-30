@@ -56,6 +56,7 @@ var (
 func main() {
 	ctx := mainContext
 	var metricsAddr string
+	var logLevel string
 	var healthProbeAddr string
 	var enableLeaderElection bool
 	var leaderElectionNamespace string
@@ -72,6 +73,7 @@ func main() {
 	cidrSource := controllers.DefaultCIDRSourceOptions()
 	var allowlist stringListFlag
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&logLevel, "log-level", "info", "Log level: panic, fatal, error, warn, info, debug or trace.")
 	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the /healthz and /readyz probe endpoints bind to. \"0\" disables them.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
@@ -110,6 +112,9 @@ func main() {
 	})
 	flag.Usage = func() { printUsage(flag.CommandLine, flagGroups) }
 	flag.Parse()
+	if err := setLogLevel(logLevel); err != nil {
+		setupLog.Fatal(err, " <- invalid --log-level")
+	}
 	cidrSource.Allowlist = allowlist
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
@@ -359,4 +364,15 @@ func checkRBAC(restConfig *rest.Config, perms []writers.Permission) {
 			setupLog.Fatal(fmt.Errorf("missing permission: cannot %s %s/%s — fix ClusterRole and redeploy", p.Verb, p.Group, resource), "RBAC preflight failed")
 		}
 	}
+}
+
+// setLogLevel sets the level of the controller's logger, which controller-runtime logs through too.
+// An unknown name is refused and leaves the level unchanged.
+func setLogLevel(name string) error {
+	level := log.DefaultLogger.GetLevel()
+	if err := level.UnmarshalText([]byte(name)); err != nil {
+		return fmt.Errorf("unknown log level %q, use panic, fatal, error, warn, info, debug or trace", name)
+	}
+	log.DefaultLogger.SetLevel(level)
+	return nil
 }

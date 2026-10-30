@@ -86,6 +86,9 @@ affinity: {}
 
 tolerations: []
 
+# Log level: panic, fatal, error, warn, info, debug or trace. debug also shows the per-object
+# "does not have the allowlist group annotation" lines.
+logLevel: info
 annotationPrefix: "ipam.adevinta.com"
 httpHeadersEnabled: true
 secretLabelSelector: ""
