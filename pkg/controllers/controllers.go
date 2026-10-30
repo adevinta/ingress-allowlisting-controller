@@ -64,6 +64,11 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 	return l4, l7
 }
 
+// Events for missing CIDRs objects (the resolver writes them with CreateOrUpdate through the
+// cached client), and the lease for --enable-leader-election.
+// +kubebuilder:rbac:groups="",resources=events,verbs=get;list;watch;create;update
+// +kubebuilder:rbac:groups=coordination.k8s.io,resources=leases,verbs=get;create;update
+
 func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
 	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops
 	// startup instead of silently weakening (or disabling) a protection.
@@ -214,6 +219,10 @@ func newObjectsFromCIDRFuncMap(c client.Client, newList func() client.ObjectList
 			Namespace: cidr.GetNamespace(),
 		}
 		if err := c.List(ctx, list, &options); err != nil {
+			// The change can't be mapped to the objects referencing the CIDRs object, so they keep
+			// their current allowlist until their next change or the resync.
+			log.DefaultLogger.WithContext(ctx).Errorf("dropped change of %T %s: listing %T in namespace %q failed, objects referencing it are not updated until their next change or the resync: %v",
+				cidr, client.ObjectKeyFromObject(cidr), list, cidr.GetNamespace(), err)
 			return []reconcile.Request{}
 		}
 		var requests []reconcile.Request

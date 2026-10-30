@@ -621,6 +621,10 @@ func newObjectRefToCIDRsFuncMap(c client.Client, cidrsKind ipamv1alpha1.CIDRsGet
 		cidrsList := cidrsKind.DeepCopyCIDRs()
 		err := c.List(ctx, cidrsList)
 		if err != nil {
+			// The CIDRs objects using this header source aren't refetched until their next change
+			// or the resync.
+			log.DefaultLogger.WithContext(ctx).Errorf("dropped change of header source %s: listing %T failed, CIDRs objects using it are not refetched until their next change or the resync: %v",
+				client.ObjectKeyFromObject(object), cidrsList, err)
 			return nil
 		}
 		var requests []reconcile.Request

@@ -26,12 +26,8 @@ func NewIstioL4Writer(c client.Client) *IstioL4Writer {
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
 func (w *IstioL4Writer) RequiredPermissions() []Permission {
-	return []Permission{
-		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "get"},
-		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "create"},
-		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "update"},
-		{Group: "security.istio.io", Resource: "authorizationpolicies", Verb: "delete"},
-	}
+	// list/watch: the policies are watched (Owns) and read through the cache.
+	return Permissions("security.istio.io", "authorizationpolicies", "get", "list", "watch", "create", "update", "delete")
 }
 
 // Apply creates or updates an AuthorizationPolicy for the given Gateway and IPs.
