@@ -54,6 +54,18 @@ For every resource kind the controller has enabled (read from the controller's o
 | `missing-cidrs` | a reference to a CIDRs object that does not exist gives the deny-all `127.0.0.2/32` |
 | `isolation` | a reference to a CIDRs object that exists only in the **other** test namespace gives deny-all, never that namespace's CIDRs |
 
+Once per run, independent of the resource kinds, `conditions` checks the CIDRs object's
+`UpToDate` condition with a source that keeps failing:
+
+| Scenario | Expectation |
+|---|---|
+| `conditions/first-error` | a missing path on an allowlisted host (`ip-ranges.amazonaws.com`) → condition `False` with the `403` |
+| `conditions/latest-error` | the source changed to a host outside `--cidr-source-allowlist` → the condition shows the new error (`source not in allowlist`), not the old `403` |
+| `conditions/no-status-churn` | once settled, the object's `resourceVersion` stays unchanged for 20s: the controller doesn't reconcile on its own status writes |
+
+It is skipped when the controller's allowlist doesn't allow `ip-ranges.amazonaws.com`, or is empty
+(then no source is refused).
+
 Each run uses two namespaces, `iac-functional-<id>-a` (objects under test) and `-b` (the peer,
 holding the `shared` CIDRs object and the cross-namespace Gateways).
 

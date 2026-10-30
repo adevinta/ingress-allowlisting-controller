@@ -102,6 +102,10 @@ func TestFunctional(t *testing.T) {
 		}
 	})
 
+	t.Run("conditions", func(t *testing.T) {
+		runConditionScenario(t, ctx, c, ns, p.Controller)
+	})
+
 	for _, tg := range p.Targets {
 		if tg.Skip != "" {
 			continue
