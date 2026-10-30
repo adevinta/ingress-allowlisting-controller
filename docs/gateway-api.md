@@ -36,7 +36,12 @@ Or directly: `--gateway-support-enabled --httproute-support-enabled`.
 Both accept a comma-separated list. Apply them to the `Gateway` or `HTTPRoute` object.
 
 Removing the annotation deletes the AuthorizationPolicy or Middleware the controller created for
-the object, so its allowlist is lifted. See [Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
+the object, so its allowlist is lifted.
+
+The Service the implementation creates for a Gateway inherits the Gateway's annotations (Istio),
+but `--service-support-enabled` leaves it alone: `loadBalancerSourceRanges` there would apply at the
+load balancer, before the HTTPRoutes' policies, and block what the routes allow. See
+[Services generated for a Gateway](service.md#services-generated-for-a-gateway). See [Removing the allowlist annotation](architecture.md#removing-the-allowlist-annotation).
 
 ---
 

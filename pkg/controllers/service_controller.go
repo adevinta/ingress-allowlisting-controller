@@ -44,6 +44,16 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 		return ctrl.Result{}, nil
 	}
 
+	// A Service generated for a Gateway is the Gateway's infrastructure, and Istio copies the
+	// Gateway's annotations onto it. Its allowlist is the Gateway's and its HTTPRoutes'
+	// AuthorizationPolicies, which add up. loadBalancerSourceRanges would apply first, at the load
+	// balancer, and drop every CIDR an HTTPRoute allows beyond the Gateway's.
+	if gateway := gatewayOwnerName(&service); gateway != "" {
+		log.Debugf("Service %s/%s belongs to Gateway %s: not managed, its allowlist is the Gateway's", service.Namespace, service.Name, gateway)
+		resolvers.ForgetObject(service.Namespace, "Service", service.Name)
+		return ctrl.Result{}, nil
+	}
+
 	updatedService, err := r.reconcileService(ctx, service)
 	if err != nil {
 		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
