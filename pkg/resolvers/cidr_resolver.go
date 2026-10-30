@@ -254,7 +254,9 @@ func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object c
 	allowlistedGroups, okCidrAnnotation := object.GetAnnotations()[r.Annotation()]
 	allowlistedClusterGroups, okClusterCidrAnnotation := object.GetAnnotations()[r.ClusterAnnotation()]
 	if !okCidrAnnotation && !okClusterCidrAnnotation {
-		log.Info(object.GetObjectKind().GroupVersionKind().Kind, " does not have the allowlist group annotation, ignoring ", object.GetName(), "namespace", object.GetNamespace())
+		// Debug: the in-place controllers reconcile every object of their kind, so at info this would
+		// be logged for every unannotated Ingress, Service and NetworkPolicy on every change and resync.
+		log.Debug(object.GetObjectKind().GroupVersionKind().Kind, " does not have the allowlist group annotation, ignoring ", object.GetName(), "namespace", object.GetNamespace())
 		return []string{}, fmt.Errorf("%w: %q or %q", ErrAnnotationNotFound, r.Annotation(), r.ClusterAnnotation())
 	}
 	var allowedIps []string

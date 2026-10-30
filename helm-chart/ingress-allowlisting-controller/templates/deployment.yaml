@@ -59,6 +59,9 @@ spec:
 {{- if .Values.leaderElection.enabled }}
         - "--enable-leader-election"
 {{- end }}
+{{- with .Values.logLevel }}
+        - "--log-level={{ . }}"
+{{- end }}
 {{- with .Values.annotationPrefix }}
         - "--annotation-prefix={{ . }}"
 {{- end }}
