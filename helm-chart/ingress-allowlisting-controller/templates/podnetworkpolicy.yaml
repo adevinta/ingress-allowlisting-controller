@@ -1,0 +1,31 @@
+{{- if .Values.podNetworkPolicy.enabled }}
+# Limits who can connect to the controller pod (ingress only). Egress is left alone: the controller
+# needs the API server, DNS and the remote CIDR feeds.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: "{{ .Release.Name }}"
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Release.Name }}"
+  policyTypes:
+  - Ingress
+  ingress:
+  # Health probes (/healthz, /readyz). Open to all: they only answer "ok", and not every CNI lets
+  # kubelet probes through a NetworkPolicy.
+  - ports:
+    - port: 8081
+      protocol: TCP
+{{- with .Values.podNetworkPolicy.metricsFrom }}
+  # Metrics (no authentication): only from these peers.
+  - from:
+{{ toYaml . | indent 4 }}
+    ports:
+    - port: 8080
+      protocol: TCP
+{{- end }}
+{{- end }}

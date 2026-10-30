@@ -41,3 +41,17 @@ count(sum(namespace_ingress_IpAllowlistingGroup_missing) by (namespace, object, 
 The metrics server binds to `:8080` by default. Override with `--metrics-addr`. It serves plain
 HTTP without authentication, so anything that can reach the pod can read the metrics, including
 namespace, resource and group names.
+
+Limit who can reach it with a NetworkPolicy. Platform-managed namespaces often have one already
+(check `kubectl get networkpolicy -n <namespace>`). Otherwise the chart can add one for the
+controller pod, ingress only: the probe port (8081) stays open, and only `metricsFrom` can reach
+the metrics port. With an empty `metricsFrom`, nobody can scrape it.
+
+```yaml
+podNetworkPolicy:
+  enabled: true
+  metricsFrom:
+  - namespaceSelector:
+      matchLabels:
+        kubernetes.io/metadata.name: monitoring   # where Prometheus runs
+```

@@ -33,6 +33,18 @@ securityContext:
   capabilities:
     drop: ["ALL"]
 
+# NetworkPolicy for the controller's own pod (ingress only). Off by default: many platforms
+# already isolate namespaces, check before enabling. When enabled, the probe port stays open and
+# only metricsFrom can reach the metrics port (:8080, plain HTTP without authentication); with an
+# empty metricsFrom nobody can scrape it.
+podNetworkPolicy:
+  enabled: false
+  # NetworkPolicy "from" peers allowed to reach the metrics port, e.g.
+  #   - namespaceSelector:
+  #       matchLabels:
+  #         kubernetes.io/metadata.name: monitoring
+  metricsFrom: []
+
 vpa:
   updateMode: "Recreate"
   containerPolicy:
