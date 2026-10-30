@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"reflect"
 
 	corev1 "k8s.io/api/core/v1"
@@ -45,7 +46,7 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	updatedService, err := r.reconcileService(ctx, service)
 	if err != nil {
-		if err == r.CidrResolver.AnnotationNotFoundError() {
+		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Error creating or updating service")
@@ -84,7 +85,7 @@ func (r *ServiceReconciler) reconcileService(ctx context.Context, service corev1
 	}
 
 	cidrs, err := r.CidrResolver.GetCidrsFromObject(ctx, &service)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
+	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 		return service, err
 	}
 	if err != nil {

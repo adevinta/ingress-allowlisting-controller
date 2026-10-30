@@ -145,7 +145,7 @@ func TestReconcileIngressNoAnnotations(t *testing.T) {
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	_, err := reconciler.reconcileIngress(context.Background(), *ingress)
-	assert.Equal(t, reconciler.CidrResolver.AnnotationNotFoundError(), err)
+	assert.ErrorIs(t, err, resolvers.ErrAnnotationNotFound)
 
 	events := &corev1.EventList{}
 	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))

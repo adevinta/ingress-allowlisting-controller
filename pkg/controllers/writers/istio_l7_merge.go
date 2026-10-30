@@ -64,7 +64,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			continue
 		}
 		ips, err := w.cidrResolver.GetCidrsFromObjectWithCache(ctx, sibling, cache)
-		if err == w.cidrResolver.AnnotationNotFoundError() {
+		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 			continue
 		}
 		if err != nil {

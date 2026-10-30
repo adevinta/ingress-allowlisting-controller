@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
@@ -70,7 +71,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	var allowedIps []string
 	var err error
 	allowedIps, err = r.CidrResolver.GetCidrsFromObject(ctx, &gateway)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
+	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 		// Annotation removed — delete any previously created L4 AP.
 		if err := writer.Delete(ctx, &gateway); err != nil {
 			return ctrl.Result{}, err

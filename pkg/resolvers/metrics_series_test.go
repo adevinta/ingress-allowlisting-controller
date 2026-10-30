@@ -61,7 +61,7 @@ func TestMissingSeriesFollowAnnotation(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, map[string]float64{"a": 1}, missingSeries(t, ns), "a group removed from the annotation loses its series")
 
-	_, _ = resolver.GetCidrsFromObject(ctx, ingressWithGroups(ns, "")) // AnnotationNotFoundError
+	_, _ = resolver.GetCidrsFromObject(ctx, ingressWithGroups(ns, "")) // ErrAnnotationNotFound
 	assert.Empty(t, missingSeries(t, ns), "removing the annotation removes the series")
 }
 
