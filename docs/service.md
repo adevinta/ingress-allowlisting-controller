@@ -10,6 +10,31 @@ with the resolved CIDR set. Enable with `--service-support-enabled`.
 Services that are **not** of `type: LoadBalancer` are skipped even if annotated — the
 Kubernetes API server rejects `loadBalancerSourceRanges` on any other type.
 
+Services **generated for a Gateway API Gateway** are skipped too (see below), so
+`--service-support-enabled` and `--gateway-support-enabled` can be used together.
+
+## Services generated for a Gateway
+
+A Gateway implementation creates a Service for each Gateway, and Istio copies the Gateway's
+annotations onto it, including the allowlist annotation. The controller leaves such a Service alone:
+it has an `ownerReference` to a `gateway.networking.k8s.io` Gateway, or the label
+`gateway.networking.k8s.io/gateway-name`.
+
+The Service belongs to the Gateway, and so does its allowlist: the Gateway's and its HTTPRoutes'
+AuthorizationPolicies, which add up (Istio ORs ALLOW policies). `loadBalancerSourceRanges` would
+instead apply first, at the load balancer, and drop every CIDR an HTTPRoute allows beyond the
+Gateway's, so the route allowlists would silently stop working. Restrict a Gateway with its own
+annotations, see [Gateway API](gateway-api.md).
+
+Ranges written onto such a Service by an earlier version, or by hand, are left in place. To check
+and clear them:
+
+```bash
+kubectl get svc -A -l gateway.networking.k8s.io/gateway-name \
+  -o custom-columns=NS:.metadata.namespace,NAME:.metadata.name,RANGES:.spec.loadBalancerSourceRanges
+kubectl patch svc <name> -n <ns> --type=merge -p '{"spec":{"loadBalancerSourceRanges":null}}'
+```
+
 ## Annotations
 
 | Annotation | Scope | Description |

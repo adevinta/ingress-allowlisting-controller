@@ -78,13 +78,29 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy, a
 func logAnnotationRemoval(kind, annotationPrefix string) predicate.Funcs {
 	return predicate.Funcs{
 		UpdateFunc: func(e event.UpdateEvent) bool {
-			if hasAllowlistAnnotation(annotationPrefix, e.ObjectOld) && !hasAllowlistAnnotation(annotationPrefix, e.ObjectNew) {
+			// A Gateway's Service was never managed (see gatewayOwnerName): nothing to stop.
+			if hasAllowlistAnnotation(annotationPrefix, e.ObjectOld) && !hasAllowlistAnnotation(annotationPrefix, e.ObjectNew) && gatewayOwnerName(e.ObjectNew) == "" {
 				log.DefaultLogger.Warnf("%s %s/%s: allowlist annotation removed, the controller stopped managing it; the last allowlist it wrote stays in place and no longer follows CIDRs changes",
 					kind, e.ObjectNew.GetNamespace(), e.ObjectNew.GetName())
 			}
 			return true
 		},
 	}
+}
+
+// gatewayNameLabel is the Gateway API label implementations put on the resources they create for a
+// Gateway (Istio on the Service and Deployment of the gateway).
+const gatewayNameLabel = gatewayApiv1.GroupName + "/gateway-name"
+
+// gatewayOwnerName returns the name of the Gateway obj was generated for, from its ownerReferences
+// or else the standard gateway-name label, or "" if it doesn't belong to a Gateway.
+func gatewayOwnerName(obj client.Object) string {
+	for _, ref := range obj.GetOwnerReferences() {
+		if ref.Kind == "Gateway" && strings.HasPrefix(ref.APIVersion, gatewayApiv1.GroupName+"/") {
+			return ref.Name
+		}
+	}
+	return obj.GetLabels()[gatewayNameLabel]
 }
 
 func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
