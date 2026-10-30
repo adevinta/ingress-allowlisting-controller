@@ -1,0 +1,15 @@
+{{- if gt (int .Values.replicaCount) 1 }}
+# Only with several replicas: with one, any PDB that keeps a pod available would block node drains.
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ .Release.Name }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    app.kubernetes.io/name: "{{ .Release.Name }}"
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: "{{ .Release.Name }}"
+{{- end }}

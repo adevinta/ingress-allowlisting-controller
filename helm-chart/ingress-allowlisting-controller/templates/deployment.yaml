@@ -56,6 +56,9 @@ spec:
         - "--httproute-label-selector={{ . }}"
 {{- end }}
 {{- end }}
+{{- if .Values.leaderElection.enabled }}
+        - "--enable-leader-election"
+{{- end }}
 {{- with .Values.annotationPrefix }}
         - "--annotation-prefix={{ . }}"
 {{- end }}

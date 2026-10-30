@@ -30,28 +30,43 @@ func allWriters() (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 		}
 }
 
-// clusterRoleRules decodes a YAML stream and returns the rules of its ClusterRoles.
-func clusterRoleRules(t *testing.T, stream []byte) []rbacv1.PolicyRule {
+// roleRules are the rules of the ClusterRoles (valid everywhere) and Roles (per namespace) of a
+// YAML stream.
+type roleRules struct {
+	cluster    []rbacv1.PolicyRule
+	namespaced map[string][]rbacv1.PolicyRule
+}
+
+func parseRoles(t *testing.T, stream []byte) roleRules {
 	t.Helper()
 	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(stream), 4096)
-	var rules []rbacv1.PolicyRule
+	rr := roleRules{namespaced: map[string][]rbacv1.PolicyRule{}}
 	for {
-		var role rbacv1.ClusterRole
+		var role rbacv1.ClusterRole // a Role has the same fields
 		err := decoder.Decode(&role)
 		if errors.Is(err, io.EOF) {
-			return rules
+			return rr
 		}
 		require.NoError(t, err)
-		if role.Kind == "ClusterRole" {
-			rules = append(rules, role.Rules...)
+		switch role.Kind {
+		case "ClusterRole":
+			rr.cluster = append(rr.cluster, role.Rules...)
+		case "Role":
+			rr.namespaced[role.Namespace] = append(rr.namespaced[role.Namespace], role.Rules...)
 		}
 	}
 }
 
-func granted(rules []rbacv1.PolicyRule, p writers.Permission) bool {
+// granted reports whether a ClusterRole grants p, or, for a permission needed in one namespace, a
+// Role in that namespace.
+func granted(rr roleRules, p writers.Permission) bool {
 	resource := p.Resource
 	if p.Subresource != "" {
 		resource += "/" + p.Subresource
+	}
+	rules := rr.cluster
+	if p.Namespace != "" {
+		rules = append(slices.Clone(rules), rr.namespaced[p.Namespace]...)
 	}
 	for _, r := range rules {
 		if (slices.Contains(r.APIGroups, p.Group) || slices.Contains(r.APIGroups, "*")) &&
@@ -63,7 +78,7 @@ func granted(rules []rbacv1.PolicyRule, p writers.Permission) bool {
 	return false
 }
 
-func assertAllGranted(t *testing.T, rules []rbacv1.PolicyRule) {
+func assertAllGranted(t *testing.T, rules roleRules) {
 	t.Helper()
 	l4, l7 := allWriters()
 	for _, p := range requiredPermissions(allFeatures, l4, l7) {
@@ -76,26 +91,30 @@ func assertAllGranted(t *testing.T, rules []rbacv1.PolicyRule) {
 func TestRequiredPermissionsGrantedByGeneratedRole(t *testing.T) {
 	role, err := os.ReadFile("../../config/rbac/role.yaml")
 	require.NoError(t, err)
-	assertAllGranted(t, clusterRoleRules(t, role))
+	assertAllGranted(t, parseRoles(t, role))
 }
 
-// TestRequiredPermissionsGrantedByChart verifies that the chart's ClusterRole, with every feature
-// on, grants everything the preflight checks.
+// TestRequiredPermissionsGrantedByChart verifies that the chart's ClusterRole and Roles, with every
+// feature on, grant everything the preflight checks, the leader election lease and Events in the
+// release namespace.
 func TestRequiredPermissionsGrantedByChart(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm not installed")
 	}
-	out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller",
-		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true").Output()
+	const ns = "iac-test"
+	out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller", "--namespace", ns,
+		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,leaderElection.enabled=true").Output()
 	require.NoError(t, err)
 
-	rules := clusterRoleRules(t, out)
+	rules := parseRoles(t, out)
 	l4, l7 := allWriters()
-	for _, p := range requiredPermissions(allFeatures, l4, l7) {
-		if p.Resource == "leases" {
-			continue // the chart doesn't support --enable-leader-election (single replica)
-		}
+	features := allFeatures
+	features.leaderElectionNamespace = ns
+	for _, p := range requiredPermissions(features, l4, l7) {
 		assert.True(t, granted(rules, p), "not granted by the chart: %+v", p)
+	}
+	for _, r := range rules.cluster {
+		assert.NotContains(t, r.Resources, "leases", "leases are granted per namespace, not cluster-wide")
 	}
 }
 
