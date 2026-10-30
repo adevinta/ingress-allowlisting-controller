@@ -38,6 +38,7 @@ import (
 	"k8s.io/client-go/kubernetes"
 	"k8s.io/client-go/rest"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/healthz"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	log "github.com/adevinta/go-log-toolkit"
@@ -54,6 +55,7 @@ var (
 func main() {
 	ctx := mainContext
 	var metricsAddr string
+	var healthProbeAddr string
 	var enableLeaderElection bool
 	var ingressSupportEnabled bool
 	var gatewaySupportEnabled bool
@@ -68,6 +70,7 @@ func main() {
 	cidrSource := controllers.DefaultCIDRSourceOptions()
 	var allowlist stringListFlag
 	flag.StringVar(&metricsAddr, "metrics-addr", ":8080", "The address the metric endpoint binds to.")
+	flag.StringVar(&healthProbeAddr, "health-probe-bind-address", ":8081", "The address the /healthz and /readyz probe endpoints bind to. \"0\" disables them.")
 	flag.BoolVar(&enableLeaderElection, "enable-leader-election", false,
 		"Enable leader election for controller manager. "+
 			"Enabling this will ensure there is only one active controller manager.")
@@ -153,9 +156,10 @@ func main() {
 		Metrics: metricsserver.Options{
 			BindAddress: metricsAddr,
 		},
-		WebhookServer:    webhook.NewServer(webhook.Options{Port: 9443}),
-		LeaderElection:   enableLeaderElection,
-		LeaderElectionID: "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
+		HealthProbeBindAddress: healthProbeAddr,
+		WebhookServer:          webhook.NewServer(webhook.Options{Port: 9443}),
+		LeaderElection:         enableLeaderElection,
+		LeaderElectionID:       "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
 	}
 	byObject := map[client.Object]cache.ByObject{}
 	if httpRouteSupportEnabled && httpRouteLabelSelector != "" {
@@ -181,6 +185,14 @@ func main() {
 	mgr, err := ctrl.NewManager(restConfig, mgrOptions)
 	if err != nil {
 		setupLog.Fatal(err, "unable to start manager")
+	}
+	// Liveness and readiness only say the process serves requests; they don't check that the
+	// reconcile workers make progress.
+	if err := mgr.AddHealthzCheck("healthz", healthz.Ping); err != nil {
+		setupLog.Fatal(err, "unable to set up health check")
+	}
+	if err := mgr.AddReadyzCheck("readyz", healthz.Ping); err != nil {
+		setupLog.Fatal(err, "unable to set up ready check")
 	}
 
 	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, "", annotationPrefix, httpHeadersEnabled, cidrSource); err != nil {
