@@ -283,8 +283,10 @@ controlled separately:
   you actually use.
 
 Without an allowlist, anyone who can create a `CIDRs` or `ClusterCIDRs` object can still make the
-controller request any public URL and read parts of the response through `status.cidrs`. Treat
-creating these objects as a privileged operation. See
+controller request any public URL. Only the values in the response that are CIDRs or IP addresses
+reach `status.cidrs`, and error messages name types, not fetched values, so the rest of the response
+isn't readable back. The IP addresses it contains still are. Treat creating these objects as a
+privileged operation. See
 [CIDRs — Restricting where sources can be fetched from](cidrs.md#restricting-where-sources-can-be-fetched-from).
 
 See

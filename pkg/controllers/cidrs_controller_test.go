@@ -209,7 +209,9 @@ func testApplyProcessor(t *testing.T, serialize func(*testing.T, any) io.Reader)
 		},
 	)
 	require.Error(t, err)
-	assert.Contains(t, err.Error(), "42")
+	// The error ends up in the object's condition, readable by its users: the type, not the
+	// fetched value.
+	assert.NotContains(t, err.Error(), "42")
 	assert.Contains(t, err.Error(), "unexpected value type")
 }
 
@@ -796,7 +798,7 @@ func TestCIDRsReconcileFromGitHubInvalidEncodingHTTPResponse(t *testing.T) {
 	assert.Equal(t, ipamv1alpha1.CIDRsStatusConditionTypeUpToDate, cidrs.GetStatus().Conditions[0].Type)
 	assert.Equal(t, v1.ConditionFalse, cidrs.GetStatus().Conditions[0].Status)
 	assert.Contains(t, cidrs.GetStatus().Conditions[0].Message, "unexpected encoding")
-	assert.Contains(t, cidrs.GetStatus().Conditions[0].Message, "what-is-this")
+	assert.NotContains(t, cidrs.GetStatus().Conditions[0].Message, "what-is-this", "the condition must not echo fetched content")
 }
 
 func TestCIDRsReconcileFromAWSRules(t *testing.T) {

@@ -6,11 +6,11 @@ import (
 	"encoding/base64"
 	"encoding/csv"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
 	"net/http"
-	"regexp"
 	"slices"
 	"sort"
 	"strings"
@@ -32,7 +32,36 @@ import (
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 )
 
-var ipv4RegExp = regexp.MustCompile(`^\d{1,3}\.\d{1,3}\.\d{1,3}.\d{1,3}$`)
+// normalizeCIDR returns s as a CIDR: a CIDR as written (10.0.0.5/8 stays 10.0.0.5/8), a bare IP as
+// a host route (/32 for IPv4, /128 for IPv6). ok is false if s is neither. It uses the same parser
+// as the rest of the controller, so what it accepts is exactly what can be enforced.
+func normalizeCIDR(s string) (cidr string, ok bool) {
+	s = strings.TrimSpace(s)
+	if _, _, err := net.ParseCIDR(s); err == nil {
+		return s, true
+	}
+	if ip := net.ParseIP(s); ip != nil {
+		if ip.To4() != nil {
+			return ip.String() + "/32", true
+		}
+		return ip.String() + "/128", true
+	}
+	return "", false
+}
+
+// normalizeExternalCIDRs keeps the values from a remote source that are CIDRs or IPs, normalized.
+// Anything else is dropped and only counted, never echoed back: status.cidrs is readable by whoever
+// can read the object, so it must not become a copy of the response.
+func normalizeExternalCIDRs(values []string) (cidrs []string, dropped int) {
+	for _, v := range values {
+		if c, ok := normalizeCIDR(v); ok {
+			cidrs = append(cidrs, c)
+		} else {
+			dropped++
+		}
+	}
+	return cidrs, dropped
+}
 
 type CIDRReconciler struct {
 	client.Client
@@ -63,7 +92,7 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 
 	status.CIDRs = specs.CIDRsSource.CIDRs
 
-	fetchErr := r.addHTTPSource(ctx, cidrs, &status)
+	dropped, fetchErr := r.addHTTPSource(ctx, cidrs, &status)
 	// retry is set when a remote source did not produce a usable list, so it is fetched again soon
 	// instead of waiting for the next watch event or resync.
 	retry := fetchErr != nil
@@ -77,18 +106,25 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			Message: fmt.Sprintf("Failed to get CIDRs from http source: %v", fetchErr),
 		})
 	} else {
+		message := "All CIDRs are up to date"
+		if dropped > 0 {
+			// A count, never the values: a misconfigured CEL expression stays visible without
+			// echoing the response.
+			message = fmt.Sprintf("%s (%d invalid entries ignored)", message, dropped)
+		}
 		status.UpsertCondition(ipamv1alpha1.Condition{
 			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
 			Status:  v1.ConditionTrue,
-			Message: "All CIDRs are up to date",
+			Message: message,
 		})
 	}
 
+	// Bare IPs become host routes. Inline values are otherwise kept as typed (remote ones are
+	// already normalized by addHTTPSource).
 	for i, cidr := range status.CIDRs {
-		_, _, err := net.ParseCIDR(cidr)
-		if err != nil {
-			if ipv4RegExp.Match([]byte(cidr)) {
-				status.CIDRs[i] = fmt.Sprintf("%s/32", cidr)
+		if _, _, err := net.ParseCIDR(cidr); err != nil {
+			if c, ok := normalizeCIDR(cidr); ok {
+				status.CIDRs[i] = c
 			}
 		}
 	}
@@ -268,7 +304,7 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, cel
 					for _, item := range v {
 						cidr, ok := item.(string)
 						if !ok {
-							return nil, fmt.Errorf("unexpected value type %T for %v", item, item)
+							return nil, fmt.Errorf("unexpected value type %T", item)
 						}
 						cidrValues = append(cidrValues, cidr)
 					}
@@ -277,7 +313,7 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, cel
 				case string:
 					cidrValues = append(cidrValues, v)
 				default:
-					return nil, fmt.Errorf("unexpected value type %T for %v", v, v)
+					return nil, fmt.Errorf("unexpected value type %T", v)
 				}
 			}
 		}
@@ -350,7 +386,7 @@ func extractCIDRsFromCELValue(val ref.Val) ([]string, error) {
 					cidrValues = append(cidrValues, str)
 				} else {
 					// Non-string value - this is an error
-					return nil, fmt.Errorf("unexpected value type %T for %v", goItemVal, goItemVal)
+					return nil, fmt.Errorf("unexpected value type %T", goItemVal)
 				}
 			}
 		}
@@ -375,7 +411,7 @@ func extractCIDRsFromCELValue(val ref.Val) ([]string, error) {
 				cidrValues = append(cidrValues, str)
 			} else {
 				// Non-string value - this is an error
-				return nil, fmt.Errorf("unexpected value type %T for %v", item, item)
+				return nil, fmt.Errorf("unexpected value type %T", item)
 			}
 		}
 		return cidrValues, nil
@@ -384,17 +420,17 @@ func extractCIDRsFromCELValue(val ref.Val) ([]string, error) {
 		if strVal, ok := val.ConvertToType(types.StringType).(types.String); ok {
 			return []string{string(strVal)}, nil
 		}
-		return nil, fmt.Errorf("unexpected CEL value type %T: %v (Go value: %T: %v)", val, val, goVal, goVal)
+		return nil, fmt.Errorf("unexpected CEL value type %T (Go value: %T)", val, goVal)
 	}
 }
 
-func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) (err error) {
+func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) (dropped int, err error) {
 	if status == nil {
-		return nil
+		return 0, nil
 	}
 	spec := cidrs.GetSpec()
 	if spec.CIDRsSource.Location.URI == "" {
-		return nil
+		return 0, nil
 	}
 	// One deadline covers the whole fetch: connect, headers, reading the body and processing it
 	// (the request context also bounds body reads). Without it a slow or stalled server would hold
@@ -425,30 +461,30 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 
 	req, err := http.NewRequestWithContext(ctx, "GET", spec.CIDRsSource.Location.URI, nil)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	// Refuse a source that is not allowed before anything else happens — in particular before any
 	// Secret is read for headersFrom. Redirects are checked again by the client.
 	origins, err := parseAllowlist(opts.Allowlist)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	if err := checkAllowed(origins, req.URL); err != nil {
-		return err
+		return 0, err
 	}
 	if r.HTTPHeadersEnabled {
 		err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), req.Header, spec.CIDRsSource.Location.HeadersFrom)
 		if err != nil {
-			return err
+			return 0, err
 		}
 	}
 	resp, err := newSourceHTTPClient(opts, origins).Do(req)
 	if err != nil {
-		return err
+		return 0, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Cap the body before any parser sees it. The overflow is checked after processing whatever the
@@ -459,17 +495,24 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	body, err := getHTTPResponseBody(resp)
 	if err != nil {
 		if overflow := capped.exceeded(); overflow != nil {
-			return overflow
+			return 0, overflow
 		}
-		return err
+		return 0, err
 	}
 
 	cidrValues, err := applyProcessorWithCostLimit(body, spec.CIDRsSource.Location.Processing, opts.CELCostLimit)
 	if overflow := capped.exceeded(); overflow != nil {
-		return overflow
+		return 0, overflow
 	}
 	if err != nil {
-		return err
+		return 0, err
+	}
+
+	// Only CIDRs and IPs reach the status; see normalizeExternalCIDRs.
+	cidrValues, dropped = normalizeExternalCIDRs(cidrValues)
+	if dropped > 0 {
+		log.DefaultLogger.WithContext(logCtx).WithFields(logFields).
+			Warnf("ignored %d entries from the CIDR source that are not CIDRs or IP addresses", dropped)
 	}
 
 	// Breadth guard against human mistakes. We trust the source itself (AWS,
@@ -484,14 +527,14 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 			WithField("cidrs", cidrs.GetName()).
 			WithField("uri", spec.CIDRsSource.Location.URI).
 			Error(err, "rejecting external CIDR source: coverage too broad, keeping last-known-good allowlist")
-		return err
+		return 0, err
 	}
 
 	logFetchCompleted(logCtx, logFields, capped, time.Since(start), len(cidrValues))
 
 	status.CIDRs = append(status.CIDRs, cidrValues...)
 
-	return nil
+	return dropped, nil
 }
 
 func (r *CIDRReconciler) resolveNamespace(objectNamespace string, objectRef ipamv1alpha1.ObjectRef) (string, error) {
@@ -600,7 +643,7 @@ func getHTTPResponseBody(resp *http.Response) (io.Reader, error) {
 				case "", nil:
 					return strings.NewReader(contentString), nil
 				default:
-					return nil, fmt.Errorf("unexpected encoding %s", response["encoding"])
+					return nil, errors.New("unexpected encoding")
 				}
 			}
 		}
