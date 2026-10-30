@@ -14,6 +14,25 @@ resources:
     cpu: 100m
     memory: 256Mi
 
+# Liveness (/healthz) and readiness (/readyz) probes on :8081. They show the process serves
+# requests, not that reconciles make progress.
+probes:
+  enabled: true
+
+# The image (distroless, USER nonroot) runs as UID 65532. runAsUser must be numeric: the kubelet
+# can't check a user name against runAsNonRoot. The controller writes nothing to disk.
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 65532
+  runAsGroup: 65532
+  seccompProfile:
+    type: RuntimeDefault
+securityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop: ["ALL"]
+
 vpa:
   updateMode: "Recreate"
   containerPolicy:

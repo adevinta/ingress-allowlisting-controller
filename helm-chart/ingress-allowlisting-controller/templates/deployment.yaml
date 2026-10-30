@@ -29,6 +29,10 @@ spec:
 {{ toYaml . | indent 8 }}
 {{- end }}
       serviceAccountName: {{ .Release.Name }}
+{{- with .Values.podSecurityContext }}
+      securityContext:
+{{ toYaml . | indent 8 }}
+{{- end }}
       containers:
       - name: {{ .Chart.Name }}
         image: {{ .Values.image.fullyQualifiedURL }}
@@ -97,5 +101,25 @@ spec:
               resource: limits.memory
         ports:
         - containerPort: 8080
+{{- if .Values.probes.enabled }}
+        # The probes use :8081 (--health-probe-bind-address). It is not listed in ports on purpose:
+        # the PodMonitor scrapes every listed port, and 8081 has no /metrics.
+        livenessProbe:
+          httpGet:
+            path: /healthz
+            port: 8081
+          initialDelaySeconds: 15
+          periodSeconds: 20
+        readinessProbe:
+          httpGet:
+            path: /readyz
+            port: 8081
+          initialDelaySeconds: 5
+          periodSeconds: 10
+{{- end }}
+{{- with .Values.securityContext }}
+        securityContext:
+{{ toYaml . | indent 10 }}
+{{- end }}
         resources:
 {{ toYaml .Values.resources | indent 12 }}
