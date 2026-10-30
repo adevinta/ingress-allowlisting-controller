@@ -130,7 +130,7 @@ func TestReconcileServiceNoAnnotations(t *testing.T) {
 	reconciler := newServiceReconciler(t, k8sClient)
 
 	_, err := reconciler.reconcileService(context.Background(), *service)
-	assert.Equal(t, reconciler.CidrResolver.AnnotationNotFoundError(), err)
+	assert.ErrorIs(t, err, resolvers.ErrAnnotationNotFound)
 }
 
 func TestReconcileServicePartialNotFound(t *testing.T) {

@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -187,7 +188,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 		// Per-route apply path — Traefik always, Istio when no mergeKey.
 		resolveCIDRs()
-		if cidrErr == r.CidrResolver.AnnotationNotFoundError() {
+		if errors.Is(cidrErr, resolvers.ErrAnnotationNotFound) {
 			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
 				return ctrl.Result{}, err
 			}

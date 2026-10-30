@@ -197,7 +197,7 @@ func TestReconcileGatewayNoAnnotations(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
-	// Note: no GatewayClass needed here because the reconciler returns early on AnnotationNotFoundError
+	// Note: no GatewayClass needed here because the reconciler returns early on resolvers.ErrAnnotationNotFound
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)

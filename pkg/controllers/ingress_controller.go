@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"context"
+	"errors"
 	"strings"
 
 	netv1 "k8s.io/api/networking/v1"
@@ -54,7 +55,7 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	updatedIngress, err := r.reconcileIngress(ctx, netV1Ingress)
 	if err != nil {
-		if err == r.CidrResolver.AnnotationNotFoundError() {
+		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Error creating or updating allowlist")
@@ -82,7 +83,7 @@ func (r *IngressReconciler) reconcileIngress(ctx context.Context, ingressMeta ne
 
 	// TODO: check format of the annotation values.
 	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &ingressMeta)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
+	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 		return ingressMeta, err
 	}
 	if err != nil {

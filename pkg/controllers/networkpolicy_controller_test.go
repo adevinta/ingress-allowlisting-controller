@@ -226,7 +226,7 @@ func TestReconcileNetworkPolicyNoAnnotations(t *testing.T) {
 	reconciler := newNetworkPolicyReconciler(t, k8sClient)
 
 	_, err := reconciler.reconcileNetworkPolicy(context.Background(), *networkPolicy)
-	assert.Equal(t, reconciler.CidrResolver.AnnotationNotFoundError(), err)
+	assert.ErrorIs(t, err, resolvers.ErrAnnotationNotFound)
 }
 
 func TestReconcileNetworkPolicyPartialNotFound(t *testing.T) {

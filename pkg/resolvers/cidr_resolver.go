@@ -25,12 +25,10 @@ import (
 
 var DefaultPrefix = "ipam.adevinta.com"
 
-func (r *CidrResolver) AnnotationNotFoundError() error {
-	if r.annotationNotFoundError == nil {
-		r.annotationNotFoundError = errors.New("Annotation '" + r.Annotation() + "' or '" + r.ClusterAnnotation() + "' not found")
-	}
-	return r.annotationNotFoundError
-}
+// ErrAnnotationNotFound is returned (wrapped, with the annotation names) for an object that has
+// neither allowlist annotation. Check it with errors.Is: a sentinel works for every resolver copy
+// and still matches once the error is wrapped.
+var ErrAnnotationNotFound = errors.New("allowlist annotation not found")
 
 func (r *CidrResolver) ClusterAnnotation() string {
 	return r.AnnotationPrefix + "/cluster-allowlist-group"
@@ -238,9 +236,8 @@ func notFoundEvent(ctx context.Context, c client.Client, owner client.Object, ki
 }
 
 type CidrResolver struct {
-	Client                  client.Client
-	AnnotationPrefix        string
-	annotationNotFoundError error
+	Client           client.Client
+	AnnotationPrefix string
 }
 
 func (r *CidrResolver) GetCidrsFromObject(ctx context.Context, object client.Object) ([]string, error) {
@@ -258,7 +255,7 @@ func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object c
 	allowlistedClusterGroups, okClusterCidrAnnotation := object.GetAnnotations()[r.ClusterAnnotation()]
 	if !okCidrAnnotation && !okClusterCidrAnnotation {
 		log.Info(object.GetObjectKind().GroupVersionKind().Kind, " does not have the allowlist group annotation, ignoring ", object.GetName(), "namespace", object.GetNamespace())
-		return []string{}, r.AnnotationNotFoundError()
+		return []string{}, fmt.Errorf("%w: %q or %q", ErrAnnotationNotFound, r.Annotation(), r.ClusterAnnotation())
 	}
 	var allowedIps []string
 	var err error

@@ -52,7 +52,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 
 	updatedNetworkPolicy, err := r.reconcileNetworkPolicy(ctx, networkpolicy)
 	if err != nil {
-		if err == r.CidrResolver.AnnotationNotFoundError() {
+		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 			return ctrl.Result{}, nil
 		}
 		if err == ErrMultipleRulesNotSupported {
@@ -78,7 +78,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 }
 func (r *NetworkPolicyReconciler) reconcileNetworkPolicy(ctx context.Context, networkPolicy netv1.NetworkPolicy) (netv1.NetworkPolicy, error) {
 	cidrs, err := r.CidrResolver.GetCidrsFromObject(ctx, &networkPolicy)
-	if err == r.CidrResolver.AnnotationNotFoundError() {
+	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 		return networkPolicy, err
 	}
 	if err != nil {
