@@ -12,9 +12,19 @@ const IstioControllerName = "istio.io/gateway-controller"
 
 // Permission represents a single Kubernetes RBAC permission required by a writer.
 type Permission struct {
-	Group    string
-	Resource string
-	Verb     string
+	Group       string
+	Resource    string
+	Subresource string // e.g. "status"; empty for the resource itself
+	Verb        string
+}
+
+// Permissions returns one Permission per verb on the given resource.
+func Permissions(group, resource string, verbs ...string) []Permission {
+	perms := make([]Permission, 0, len(verbs))
+	for _, v := range verbs {
+		perms = append(perms, Permission{Group: group, Resource: resource, Verb: v})
+	}
+	return perms
 }
 
 // PermissionProvider is an optional interface a writer can implement to declare

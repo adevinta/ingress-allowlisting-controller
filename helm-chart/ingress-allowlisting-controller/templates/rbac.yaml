@@ -49,9 +49,10 @@ rules:
   verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
 {{- end }}
 {{- if .Values.httproute.enabled }}
+# patch: the Traefik writer adds and removes its Middleware filter on the route with a patch.
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["httproutes"]
-  verbs: ["list", "get", "watch", "update"]
+  verbs: ["list", "get", "watch", "update", "patch"]
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways", "gatewayclasses"]
   verbs: ["list", "get", "watch"]

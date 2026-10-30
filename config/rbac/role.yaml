@@ -16,6 +16,16 @@ rules:
 - apiGroups:
   - ""
   resources:
+  - events
+  verbs:
+  - create
+  - get
+  - list
+  - update
+  - watch
+- apiGroups:
+  - ""
+  resources:
   - namespaces
   verbs:
   - get
@@ -29,6 +39,14 @@ rules:
   - patch
   - update
   - watch
+- apiGroups:
+  - coordination.k8s.io
+  resources:
+  - leases
+  verbs:
+  - create
+  - get
+  - update
 - apiGroups:
   - gateway.networking.k8s.io
   resources:
@@ -45,6 +63,7 @@ rules:
   verbs:
   - get
   - list
+  - patch
   - update
   - watch
 - apiGroups:
