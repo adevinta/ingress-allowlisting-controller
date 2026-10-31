@@ -33,7 +33,7 @@ jobs:
       run: echo "version=$(sed -n 's/^FROM golang:\([0-9.]*\).*/\1/p' Dockerfile)" >> "$GITHUB_OUTPUT"
 
     - name: Setup Golang
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: ${{ steps.go.outputs.version }}
 
