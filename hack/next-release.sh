@@ -22,7 +22,7 @@ fi
 # Paths that change neither the image nor the chart.
 deployed=$(git diff --name-only "$latest" HEAD | while read -r path; do
   case "$path" in
-    .github/*|docs/*|hack/*|test/*|*.md|*_test.go) ;;
+    .github/*|docs/*|hack/*|test/*|*.md|*_test.go|.gitignore) ;;
     *) echo "$path" ;;
   esac
 done)

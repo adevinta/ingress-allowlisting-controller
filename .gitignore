@@ -6,6 +6,8 @@
 *.so
 *.dylib
 bin
+# go build ./cmd/ingress-allowlisting-controller in the repo root
+/ingress-allowlisting-controller
 
 # Test binary, build with `go test -c`
 *.test
