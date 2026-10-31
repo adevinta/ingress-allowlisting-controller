@@ -4,9 +4,11 @@ import (
 	"bytes"
 	"errors"
 	"io"
+	"maps"
 	"os"
 	"os/exec"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -31,16 +33,18 @@ func allWriters() (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 }
 
 // roleRules are the rules of the ClusterRoles (valid everywhere) and Roles (per namespace) of a
-// YAML stream.
+// YAML stream. ClusterRoles aggregated into the default roles (edit, view, ...) are for users, not
+// for the controller: they are kept apart, by name.
 type roleRules struct {
 	cluster    []rbacv1.PolicyRule
 	namespaced map[string][]rbacv1.PolicyRule
+	aggregated map[string]rbacv1.ClusterRole
 }
 
 func parseRoles(t *testing.T, stream []byte) roleRules {
 	t.Helper()
 	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(stream), 4096)
-	rr := roleRules{namespaced: map[string][]rbacv1.PolicyRule{}}
+	rr := roleRules{namespaced: map[string][]rbacv1.PolicyRule{}, aggregated: map[string]rbacv1.ClusterRole{}}
 	for {
 		var role rbacv1.ClusterRole // a Role has the same fields
 		err := decoder.Decode(&role)
@@ -48,10 +52,12 @@ func parseRoles(t *testing.T, stream []byte) roleRules {
 			return rr
 		}
 		require.NoError(t, err)
-		switch role.Kind {
-		case "ClusterRole":
+		switch {
+		case role.Kind == "ClusterRole" && isAggregated(role):
+			rr.aggregated[role.Name] = role
+		case role.Kind == "ClusterRole":
 			rr.cluster = append(rr.cluster, role.Rules...)
-		case "Role":
+		case role.Kind == "Role":
 			rr.namespaced[role.Namespace] = append(rr.namespaced[role.Namespace], role.Rules...)
 		}
 	}
@@ -117,6 +123,52 @@ func TestRequiredPermissionsGrantedByChart(t *testing.T) {
 	for _, r := range rules.cluster {
 		assert.NotContains(t, r.Resources, "leases", "leases are granted per namespace, not cluster-wide")
 	}
+}
+
+// isAggregated reports whether a ClusterRole is aggregated into a default role (edit, view, ...).
+func isAggregated(role rbacv1.ClusterRole) bool {
+	for label := range role.Labels {
+		if strings.HasPrefix(label, "rbac.authorization.k8s.io/aggregate-to-") {
+			return true
+		}
+	}
+	return false
+}
+
+// TestChartAggregatesOnlyCIDRsIntoDefaultRoles verifies that, with every feature on, the chart
+// gives the holders of edit/admin only the CIDRs of their namespace and view only read access:
+// none of the controller's own permissions (AuthorizationPolicies, Middlewares, CIDRs status,
+// ClusterCIDRs, Secrets).
+func TestChartAggregatesOnlyCIDRsIntoDefaultRoles(t *testing.T) {
+	if _, err := exec.LookPath("helm"); err != nil {
+		t.Skip("helm not installed")
+	}
+	out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller",
+		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,leaderElection.enabled=true").Output()
+	require.NoError(t, err)
+
+	aggregated := parseRoles(t, out).aggregated
+	require.ElementsMatch(t, []string{"test-cidrs-editor", "test-cidrs-viewer"}, slices.Collect(maps.Keys(aggregated)),
+		"only the user roles are aggregated, not the controller's")
+
+	editor := aggregated["test-cidrs-editor"]
+	assert.Equal(t, map[string]string{
+		"rbac.authorization.k8s.io/aggregate-to-admin": "true",
+		"rbac.authorization.k8s.io/aggregate-to-edit":  "true",
+	}, editor.Labels)
+	assert.Equal(t, []rbacv1.PolicyRule{{
+		APIGroups: []string{"ipam.adevinta.com"},
+		Resources: []string{"cidrs"},
+		Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
+	}}, editor.Rules)
+
+	viewer := aggregated["test-cidrs-viewer"]
+	assert.Equal(t, map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}, viewer.Labels)
+	assert.Equal(t, []rbacv1.PolicyRule{{
+		APIGroups: []string{"ipam.adevinta.com"},
+		Resources: []string{"cidrs", "cidrs/status", "clustercidrs", "clustercidrs/status"},
+		Verbs:     []string{"get", "list", "watch"},
+	}}, viewer.Rules)
 }
 
 // TestRequiredPermissionsFollowFeatures verifies that disabled features add no permissions, and

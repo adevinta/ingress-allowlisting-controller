@@ -1,10 +1,10 @@
-apiVersion: rbac.authorization.k8s.io/v1 
+# The controller's own permissions, bound to its ServiceAccount only. Not aggregated into the
+# default roles: whoever holds edit/admin would get them too (writing AuthorizationPolicies,
+# Middlewares, CIDRs status, ClusterCIDRs). Users get the -cidrs-editor/-cidrs-viewer roles below.
+apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}
-  labels:
-    rbac.authorization.k8s.io/aggregate-to-admin: "true" 
-    rbac.authorization.k8s.io/aggregate-to-edit: "true" 
 rules:
 - apiGroups: 
   - "ipam.adevinta.com"
@@ -67,6 +67,32 @@ rules:
   resources: ["middlewares"]
   verbs: ["list", "get", "watch", "create", "update", "delete"]
 {{- end }}
+---
+# Namespace editors and admins manage the CIDRs of their namespace. Not the status (the
+# controller writes it) and not ClusterCIDRs (cluster-wide; grant them explicitly).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-cidrs-editor
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-admin: "true"
+    rbac.authorization.k8s.io/aggregate-to-edit: "true"
+rules:
+- apiGroups: ["ipam.adevinta.com"]
+  resources: ["cidrs"]
+  verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+# Read access for view (and so edit and admin, which include view).
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-cidrs-viewer
+  labels:
+    rbac.authorization.k8s.io/aggregate-to-view: "true"
+rules:
+- apiGroups: ["ipam.adevinta.com"]
+  resources: ["cidrs", "cidrs/status", "clustercidrs", "clustercidrs/status"]
+  verbs: ["get", "list", "watch"]
 ---
 apiVersion: v1
 kind: ServiceAccount
