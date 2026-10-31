@@ -26,10 +26,16 @@ jobs:
         restore-keys: |
           ${{ runner.os }}-golang-
 
+    # Test with the Go the image is built with. Dependabot bumps the golang tag in the Dockerfile;
+    # go.mod's toolchain line is only the minimum.
+    - name: Go version from the Dockerfile
+      id: go
+      run: echo "version=$(sed -n 's/^FROM golang:\([0-9.]*\).*/\1/p' Dockerfile)" >> "$GITHUB_OUTPUT"
+
     - name: Setup Golang
       uses: actions/setup-go@v6
       with:
-        go-version-file: './go.mod'
+        go-version: ${{ steps.go.outputs.version }}
 
     - name: Check formatting
       run: |

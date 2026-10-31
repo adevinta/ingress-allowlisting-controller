@@ -18,10 +18,14 @@ Istio and Traefik support is **auto-detected** at startup — no flags needed. T
 ## Installation
 
 ```bash
-git clone https://github.com/adevinta/ingress-allowlisting-controller.git
+git clone --branch v0.1.6 https://github.com/adevinta/ingress-allowlisting-controller.git
 cd ingress-allowlisting-controller/helm-chart/ingress-allowlisting-controller
-helm install ingress-allowlisting-controller ./ --namespace ingress-allowlisting --create-namespace
+helm install ingress-allowlisting-controller ./ --namespace ingress-allowlisting --create-namespace \
+  --set image.fullyQualifiedURL=ghcr.io/adevinta/ingress-allowlisting-controller:0.1.6
 ```
+
+Use the latest [release](https://github.com/adevinta/ingress-allowlisting-controller/releases)
+instead of `v0.1.6`; see [Releases and versions](docs/releases.md), also for Argo CD.
 
 Verify:
 ```bash
@@ -48,6 +52,7 @@ helm upgrade --install ingress-allowlisting-controller ./ --namespace ingress-al
 - [Architecture & support matrix](docs/architecture.md)
 - [Metrics](docs/metrics.md)
 - [Functional tests (real cluster, local only)](docs/functional-tests.md)
+- [Releases and versions](docs/releases.md)
 
 ## Quick start
 
