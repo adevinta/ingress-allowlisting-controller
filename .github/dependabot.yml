@@ -1,5 +1,7 @@
-# Weekly update PRs. Patch updates are approved and merged automatically once the tests pass
-# (dependabot-automerge.yaml); every merge to main is built and released as the next v0.1.N.
+# Go modules change only for security: no version updates (open-pull-requests-limit: 0), only
+# the security updates Dependabot opens for an advisory (repository setting "Dependabot security
+# updates"). dependabot-automerge.yaml merges such a PR only when govulncheck shows it fixes a
+# vulnerability our code calls. Every merge to main is built and released as the next v0.1.N.
 version: 2
 updates:
   - package-ecosystem: gomod
@@ -9,18 +11,11 @@ updates:
       day: monday
       time: "05:00"
       timezone: Etc/UTC
-    groups:
-      # One PR for all patch updates. Only patches here, so the auto-merge sees a patch PR.
-      patch:
-        patterns: ["*"]
-        update-types: [patch]
-      # The Kubernetes libraries have to move together.
-      kubernetes:
-        patterns: ["k8s.io/*", "sigs.k8s.io/*"]
-        update-types: [minor]
+    open-pull-requests-limit: 0
 
-  # The golang builder tag (Go toolchain and standard library). ubuntu:latest and
-  # distroless static:nonroot have no version to bump and are refreshed on every build.
+  # The golang builder tag: the Go toolchain and standard library, where most of govulncheck's
+  # findings are fixed. Patch updates merge automatically. ubuntu:latest and distroless
+  # static:nonroot have no version to bump and are refreshed on every build.
   - package-ecosystem: docker
     directory: /
     schedule:
@@ -29,6 +24,7 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
 
+  # PRs only, never merged automatically.
   - package-ecosystem: github-actions
     directory: /
     schedule:

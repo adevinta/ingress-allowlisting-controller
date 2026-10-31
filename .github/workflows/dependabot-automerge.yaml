@@ -1,7 +1,12 @@
 name: dependabot auto-merge
 
-# Patch updates from Dependabot are approved and put in the merge queue; the queue merges them
-# once testGo passes. Minor and major updates wait for a human.
+# Approves a Dependabot PR and puts it in the merge queue, which merges it once testGo passes:
+# - Go modules: only when govulncheck shows that the PR fixes a vulnerability our code calls
+#   (reported on the base, gone with the PR). Other module updates wait for a human, so a
+#   dependency changes only for a vulnerability that matters, which narrows the room for a
+#   compromised release.
+# - the golang builder image: patch updates (Go toolchain and standard library).
+# Everything else (minor/major golang, GitHub Actions) waits for a human.
 on: pull_request
 
 permissions:
@@ -20,11 +25,65 @@ jobs:
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
-    - name: Approve and merge patch updates
-      if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+    - name: Checkout the base
+      if: steps.metadata.outputs.package-ecosystem == 'gomod'
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.base.sha }}
+        path: base
+        persist-credentials: false
+
+    - name: Checkout the PR
+      if: steps.metadata.outputs.package-ecosystem == 'gomod'
+      uses: actions/checkout@v6
+      with:
+        ref: ${{ github.event.pull_request.head.sha }}
+        path: head
+        persist-credentials: false
+
+    # The Go of the base image; the PR changes only Go modules.
+    - name: Go version from the Dockerfile
+      if: steps.metadata.outputs.package-ecosystem == 'gomod'
+      id: go
+      run: echo "version=$(sed -n 's/^FROM golang:\([0-9.]*\).*/\1/p' base/Dockerfile)" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Golang
+      if: steps.metadata.outputs.package-ecosystem == 'gomod'
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ steps.go.outputs.version }}
+        cache: false
+
+    # A finding whose trace has a function is a vulnerability our code calls; the others are only
+    # imported or required. GOTOOLCHAIN=local: a PR that needs a newer Go is left to a human.
+    - name: Vulnerabilities the PR fixes
+      if: steps.metadata.outputs.package-ecosystem == 'gomod'
+      id: fixes
+      env:
+        GOTOOLCHAIN: local
+      run: |
+        called() {
+          (cd "$1" && go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 -format json ./...) |
+            jq -r 'select(.finding) | .finding | select((.trace[0].function // "") != "") | .osv' | sort -u
+        }
+        called base > base.txt
+        called head > head.txt
+        fixed=$(comm -23 base.txt head.txt | xargs)
+        echo "called on the base: $(xargs < base.txt)"
+        echo "called with the PR: $(xargs < head.txt)"
+        echo "fixed by the PR: ${fixed:-none}"
+        echo "fixed=${fixed}" >> "$GITHUB_OUTPUT"
+
+    - name: Approve and merge
+      if: >-
+        (steps.metadata.outputs.package-ecosystem == 'gomod' && steps.fixes.outputs.fixed != '') ||
+        (steps.metadata.outputs.package-ecosystem == 'docker' &&
+         steps.metadata.outputs.dependency-names == 'golang' &&
+         steps.metadata.outputs.update-type == 'version-update:semver-patch')
       env:
         PR_URL: ${{ github.event.pull_request.html_url }}
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        FIXED: ${{ steps.fixes.outputs.fixed }}
       run: |
-        gh pr review --approve "$PR_URL"
+        gh pr review --approve --body "Automatic: ${FIXED:+fixes called vulnerabilities ${FIXED}}${FIXED:-golang patch update}" "$PR_URL"
         gh pr merge --auto "$PR_URL"
