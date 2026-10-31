@@ -87,7 +87,8 @@ func assertAllGranted(t *testing.T, rules roleRules) {
 }
 
 // TestRequiredPermissionsGrantedByGeneratedRole verifies that the role generated from the
-// kubebuilder markers (config/rbac, the kustomize path) grants everything the preflight checks.
+// kubebuilder markers (config/rbac/role.yaml, the reference for the chart's ClusterRole) grants
+// everything the preflight checks.
 func TestRequiredPermissionsGrantedByGeneratedRole(t *testing.T) {
 	role, err := os.ReadFile("../../config/rbac/role.yaml")
 	require.NoError(t, err)
