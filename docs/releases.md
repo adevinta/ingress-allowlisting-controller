@@ -13,16 +13,24 @@ Releases are git tags `vX.Y.Z` with a GitHub release. The `v` is what Go modules
   the last release is under `.github/`, `docs/`, `hack/` or `test/`, or a `*.md`, `*_test.go` or
   `.gitignore` file (`hack/next-release.sh`). Such changes go into the next release that changes
   the image or the chart.
-- **Minor and major releases are tags pushed by hand**, on a `main` commit that is already
-  released or built:
+- **A breaking change makes the next minor release automatically** (`v0.1.8` → `v0.2.0`; from
+  `v1` on, the next major), so deployments following `v0.1.*` never get it. A change is breaking
+  when a commit since the last release is marked so, in its title or in a body line (a squash
+  merge lists every commit of the PR):
+  - `type!:` or `type(scope)!:` (Conventional Commits), e.g. `fix(cidrs)!: …`,
+  - `type(breaking):`, e.g. `feat(breaking): …`,
+  - a line starting with `BREAKING`, e.g. `BREAKING: … now defaults to false`.
+
+  Keep the marker when editing the squash commit message (the PR title is the commit title).
+  Without it a breaking change is released as a patch.
+- **Minor and major releases can also be tags pushed by hand**, on a `main` commit that is
+  already released or built, e.g. to start a minor without a breaking change:
 
   ```bash
   git tag v0.2.0 <commit> && git push origin v0.2.0
   ```
 
   The workflow adds the image tag and the GitHub release; the next `main` commit becomes `v0.2.1`.
-  Start a new minor for a breaking change (see the release notes), so that deployments following
-  `v0.1.*` don't get it.
 
 ## Images
 
@@ -56,7 +64,8 @@ scheduled rebuilds: an update reaches the image through a commit, and so through
 
 ## Argo CD
 
-Follow the patch releases of one minor with a semver constraint on the git tags:
+Follow the patch releases of one minor with a semver constraint on the git tags. A new minor
+means breaking changes: read its release notes, then move `targetRevision` to it (`v0.2.*`).
 
 ```yaml
 spec:
