@@ -5,8 +5,9 @@ on:
   pull_request:
     branches: [ "*" ]
 
+# Least privilege: the job only reads the repository.
 permissions:
-  id-token: write
+  contents: read
 
 jobs:
 
@@ -29,6 +30,25 @@ jobs:
       uses: actions/setup-go@v6
       with:
         go-version-file: './go.mod'
+
+    - name: Check formatting
+      run: |
+        unformatted=$(gofmt -l $(git ls-files '*.go'))
+        if [ -n "$unformatted" ]; then
+          echo "These files are not gofmt-formatted (run gofmt -w):"
+          echo "$unformatted"
+          exit 1
+        fi
+
+    - name: go vet
+      run: |
+        go vet ./...
+        go vet -tags functional ./test/functional/
+
+    # Known vulnerabilities in the Go standard library and dependencies, reported only when our code
+    # calls the affected function. Pinned so the tool doesn't change under the CI.
+    - name: govulncheck
+      run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...
 
     - name: Verify generated manifests
       run: make verify-manifests

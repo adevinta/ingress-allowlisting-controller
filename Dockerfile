@@ -1,5 +1,5 @@
 # Build the manager binary
-FROM golang:1.27.0 as builder
+FROM golang:1.27.3 AS builder
 
 WORKDIR /workspace
 # Copy the Go Modules manifests
@@ -13,9 +13,10 @@ COPY pkg/ pkg/
 # Build
 RUN CGO_ENABLED=0 go build -a -o manager ./cmd/ingress-allowlisting-controller
 
-FROM ubuntu as ca-certificates
+# ubuntu:latest on purpose: every build gets the most current CA bundle from Ubuntu's updates.
+FROM ubuntu:latest AS ca-certificates
 
-RUN apt-get update && apt-get install -y ca-certificates
+RUN apt-get update && apt-get install -y --no-install-recommends ca-certificates
 
 # Use distroless as minimal base image to package the manager binary
 # Refer to https://github.com/GoogleContainerTools/distroless for more details
