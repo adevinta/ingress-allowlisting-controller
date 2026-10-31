@@ -29,28 +29,26 @@ run: generate fmt vet manifests
 
 # Install CRDs into a cluster
 install: manifests
-	kustomize build config/crd | kubectl apply -f -
+	kubectl apply -f config/crd/bases
 
 # Uninstall CRDs from a cluster
 uninstall: manifests
-	kustomize build config/crd | kubectl delete -f -
-
-# Deploy controller in the configured Kubernetes cluster in ~/.kube/config
-deploy: manifests
-	cd config/manager && kustomize edit set image controller=${IMG}
-	kustomize build config/default | kubectl apply -f -
+	kubectl delete -f config/crd/bases
 
 # Generate manifests e.g. CRD, RBAC etc.
+# The controller is installed with the Helm chart (see README.md), whose crds/ are symlinks to
+# config/crd/bases. config/rbac/role.yaml, generated from the RBAC markers, is the reference for
+# the chart's ClusterRole.
 manifests: controller-gen
 	$(CONTROLLER_GEN) $(CRD_OPTIONS) paths="./pkg/apis/..." output:crd:artifacts:config=config/crd/bases
-	$(CONTROLLER_GEN) rbac:roleName=manager-role webhook paths="./..." output:rbac:artifacts:config=config/rbac output:webhook:artifacts:config=config/webhook
+	$(CONTROLLER_GEN) rbac:roleName=manager-role paths="./..." output:rbac:artifacts:config=config/rbac
 
 # Verify that the committed manifests match the kubebuilder markers.
 verify-manifests: manifests
-	@status="$$(git status --porcelain --untracked-files=all -- config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml)"; \
+	@status="$$(git status --porcelain --untracked-files=all -- config/crd/bases config/rbac/role.yaml)"; \
 	if [ -n "$$status" ]; then \
 		echo "Generated manifests are out of date. Run 'make manifests' and commit the changes:"; \
-		git --no-pager diff -- config/crd/bases config/rbac/role.yaml config/webhook/manifests.yaml; \
+		git --no-pager diff -- config/crd/bases config/rbac/role.yaml; \
 		printf '%s\n' "$$status"; \
 		exit 1; \
 	fi
@@ -94,4 +92,4 @@ functional-clean:
 controller-gen:
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4
 
-.PHONY: all test manager run install uninstall deploy manifests verify-manifests fmt vet generate docker-build docker-push controller-gen functional functional-clean
+.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet generate docker-build docker-push controller-gen functional functional-clean
