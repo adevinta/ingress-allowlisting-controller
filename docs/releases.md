@@ -10,9 +10,9 @@ Releases are git tags `vX.Y.Z` with a GitHub release. The `v` is what Go modules
   `v0.1.7`, …) and creates a GitHub release with notes from the merged PRs. A tag therefore never
   points at a commit without an image.
 - **A commit that changes only CI, docs or tests is not released**: when everything changed since
-  the last release is under `.github/`, `docs/`, `hack/` or `test/`, or a `*.md` or `*_test.go` file
-  (`hack/next-release.sh`). Such changes go into the next release that changes the image or the
-  chart.
+  the last release is under `.github/`, `docs/`, `hack/` or `test/`, or a `*.md`, `*_test.go` or
+  `.gitignore` file (`hack/next-release.sh`). Such changes go into the next release that changes
+  the image or the chart.
 - **Minor and major releases are tags pushed by hand**, on a `main` commit that is already
   released or built:
 
