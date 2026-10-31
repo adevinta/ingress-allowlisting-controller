@@ -1,0 +1,33 @@
+name: govulncheck
+
+# Vulnerabilities published after a release: the PR check only sees them at the next PR. Runs on
+# main after Dependabot's Monday run; a failure here needs an update (or a Dependabot PR merged).
+on:
+  schedule:
+    - cron: "0 7 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+
+  govulncheck:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: main
+
+    # The Go the image is built with (see test.yaml).
+    - name: Go version from the Dockerfile
+      id: go
+      run: echo "version=$(sed -n 's/^FROM golang:\([0-9.]*\).*/\1/p' Dockerfile)" >> "$GITHUB_OUTPUT"
+
+    - name: Setup Golang
+      uses: actions/setup-go@v6
+      with:
+        go-version: ${{ steps.go.outputs.version }}
+
+    - name: govulncheck
+      run: go run golang.org/x/vuln/cmd/govulncheck@v1.9.0 ./...

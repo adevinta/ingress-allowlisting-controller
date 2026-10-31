@@ -1,0 +1,40 @@
+name: release pending main commit
+
+# A push made with a GITHUB_TOKEN (e.g. a merge the auto-merge workflow started) starts no
+# workflow, so such a commit on main would be neither built nor released. This starts
+# "build images" for main when its HEAD has no release tag and no build is running for it.
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: write
+
+jobs:
+
+  dispatch:
+    runs-on: ubuntu-latest
+    steps:
+    - uses: actions/checkout@v6
+      with:
+        ref: main
+        fetch-depth: 0 # all tags
+
+    - name: Start the build of an unreleased main
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        sha=$(git rev-parse HEAD)
+        if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
+          echo "main ${sha} is released: $(git tag --points-at HEAD | xargs)"
+          exit 0
+        fi
+        running=$(gh run list --workflow build.yaml --commit "$sha" --json status --jq '[.[] | select(.status != "completed")] | length')
+        if [ "$running" != "0" ]; then
+          echo "a build of main ${sha} is already queued or running"
+          exit 0
+        fi
+        echo "main ${sha} has no release, starting build images"
+        gh workflow run build.yaml --ref main

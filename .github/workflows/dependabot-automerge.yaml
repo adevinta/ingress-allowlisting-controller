@@ -1,0 +1,30 @@
+name: dependabot auto-merge
+
+# Patch updates from Dependabot are approved and put in the merge queue; the queue merges them
+# once testGo passes. Minor and major updates wait for a human.
+on: pull_request
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+
+  automerge:
+    runs-on: ubuntu-latest
+    if: github.event.pull_request.user.login == 'dependabot[bot]'
+    steps:
+    - name: Dependabot metadata
+      id: metadata
+      uses: dependabot/fetch-metadata@v2
+      with:
+        github-token: ${{ secrets.GITHUB_TOKEN }}
+
+    - name: Approve and merge patch updates
+      if: steps.metadata.outputs.update-type == 'version-update:semver-patch'
+      env:
+        PR_URL: ${{ github.event.pull_request.html_url }}
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: |
+        gh pr review --approve "$PR_URL"
+        gh pr merge --auto "$PR_URL"
