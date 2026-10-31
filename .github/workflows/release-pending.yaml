@@ -27,8 +27,9 @@ jobs:
         GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       run: |
         sha=$(git rev-parse HEAD)
-        if git tag --points-at HEAD | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$'; then
-          echo "main ${sha} is released: $(git tag --points-at HEAD | xargs)"
+        version=$(hack/next-release.sh)
+        if [ -z "$version" ]; then
+          echo "main ${sha} needs no release"
           exit 0
         fi
         running=$(gh run list --workflow build.yaml --commit "$sha" --json status --jq '[.[] | select(.status != "completed")] | length')
@@ -36,5 +37,5 @@ jobs:
           echo "a build of main ${sha} is already queued or running"
           exit 0
         fi
-        echo "main ${sha} has no release, starting build images"
+        echo "main ${sha} is not released yet (${version}), starting build images"
         gh workflow run build.yaml --ref main

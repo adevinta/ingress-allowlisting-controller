@@ -24,7 +24,7 @@ updates:
       time: "05:00"
       timezone: Etc/UTC
 
-  # PRs only, never merged automatically.
+  # One PR for all of them, never merged automatically. CI only: merging it makes no release.
   - package-ecosystem: github-actions
     directory: /
     schedule:
@@ -32,3 +32,6 @@ updates:
       day: monday
       time: "05:00"
       timezone: Etc/UTC
+    groups:
+      github-actions:
+        patterns: ["*"]

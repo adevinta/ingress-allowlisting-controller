@@ -78,8 +78,6 @@ jobs:
     permissions:
       contents: write
       packages: write
-    env:
-      FIRST_VERSION: v0.1.6
     steps:
     - uses: actions/checkout@v6
       with:
@@ -88,25 +86,15 @@ jobs:
     - name: Version
       id: version
       run: |
-        semver='^v[0-9]+\.[0-9]+\.[0-9]+$'
         if [ "${{ github.ref_type }}" = tag ]; then
-          if ! grep -qE "$semver" <<<"$GITHUB_REF_NAME"; then
+          if ! grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$' <<<"$GITHUB_REF_NAME"; then
             echo "tag $GITHUB_REF_NAME is not vX.Y.Z, not a release"
             exit 0
           fi
           version=$GITHUB_REF_NAME
         else
-          if released=$(git tag --points-at HEAD | grep -E "$semver"); then
-            echo "${GITHUB_SHA} is already released as ${released}"
-            exit 0
-          fi
-          latest=$(git tag -l 'v*' | grep -E "$semver" | sort -V | tail -1)
-          if [ -z "$latest" ]; then
-            version=$FIRST_VERSION
-          else
-            IFS=. read -r major minor patch <<<"${latest#v}"
-            version="v${major}.${minor}.$((patch + 1))"
-          fi
+          version=$(hack/next-release.sh)
+          [ -n "$version" ] || exit 0
         fi
         echo "release ${version} of ${GITHUB_SHA}"
         echo "version=${version}" >> "$GITHUB_OUTPUT"
