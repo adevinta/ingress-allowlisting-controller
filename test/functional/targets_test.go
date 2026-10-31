@@ -51,7 +51,7 @@ func ingressTarget() target {
 		name:        "ingress",
 		kind:        "networking.k8s.io/v1 Ingress (nginx whitelist-source-range annotation)",
 		flag:        "ingress-support-enabled",
-		flagDefault: true,
+		flagDefault: false,
 		create: func(ctx context.Context, c client.Client, ns, name string, annotations map[string]string) error {
 			pathType := netv1.PathTypePrefix
 			return c.Create(ctx, &netv1.Ingress{

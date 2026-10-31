@@ -61,8 +61,10 @@ vpa:
       cpu: 100m
       memory: 256Mi   # below this a remote source at the default size cap can OOM the pod
 
+# Kinds the controller writes allowlists to. All off by default: the controller then only
+# reconciles CIDRs and ClusterCIDRs, and warns at startup. Enable the ones you use.
 ingress:
-  enabled: true
+  enabled: false
 
 gateway:
   enabled: false
@@ -90,8 +92,16 @@ tolerations: []
 # "does not have the allowlist group annotation" lines.
 logLevel: info
 annotationPrefix: "ipam.adevinta.com"
-httpHeadersEnabled: true
+# Read Secrets and ConfigMaps for the headersFrom of remote CIDR sources. Off by default: it needs
+# cluster-wide read access to Secrets and ConfigMaps. When on:
+# - only Secrets and ConfigMaps with the labels of secretLabelSelector can be read (the controller
+#   reads through its cache, which only holds them). Empty: <annotationPrefix>/cidr-header-source=true;
+# - cidrSource.allowlist is required: header values only go to the listed origins.
+# A ClusterCIDRs reads headersFrom only from clusterCIDRsHeadersNamespace (default: the release
+# namespace); a CIDRs object only from its own namespace.
+httpHeadersEnabled: false
 secretLabelSelector: ""
+clusterCIDRsHeadersNamespace: ""
 
 # Guardrails for CIDRs/ClusterCIDRs fetched from a remote source (spec.cidrsSource.location.uri).
 # Every key is optional: leave it unset to use the controller default shown here. These are
