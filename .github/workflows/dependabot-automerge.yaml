@@ -21,13 +21,13 @@ jobs:
     steps:
     - name: Dependabot metadata
       id: metadata
-      uses: dependabot/fetch-metadata@v2
+      uses: dependabot/fetch-metadata@v3
       with:
         github-token: ${{ secrets.GITHUB_TOKEN }}
 
     - name: Checkout the base
       if: steps.metadata.outputs.package-ecosystem == 'gomod'
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.base.sha }}
         path: base
@@ -35,7 +35,7 @@ jobs:
 
     - name: Checkout the PR
       if: steps.metadata.outputs.package-ecosystem == 'gomod'
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         path: head
@@ -49,7 +49,7 @@ jobs:
 
     - name: Setup Golang
       if: steps.metadata.outputs.package-ecosystem == 'gomod'
-      uses: actions/setup-go@v6
+      uses: actions/setup-go@v7
       with:
         go-version: ${{ steps.go.outputs.version }}
         cache: false
