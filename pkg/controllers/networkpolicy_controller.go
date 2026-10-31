@@ -25,7 +25,7 @@ type NetworkPolicyReconciler struct {
 	CidrResolver resolvers.CidrResolver
 }
 
-var ErrMultipleRulesNotSupported = errors.New("Networkpolicy with multiple egress or ingress rules is not supported")
+var ErrMultipleRulesNotSupported = errors.New("networkpolicy with multiple egress or ingress rules is not supported")
 
 // +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
 

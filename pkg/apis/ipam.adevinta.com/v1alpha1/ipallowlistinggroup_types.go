@@ -258,19 +258,6 @@ func (s *CIDRsStatus) UpsertCondition(condition Condition) {
 	s.Conditions = append(s.Conditions, condition)
 }
 
-func and(bs ...bool) bool {
-	for _, b := range bs {
-		if !b {
-			return false
-		}
-	}
-	return true
-}
-
-func init() {
-	SchemeBuilder.Register(&CIDRs{}, &CIDRsList{}, &ClusterCIDRs{}, &ClusterCIDRsList{})
-}
-
 // +kubebuilder:object:generate=false
 type CIDRsGetter interface {
 	GetCIDRs() []string

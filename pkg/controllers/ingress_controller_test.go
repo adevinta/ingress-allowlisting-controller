@@ -11,24 +11,14 @@ import (
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
-
-type erroredReader struct{}
-
-func (e erroredReader) Get(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
-	return errors.New("Nobody expects the spanish inquisition")
-}
-
-func (e erroredReader) List(ctx context.Context, list client.ObjectList, opts ...client.ListOption) error {
-	return errors.New("Nobody expects the spanish inquisition")
-}
 
 var extendedScheme = runtime.NewScheme()
 
@@ -54,19 +44,19 @@ func newIngressReconciler(t *testing.T, k8sClient client.Client) *IngressReconci
 // v - ingress has already an allowed list it is overwritten
 func TestReconcileIngress(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	globalCidrs := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "globalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet",
 			"ipam.adevinta.com/allowlist-group":         "localnet,dnssource",
 		}},
@@ -75,7 +65,7 @@ func TestReconcileIngress(t *testing.T) {
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -99,15 +89,15 @@ func TestReconcileIngress(t *testing.T) {
 
 func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 	globalNet := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "globalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	anotherGlobalNet := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "anotherglobalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "anotherglobalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet,anotherglobalnet",
 		}},
 	}
@@ -115,7 +105,7 @@ func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -138,7 +128,7 @@ func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 
 func TestReconcileIngressNoAnnotations(t *testing.T) {
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{}},
 	}
 
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
@@ -154,19 +144,19 @@ func TestReconcileIngressNoAnnotations(t *testing.T) {
 
 func TestReconcileIngressPartialNotFound(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,notexisting"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,notexisting"}},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, ingress).Build()
 
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -185,22 +175,22 @@ func TestReconcileIngressPartialNotFound(t *testing.T) {
 
 func TestReconcileIngressWithInvalidCIDRIpsNoError(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0/16", "172.16.0.0/12", "10.0.0.0/8", "10.0.0.0"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, ingress).Build()
 
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace:       "mynamespace",
 			ResourceVersion: "999",
 			Annotations: map[string]string{
@@ -223,13 +213,13 @@ func TestReconcileIngressWithInvalidCIDRIpsNoError(t *testing.T) {
 func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 	t.Run("Namespace CIDR not found", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "ingresstest", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "ingresstest", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 		reconciler := newIngressReconciler(t, k8sClient)
 
 		expectedIngress := netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "mynamespace",
 				Name:      "ingresstest",
 				// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
@@ -247,7 +237,7 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
 		events := &corev1.EventList{}
-		k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"})
+		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
 
 		expectedEvents := &corev1.EventList{
 			Items: []corev1.Event{
@@ -267,14 +257,14 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 
 	t.Run("Cluster CIDR not found", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "ingresstest", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "notexisting,alsonotexisting"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "ingresstest", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "notexisting,alsonotexisting"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 
 		reconciler := newIngressReconciler(t, k8sClient)
 
 		expectedIngress := netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "mynamespace",
 				Name:      "ingresstest",
 				// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
@@ -292,7 +282,7 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
 		events := &corev1.EventList{}
-		k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"})
+		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
 
 		expectedEvents := &corev1.EventList{
 			Items: []corev1.Event{
@@ -314,16 +304,16 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 // - ingress has already a allowlist it is overwritten
 func TestReconcileIngressOverwriteAllowlist(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	globalnetCidrs := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "globalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.0/24"}},
 	}
 
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{
 			"ipam.adevinta.com/allowlist-group":                  "localnet",
 			"ipam.adevinta.com/cluster-allowlist-group":          "globalnet",
 			"nginx.ingress.kubernetes.io/whitelist-source-range": "1.1.1.1/32,8.8.8.8/32",
@@ -334,7 +324,7 @@ func TestReconcileIngressOverwriteAllowlist(t *testing.T) {
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -371,7 +361,7 @@ func TestReconcileIngressApiError(t *testing.T) {
 	}
 
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting"}},
 	}
 
 	reconciler := newIngressReconciler(t, k8sClient)
@@ -383,22 +373,22 @@ func TestReconcileIngressApiError(t *testing.T) {
 
 func TestReconcileIngressInvalidAnnotationFormat(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnssource"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnssource"}},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, ingress).Build()
 
 	reconciler := newIngressReconciler(t, k8sClient)
 
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -417,21 +407,21 @@ func TestReconcileIngressInvalidAnnotationFormat(t *testing.T) {
 
 func TestReconcileIngressV1(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, ingress).Build()
 
 	reconciler := newIngressReconciler(t, k8sClient)
 	expectedIngress := netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -451,11 +441,11 @@ func TestReconcileIngressV1(t *testing.T) {
 func TestCidrToIngressMapper(t *testing.T) {
 	t.Run("CIDR is being used in the ingress, should return the ingress", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		requests := newIngressesFromCIDRFuncMap(k8sClient, "ipam.adevinta.com/allowlist-group")(context.Background(), &cidr)
 		assert.Len(t, requests, 1)
@@ -464,25 +454,25 @@ func TestCidrToIngressMapper(t *testing.T) {
 
 	t.Run("CIDR is not being used in the ingress, should return an empty list", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		requests := newIngressesFromCIDRFuncMap(k8sClient, "ipam.adevinta.com/allowlist-group")(context.Background(), &cidr)
 		assert.Len(t, requests, 0)
 	})
 	t.Run("One CIDR is being used in the ingress, should return just that one", func(t *testing.T) {
 		ingress1 := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace"},
 		}
 		ingress2 := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test2", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test2", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress1, ingress2).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		}
 		requests := newIngressesFromCIDRFuncMap(k8sClient, "ipam.adevinta.com/allowlist-group")(context.Background(), &cidr)
 		assert.Len(t, requests, 1)
@@ -492,11 +482,11 @@ func TestCidrToIngressMapper(t *testing.T) {
 
 func TestReconcileIngressSkipsUpdateWhenUnchanged(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16"}},
 	}
 	ingress := &netv1.Ingress{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Name:      "test",
 			Namespace: "mynamespace",
 			Annotations: map[string]string{
@@ -519,11 +509,11 @@ func TestReconcileIngressSkipsUpdateWhenUnchanged(t *testing.T) {
 func TestClusterCidrToIngressMapper(t *testing.T) {
 	t.Run("ClusterCIDR is being used in the ingress, should return the ingress", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "localnet,dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "localnet,dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 		cidr := ipamv1alpha1.ClusterCIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newIngressesFromCIDRFuncMap(k8sClient, cidrResolver.ClusterAnnotation())(context.Background(), &cidr)
@@ -533,11 +523,11 @@ func TestClusterCidrToIngressMapper(t *testing.T) {
 
 	t.Run("ClusterCIDR is not being used in the ingress, should return an empty list", func(t *testing.T) {
 		ingress := &netv1.Ingress{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(ingress).Build()
 		cidr := ipamv1alpha1.ClusterCIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newIngressesFromCIDRFuncMap(k8sClient, cidrResolver.ClusterAnnotation())(context.Background(), &cidr)

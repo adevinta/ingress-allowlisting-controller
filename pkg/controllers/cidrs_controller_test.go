@@ -350,7 +350,7 @@ func TestCIDRsReconcileFromHTTP(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		assert.Equal(t, "Bearer my-token", r.Header.Get("Authentication"))
-		w.Write([]byte(`["200.1.1.1/24", "10.0.0.1/24", "1.1.1.1", "10.0.0.1/24"]`))
+		_, _ = w.Write([]byte(`["200.1.1.1/24", "10.0.0.1/24", "1.1.1.1", "10.0.0.1/24"]`))
 	}))
 	defer server.Close()
 
@@ -549,7 +549,7 @@ func TestCIDRsReconcileFromCSV(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("10.0.0.0/8,192.168.0.0/16,,8.8.8.0/24\n8.8.8.8/24\n#1.1.1.1/24"))
+		_, _ = w.Write([]byte("10.0.0.0/8,192.168.0.0/16,,8.8.8.0/24\n8.8.8.8/24\n#1.1.1.1/24"))
 	}))
 	defer server.Close()
 
@@ -590,7 +590,7 @@ func TestCIDRsReconcileFromLineSeparatedValues(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("200.1.1.1/24\r\n10.0.0.1/24\n\n#8.8.8.8/32\n 1.1.1.1/32 \n\n10.0.0.1/24\r\n\n"))
+		_, _ = w.Write([]byte("200.1.1.1/24\r\n10.0.0.1/24\n\n#8.8.8.8/32\n 1.1.1.1/32 \n\n10.0.0.1/24\r\n\n"))
 	}))
 	defer server.Close()
 
@@ -631,7 +631,7 @@ func TestCIDRsReconcileFromCombinedSeparatedValues(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("200.1.1.1/24\r\n10.1.0.0/24,10.2.0.0/24\n\n#8.8.8.8/32\n1.1.1.1/32 \n\n10.3.0.0/24,10.2.0.0/24\r\n\n10.4.0.0/24"))
+		_, _ = w.Write([]byte("200.1.1.1/24\r\n10.1.0.0/24,10.2.0.0/24\n\n#8.8.8.8/32\n1.1.1.1/32 \n\n10.3.0.0/24,10.2.0.0/24\r\n\n10.4.0.0/24"))
 	}))
 	defer server.Close()
 
@@ -673,7 +673,7 @@ func TestCIDRsReconcileFromCSVWithBOM(t *testing.T) {
 	// The BOM causes the first CIDR to be silently dropped without BOM stripping.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("\xef\xbb\xbf2.16.0.0/13  \r\n23.0.0.0/12  \r\n23.192.0.0/11  \r\n"))
+		_, _ = w.Write([]byte("\xef\xbb\xbf2.16.0.0/13  \r\n23.0.0.0/12  \r\n23.192.0.0/11  \r\n"))
 	}))
 	defer server.Close()
 
@@ -714,7 +714,7 @@ func TestCIDRsReconcileFromCombinedComplexSeparatedValues(t *testing.T) {
 	// Mock HTTP server
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte("Line,Network,Description\r\n1,10.0.0.0/8,Private RFC1918 Range\r\n2,192.168.0.0/16,Private RFC1918 Range\r\n3,8.8.8.0/24,Google DNS"))
+		_, _ = w.Write([]byte("Line,Network,Description\r\n1,10.0.0.0/8,Private RFC1918 Range\r\n2,192.168.0.0/16,Private RFC1918 Range\r\n3,8.8.8.0/24,Google DNS"))
 	}))
 	defer server.Close()
 
@@ -897,7 +897,7 @@ func TestCIDRsReconcileFromHTTPDoesNotReadSecretsWhenHeadersDisabled(t *testing.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		headersReceived = r.Header
 		w.WriteHeader(http.StatusOK)
-		w.Write([]byte(`["10.0.0.0/8"]`))
+		_, _ = w.Write([]byte(`["10.0.0.0/8"]`))
 	}))
 	defer server.Close()
 
