@@ -27,7 +27,7 @@ jobs:
 
     - name: Checkout the base
       if: steps.metadata.outputs.package-ecosystem == 'gomod'
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.base.sha }}
         path: base
@@ -35,7 +35,7 @@ jobs:
 
     - name: Checkout the PR
       if: steps.metadata.outputs.package-ecosystem == 'gomod'
-      uses: actions/checkout@v6
+      uses: actions/checkout@v7
       with:
         ref: ${{ github.event.pull_request.head.sha }}
         path: head
