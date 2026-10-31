@@ -40,4 +40,5 @@ func TestResolveClusterHeadersNamespace(t *testing.T) {
 	assert.Equal(t, "ingress-allowlisting", resolveClusterHeadersNamespace(true, ""), "the controller's own namespace")
 	assert.Equal(t, "team-x", resolveClusterHeadersNamespace(true, "team-x"), "the flag wins")
 	assert.Equal(t, "", resolveClusterHeadersNamespace(false, ""), "unused while headers are off")
+	assert.Equal(t, "", resolveClusterHeadersNamespace(false, "team-x"), "even when the flag is set")
 }

@@ -118,7 +118,7 @@ func main() {
 	}
 	cidrSource.Allowlist = allowlist
 	if err := validateHTTPHeaders(httpHeadersEnabled, secretLabelSelector, allowlist); err != nil {
-		setupLog.Fatal(err, " <- --http-headers-enabled needs both, fix them and restart")
+		setupLog.Fatal(err, " <- fix and restart")
 	}
 	cidrSource.ClusterHeadersNamespace = resolveClusterHeadersNamespace(httpHeadersEnabled, cidrSource.ClusterHeadersNamespace)
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
@@ -270,17 +270,20 @@ func validateHTTPHeaders(enabled bool, secretLabelSelector string, allowlist []s
 
 // resolveClusterHeadersNamespace returns the namespace ClusterCIDRs may read headersFrom from: the
 // flag value, or the controller's own namespace when it runs in a cluster. Without either, a
-// ClusterCIDRs can't use headersFrom.
+// ClusterCIDRs can't use headersFrom. While headers are off it is empty whatever the flag says, so
+// the startup log doesn't show a restriction for a feature that is off.
 func resolveClusterHeadersNamespace(httpHeadersEnabled bool, flagValue string) string {
-	if !httpHeadersEnabled || flagValue != "" {
-		return flagValue
-	}
-	ns, err := os.ReadFile(inClusterNamespaceFile)
-	if err != nil || strings.TrimSpace(string(ns)) == "" {
-		setupLog.Warn("ClusterCIDRs can't use headersFrom: not running in a cluster and no --cluster-cidrs-headers-namespace is set")
+	if !httpHeadersEnabled {
 		return ""
 	}
-	return strings.TrimSpace(string(ns))
+	if flagValue != "" {
+		return flagValue
+	}
+	ns, ok := readInClusterNamespace()
+	if !ok {
+		setupLog.Warn("ClusterCIDRs can't use headersFrom: not running in a cluster and no --cluster-cidrs-headers-namespace is set")
+	}
+	return ns
 }
 
 // warnIfNoDestination warns at startup when every kind the controller writes allowlists to is
@@ -295,6 +298,15 @@ func warnIfNoDestination(f rbacFeatures) {
 // inClusterNamespaceFile holds the pod's namespace (the ServiceAccount token mount).
 var inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
 
+// readInClusterNamespace returns the pod's own namespace, and false when not running in a cluster.
+func readInClusterNamespace() (string, bool) {
+	ns, err := os.ReadFile(inClusterNamespaceFile)
+	if err != nil || strings.TrimSpace(string(ns)) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(string(ns)), true
+}
+
 // resolveLeaderElectionNamespace returns the flag value, or, like controller-runtime, the pod's own
 // namespace when running in a cluster. Without either, leader election can't start: the manager
 // would fail later with a less clear message, so stop here.
@@ -302,11 +314,11 @@ func resolveLeaderElectionNamespace(enabled bool, flagValue string) string {
 	if !enabled || flagValue != "" {
 		return flagValue
 	}
-	ns, err := os.ReadFile(inClusterNamespaceFile)
-	if err != nil || strings.TrimSpace(string(ns)) == "" {
+	ns, ok := readInClusterNamespace()
+	if !ok {
 		setupLog.Fatal(errors.New("--enable-leader-election needs --leader-election-namespace when not running in a cluster"), "RBAC preflight failed")
 	}
-	return strings.TrimSpace(string(ns))
+	return ns
 }
 
 // watched is what a resource the controller reads through its cache needs: the informer lists and

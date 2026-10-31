@@ -62,6 +62,7 @@ func TestChartDefaultsEnableNoDestination(t *testing.T) {
 			continue
 		}
 		deployments++
+		require.NotEmpty(t, deploy.Spec.Template.Spec.Containers, "the Deployment has no containers")
 		for _, arg := range deploy.Spec.Template.Spec.Containers[0].Args {
 			assert.NotRegexp(t, `support-enabled|http-headers-enabled|label-selector`, arg)
 		}
