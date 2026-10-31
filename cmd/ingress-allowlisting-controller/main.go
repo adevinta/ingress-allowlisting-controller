@@ -84,7 +84,8 @@ func main() {
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Prefix of the allowlist annotations the controller reads: <prefix>/allowlist-group and <prefix>/cluster-allowlist-group.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
 		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", false, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
-		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
+		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector of the Secrets and ConfigMaps the controller caches and may read as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'); others can't be read. Required with --http-headers-enabled.")
+		flag.StringVar(&cidrSource.ClusterHeadersNamespace, "cluster-cidrs-headers-namespace", "", "The only namespace the headersFrom of a ClusterCIDRs may read Secrets and ConfigMaps from. Defaults to the controller's own namespace when it runs in a cluster. A CIDRs object always reads from its own namespace.")
 		flag.IntVar(&cidrSource.MinMaskIPv4, "cidr-source-min-mask-ipv4", cidrSource.MinMaskIPv4, "Widest IPv4 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-32.")
 		flag.IntVar(&cidrSource.MinMaskIPv6, "cidr-source-min-mask-ipv6", cidrSource.MinMaskIPv6, "Widest IPv6 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-128.")
 		flag.DurationVar(&cidrSource.FetchTimeout, "cidr-source-fetch-timeout", cidrSource.FetchTimeout, "Maximum time for fetching and processing one remote CIDR source (connect, response headers, body and processing).")
@@ -116,6 +117,10 @@ func main() {
 		setupLog.Fatal(err, " <- invalid --log-level")
 	}
 	cidrSource.Allowlist = allowlist
+	if err := validateHTTPHeaders(httpHeadersEnabled, secretLabelSelector, allowlist); err != nil {
+		setupLog.Fatal(err, " <- --http-headers-enabled needs both, fix them and restart")
+	}
+	cidrSource.ClusterHeadersNamespace = resolveClusterHeadersNamespace(httpHeadersEnabled, cidrSource.ClusterHeadersNamespace)
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
 	if err := cidrSource.Validate(); err != nil {
@@ -240,6 +245,42 @@ type rbacFeatures struct {
 	ingress, gateway, networkPolicy, service, httpRoute, httpHeaders, leaderElection bool
 	// leaderElectionNamespace is where the lease and the leader election Events are written.
 	leaderElectionNamespace string
+}
+
+// validateHTTPHeaders refuses --http-headers-enabled without the settings that keep the Secrets it
+// reads in check: a label selector (the controller reads through its cache, so only labelled
+// Secrets and ConfigMaps can be read at all) and an origin allowlist (header values only go to
+// listed hosts, not to any host the author of a CIDRs object picks).
+func validateHTTPHeaders(enabled bool, secretLabelSelector string, allowlist []string) error {
+	if !enabled {
+		return nil
+	}
+	var missing []string
+	if strings.TrimSpace(secretLabelSelector) == "" {
+		missing = append(missing, "--secret-label-selector (only labelled Secrets and ConfigMaps can be read)")
+	}
+	if len(allowlist) == 0 {
+		missing = append(missing, "--cidr-source-allowlist (header values only go to listed origins)")
+	}
+	if len(missing) > 0 {
+		return fmt.Errorf("--http-headers-enabled requires %s", strings.Join(missing, " and "))
+	}
+	return nil
+}
+
+// resolveClusterHeadersNamespace returns the namespace ClusterCIDRs may read headersFrom from: the
+// flag value, or the controller's own namespace when it runs in a cluster. Without either, a
+// ClusterCIDRs can't use headersFrom.
+func resolveClusterHeadersNamespace(httpHeadersEnabled bool, flagValue string) string {
+	if !httpHeadersEnabled || flagValue != "" {
+		return flagValue
+	}
+	ns, err := os.ReadFile(inClusterNamespaceFile)
+	if err != nil || strings.TrimSpace(string(ns)) == "" {
+		setupLog.Warn("ClusterCIDRs can't use headersFrom: not running in a cluster and no --cluster-cidrs-headers-namespace is set")
+		return ""
+	}
+	return strings.TrimSpace(string(ns))
 }
 
 // warnIfNoDestination warns at startup when every kind the controller writes allowlists to is

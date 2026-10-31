@@ -11,6 +11,16 @@ writers fighting over the same objects.
 {{- if and (gt (int .Values.replicaCount) 1) (not .Values.leaderElection.enabled) }}
 {{- fail (printf "replicaCount is %d but leaderElection.enabled is false: all replicas would reconcile at the same time. Set leaderElection.enabled=true, or replicaCount=1." (int .Values.replicaCount)) }}
 {{- end }}
+{{- /*
+The controller refuses to start with httpHeadersEnabled but no label selector (any Secret could be
+read) or no origin allowlist (header values could go to any host); fail here already.
+*/ -}}
+{{- if and .Values.httpHeadersEnabled (not .Values.secretLabelSelector) }}
+{{- fail "httpHeadersEnabled needs secretLabelSelector: only Secrets and ConfigMaps with these labels can be read as headers." }}
+{{- end }}
+{{- if and .Values.httpHeadersEnabled (not (.Values.cidrSource | default dict).allowlist) }}
+{{- fail "httpHeadersEnabled needs cidrSource.allowlist: header values only go to the listed origins." }}
+{{- end }}
 {{- if .Values.legacyGroupVersion }}
 {{- fail (printf "legacyGroupVersion (%s) is no longer supported. Upgrading would delete the legacy CIDRs/ClusterCIDRs CRDs and every object in them. Move the objects to ipam.adevinta.com, then unset legacyGroupVersion." .Values.legacyGroupVersion) }}
 {{- end }}

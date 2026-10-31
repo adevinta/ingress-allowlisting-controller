@@ -41,8 +41,9 @@ helm upgrade --install ingress-allowlisting-controller ./ --namespace ingress-al
 ```
 
 The values are `ingress`, `gateway`, `httproute`, `networkpolicy` and `service` (`.enabled`).
-`headersFrom` in remote CIDR sources needs `httpHeadersEnabled: true` (off by default: it reads
-Secrets and ConfigMaps cluster-wide).
+`headersFrom` in remote CIDR sources needs `httpHeadersEnabled: true`, which is off by default and
+requires `secretLabelSelector` and `cidrSource.allowlist`; see
+[Headers from Secrets and ConfigMaps](docs/cidrs.md#headers-from-secrets-and-configmaps-headersfrom).
 
 By default the controller runs as a single replica. For more, enable leader election: only the
 leader reconciles, the others take over within seconds. The chart then adds a Role for the lease

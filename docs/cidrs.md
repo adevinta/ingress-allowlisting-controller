@@ -68,6 +68,30 @@ spec:
 - `headersFrom.secretRef` — all keys in the Secret are sent as HTTP request headers
 - `headersFrom.configMapRef` — all keys in the ConfigMap are sent as HTTP request headers
 
+### Headers from Secrets and ConfigMaps (`headersFrom`)
+
+`headersFrom` is off by default and ignored while it is off: no Secret or ConfigMap is read or
+watched. Turning it on (`--http-headers-enabled`, chart `httpHeadersEnabled: true`) requires both of
+these, or the controller refuses to start (and the chart refuses to render):
+
+- **`--secret-label-selector`** (chart `secretLabelSelector`, default
+  `ipam.adevinta.com/cidr-header-source=true`). The controller caches and reads only the Secrets
+  and ConfigMaps with these labels; any other one is "not found", even though its RBAC allows more.
+  Label the ones you reference:
+  `kubectl label secret aws-auth-headers ipam.adevinta.com/cidr-header-source=true`.
+- **`--cidr-source-allowlist`** (chart `cidrSource.allowlist`). Header values only go to the listed
+  origins, not to whatever host the author of an object writes in `uri`.
+
+Where a reference may read from:
+
+- a **`CIDRs`** object: only its own namespace (`namespace` may be left out, or must be the same);
+- a **`ClusterCIDRs`**: only the namespace of `--cluster-cidrs-headers-namespace` (chart
+  `clusterCIDRsHeadersNamespace`), by default the controller's own namespace. Left out,
+  `namespace` means that one; any other namespace fails the fetch.
+
+The headers are sent to the origin of `uri` only: a redirect to another scheme, host or port
+drops them (the redirect is still followed if the allowlist allows it).
+
 ### Fetching from GitHub
 
 ```yaml
@@ -225,9 +249,9 @@ Notes:
   applies to the connection to the proxy, so a proxy on a private address needs
   `--cidr-source-allow-private-destinations`; the allowlist is still checked against the request
   URL either way.
-- **Custom headers on redirects.** Go drops `Authorization` and `Cookie` when a redirect leaves the
-  host but forwards other headers. Values from `headersFrom` can therefore follow a redirect to
-  another host. Setting an allowlist limits where that can happen.
+- **Custom headers on redirects.** Go drops only `Authorization` and `Cookie` when a redirect
+  leaves the host. The controller also drops every header from `headersFrom` when a redirect
+  leaves the origin of `uri` (scheme, host and port), so they never reach another host.
 
 ### Configuring the guardrails
 
@@ -275,7 +299,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | Flag | Default | Description |
 |---|---|---|
 | `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations. Change this to run two instances of the controller side-by-side without annotation conflicts. |
-| `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). It needs cluster-wide read access to Secrets and ConfigMaps (narrow the cache with `--secret-label-selector`). While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. |
+| `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). Requires `--secret-label-selector` and `--cidr-source-allowlist`. While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. See [Headers from Secrets and ConfigMaps](#headers-from-secrets-and-configmaps-headersfrom). |
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
 | `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching and processing one remote source: connect, response headers, body and processing. See [Resource limits](#resource-limits-on-remote-sources). |
@@ -284,7 +308,8 @@ Every key is optional; an unset key keeps the default. Things to know:
 | `--cidr-source-retry-interval` | `5m` | How soon a failed remote fetch is retried. An object with a shorter `spec.requeueAfter` is retried at that interval instead. See [Retrying a failed fetch](#retrying-a-failed-fetch). |
 | `--cidr-source-allowlist` | *(empty: any host)* | Origin a remote CIDR source may be fetched from, as `scheme://host[:port]`; a bare `host[:port]` means https. Repeat the flag or comma-separate to allow several. See [Restricting where sources can be fetched from](#restricting-where-sources-can-be-fetched-from). |
 | `--cidr-source-allow-private-destinations` | `false` | Allow remote sources to connect to loopback, link-local (cloud metadata), private and other non-public addresses. By default such connections are refused. |
-| `--secret-label-selector` | `""` | Label selector that restricts which Secrets and ConfigMaps are cached by the informer (e.g. `ipam.adevinta.com/cidr-header-source=true`). Only effective when `--http-headers-enabled=true`. Reduces memory usage on clusters with many Secrets. |
+| `--secret-label-selector` | `""` | Label selector of the Secrets and ConfigMaps the controller caches and may read as headers (e.g. `ipam.adevinta.com/cidr-header-source=true`; chart default). Others can't be read. Required with `--http-headers-enabled`. |
+| `--cluster-cidrs-headers-namespace` | *(the controller's namespace)* | The only namespace the `headersFrom` of a `ClusterCIDRs` may read from. A `CIDRs` object always reads from its own namespace. |
 
 ---
 

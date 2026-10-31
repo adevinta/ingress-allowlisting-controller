@@ -71,6 +71,9 @@ spec:
 {{- if and .Values.httpHeadersEnabled .Values.secretLabelSelector }}
         - "--secret-label-selector={{ .Values.secretLabelSelector }}"
 {{- end }}
+{{- if and .Values.httpHeadersEnabled .Values.clusterCIDRsHeadersNamespace }}
+        - "--cluster-cidrs-headers-namespace={{ .Values.clusterCIDRsHeadersNamespace }}"
+{{- end }}
 {{- with .Values.cidrSource }}
 {{- with .minMaskIPv4 }}
         - "--cidr-source-min-mask-ipv4={{ . | int }}"

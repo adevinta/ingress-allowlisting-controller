@@ -476,13 +476,19 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if err := checkAllowed(origins, req.URL); err != nil {
 		return 0, err
 	}
+	// The headers read from Secrets and ConfigMaps, kept apart so that a redirect to another
+	// origin can drop them.
+	refHeaders := http.Header{}
 	if r.HTTPHeadersEnabled {
-		err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), req.Header, spec.CIDRsSource.Location.HeadersFrom)
+		err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), refHeaders, spec.CIDRsSource.Location.HeadersFrom)
 		if err != nil {
 			return 0, err
 		}
+		for k, v := range refHeaders {
+			req.Header[k] = append(req.Header[k], v...)
+		}
 	}
-	resp, err := newSourceHTTPClient(opts, origins).Do(req)
+	resp, err := newSourceHTTPClient(opts, origins, slices.Collect(maps.Keys(refHeaders))).Do(req)
 	if err != nil {
 		return 0, err
 	}
@@ -541,12 +547,19 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	return dropped, nil
 }
 
+// resolveNamespace returns the namespace a headersFrom reference reads from: a CIDRs object's own
+// namespace, or for a ClusterCIDRs (no namespace) the one --cluster-cidrs-headers-namespace allows.
+// Otherwise whoever can create a ClusterCIDRs could send any Secret of the cluster as headers.
 func (r *CIDRReconciler) resolveNamespace(objectNamespace string, objectRef ipamv1alpha1.ObjectRef) (string, error) {
 	if objectNamespace == "" {
-		if objectRef.Namespace == "" {
-			return "", fmt.Errorf("no namespace provided. Can't resolve resolve object %s", objectRef.Name)
+		allowed := r.SourceOptions.ClusterHeadersNamespace
+		if allowed == "" {
+			return "", fmt.Errorf("headersFrom %s: a ClusterCIDRs can't read Secrets or ConfigMaps, no --cluster-cidrs-headers-namespace is set", objectRef.Name)
 		}
-		return objectRef.Namespace, nil
+		if objectRef.Namespace != "" && objectRef.Namespace != allowed {
+			return "", fmt.Errorf("headersFrom %s: a ClusterCIDRs may only read from namespace %s (--cluster-cidrs-headers-namespace), not %s", objectRef.Name, allowed, objectRef.Namespace)
+		}
+		return allowed, nil
 	}
 	if objectRef.Namespace != "" && objectNamespace != objectRef.Namespace {
 		return "", fmt.Errorf("namespace mismatch: %s != %s", objectNamespace, objectRef.Namespace)
@@ -623,6 +636,7 @@ func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) e
 					r.Client,
 					r.CIDRsList,
 					secretSource,
+					r.resolveNamespace,
 				),
 			),
 		)
@@ -633,6 +647,7 @@ func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) e
 					r.Client,
 					r.CIDRsList,
 					configMapSource,
+					r.resolveNamespace,
 				),
 			),
 		)
@@ -680,7 +695,10 @@ func configMapSource(headerFrom ipamv1alpha1.HeadersFrom) ipamv1alpha1.ObjectRef
 	return headerFrom.ConfigMapRef
 }
 
-func newObjectRefToCIDRsFuncMap(c client.Client, cidrsKind ipamv1alpha1.CIDRsGetterList, findRef func(headerFrom ipamv1alpha1.HeadersFrom) ipamv1alpha1.ObjectRef) handler.MapFunc {
+// newObjectRefToCIDRsFuncMap maps a changed Secret or ConfigMap to the CIDRs objects whose
+// headersFrom read it. resolve is the reconciler's resolveNamespace, so the match follows the same
+// rules as the fetch (a ClusterCIDRs reads from --cluster-cidrs-headers-namespace).
+func newObjectRefToCIDRsFuncMap(c client.Client, cidrsKind ipamv1alpha1.CIDRsGetterList, findRef func(headerFrom ipamv1alpha1.HeadersFrom) ipamv1alpha1.ObjectRef, resolve func(objectNamespace string, objectRef ipamv1alpha1.ObjectRef) (string, error)) handler.MapFunc {
 	return func(ctx context.Context, object client.Object) []reconcile.Request {
 		cidrsList := cidrsKind.DeepCopyCIDRs()
 		err := c.List(ctx, cidrsList)
@@ -695,11 +713,8 @@ func newObjectRefToCIDRsFuncMap(c client.Client, cidrsKind ipamv1alpha1.CIDRsGet
 		for _, cidrs := range cidrsList.GetCIDRsItems() {
 			for _, source := range cidrs.GetSpec().CIDRsSource.Location.HeadersFrom {
 				objectRef := findRef(source)
-				namespace := objectRef.Namespace
-				if namespace == "" {
-					namespace = cidrs.GetNamespace()
-				}
-				if namespace != object.GetNamespace() {
+				namespace, err := resolve(cidrs.GetNamespace(), objectRef)
+				if err != nil || namespace != object.GetNamespace() {
 					continue
 				}
 				if object.GetName() == objectRef.Name {

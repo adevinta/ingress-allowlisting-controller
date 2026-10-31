@@ -77,6 +77,10 @@ type CIDRSourceOptions struct {
 	// AllowPrivateDestinations permits connections to loopback, link-local (incl. cloud metadata),
 	// private and other non-public addresses. The zero value (false) keeps the guard ON.
 	AllowPrivateDestinations bool
+	// ClusterHeadersNamespace is the only namespace the headersFrom of a ClusterCIDRs may read
+	// Secrets and ConfigMaps from. Empty: a ClusterCIDRs can't use headersFrom. A CIDRs object
+	// always reads from its own namespace.
+	ClusterHeadersNamespace string
 }
 
 // DefaultCIDRSourceOptions returns the defaults used when nothing is configured.
@@ -228,6 +232,7 @@ func (o CIDRSourceOptions) LogEffective() {
 		"retryInterval":            o.RetryInterval.String(),
 		"allowlist":                o.Allowlist,
 		"allowPrivateDestinations": o.AllowPrivateDestinations,
+		"clusterHeadersNamespace":  o.ClusterHeadersNamespace,
 	}).Info("remote CIDR source guardrails")
 	o.warnIfPermissive()
 }
