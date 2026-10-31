@@ -93,14 +93,14 @@ tolerations: []
 logLevel: info
 annotationPrefix: "ipam.adevinta.com"
 # Read Secrets and ConfigMaps for the headersFrom of remote CIDR sources. Off by default: it needs
-# cluster-wide read access to Secrets and ConfigMaps. When on, it requires:
-# - secretLabelSelector: only Secrets and ConfigMaps with these labels can be read (the controller
-#   reads through its cache, which only holds them);
-# - cidrSource.allowlist: header values only go to the listed origins.
+# cluster-wide read access to Secrets and ConfigMaps. When on:
+# - only Secrets and ConfigMaps with the labels of secretLabelSelector can be read (the controller
+#   reads through its cache, which only holds them). Empty: <annotationPrefix>/cidr-header-source=true;
+# - cidrSource.allowlist is required: header values only go to the listed origins.
 # A ClusterCIDRs reads headersFrom only from clusterCIDRsHeadersNamespace (default: the release
 # namespace); a CIDRs object only from its own namespace.
 httpHeadersEnabled: false
-secretLabelSelector: "ipam.adevinta.com/cidr-header-source=true"
+secretLabelSelector: ""
 clusterCIDRsHeadersNamespace: ""
 
 # Guardrails for CIDRs/ClusterCIDRs fetched from a remote source (spec.cidrsSource.location.uri).

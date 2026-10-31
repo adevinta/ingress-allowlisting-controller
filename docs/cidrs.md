@@ -71,16 +71,17 @@ spec:
 ### Headers from Secrets and ConfigMaps (`headersFrom`)
 
 `headersFrom` is off by default and ignored while it is off: no Secret or ConfigMap is read or
-watched. Turning it on (`--http-headers-enabled`, chart `httpHeadersEnabled: true`) requires both of
-these, or the controller refuses to start (and the chart refuses to render):
+watched. When it is on (`--http-headers-enabled`, chart `httpHeadersEnabled: true`):
 
-- **`--secret-label-selector`** (chart `secretLabelSelector`, default
-  `ipam.adevinta.com/cidr-header-source=true`). The controller caches and reads only the Secrets
-  and ConfigMaps with these labels; any other one is "not found", even though its RBAC allows more.
-  Label the ones you reference:
+- **Only labelled Secrets and ConfigMaps can be read.** The controller caches and reads only the
+  ones matching `--secret-label-selector` (chart `secretLabelSelector`), by default
+  `<annotation-prefix>/cidr-header-source=true`, e.g. `ipam.adevinta.com/cidr-header-source=true`,
+  or `example.com/cidr-header-source=true` with `--annotation-prefix=example.com`.
+  Any other one is "not found", even though its RBAC allows more. Label the ones you reference:
   `kubectl label secret aws-auth-headers ipam.adevinta.com/cidr-header-source=true`.
-- **`--cidr-source-allowlist`** (chart `cidrSource.allowlist`). Header values only go to the listed
-  origins, not to whatever host the author of an object writes in `uri`.
+- **`--cidr-source-allowlist` is required** (chart `cidrSource.allowlist`), or the controller
+  refuses to start (and the chart to render). Header values only go to the listed origins, not to
+  whatever host the author of an object writes in `uri`.
 
 Where a reference may read from:
 
@@ -299,7 +300,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | Flag | Default | Description |
 |---|---|---|
 | `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations. Change this to run two instances of the controller side-by-side without annotation conflicts. |
-| `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). Requires `--secret-label-selector` and `--cidr-source-allowlist`. While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. See [Headers from Secrets and ConfigMaps](#headers-from-secrets-and-configmaps-headersfrom). |
+| `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). Requires `--cidr-source-allowlist`; only Secrets and ConfigMaps matching `--secret-label-selector` can be read. While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. See [Headers from Secrets and ConfigMaps](#headers-from-secrets-and-configmaps-headersfrom). |
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
 | `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching and processing one remote source: connect, response headers, body and processing. See [Resource limits](#resource-limits-on-remote-sources). |
@@ -308,7 +309,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | `--cidr-source-retry-interval` | `5m` | How soon a failed remote fetch is retried. An object with a shorter `spec.requeueAfter` is retried at that interval instead. See [Retrying a failed fetch](#retrying-a-failed-fetch). |
 | `--cidr-source-allowlist` | *(empty: any host)* | Origin a remote CIDR source may be fetched from, as `scheme://host[:port]`; a bare `host[:port]` means https. Repeat the flag or comma-separate to allow several. See [Restricting where sources can be fetched from](#restricting-where-sources-can-be-fetched-from). |
 | `--cidr-source-allow-private-destinations` | `false` | Allow remote sources to connect to loopback, link-local (cloud metadata), private and other non-public addresses. By default such connections are refused. |
-| `--secret-label-selector` | `""` | Label selector of the Secrets and ConfigMaps the controller caches and may read as headers (e.g. `ipam.adevinta.com/cidr-header-source=true`; chart default). Others can't be read. Required with `--http-headers-enabled`. |
+| `--secret-label-selector` | `<annotation-prefix>/cidr-header-source=true` | Label selector of the Secrets and ConfigMaps the controller caches and may read as headers. Others can't be read. Only used with `--http-headers-enabled`. |
 | `--cluster-cidrs-headers-namespace` | *(the controller's namespace)* | The only namespace the `headersFrom` of a `ClusterCIDRs` may read from. A `CIDRs` object always reads from its own namespace. |
 
 ---

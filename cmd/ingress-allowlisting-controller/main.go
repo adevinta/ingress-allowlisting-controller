@@ -84,7 +84,7 @@ func main() {
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Prefix of the allowlist annotations the controller reads: <prefix>/allowlist-group and <prefix>/cluster-allowlist-group.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
 		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", false, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
-		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector of the Secrets and ConfigMaps the controller caches and may read as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'); others can't be read. Required with --http-headers-enabled.")
+		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector of the Secrets and ConfigMaps the controller caches and may read as HTTP header sources; others can't be read. Defaults to '<annotation-prefix>/cidr-header-source=true'. Only used with --http-headers-enabled.")
 		flag.StringVar(&cidrSource.ClusterHeadersNamespace, "cluster-cidrs-headers-namespace", "", "The only namespace the headersFrom of a ClusterCIDRs may read Secrets and ConfigMaps from. Defaults to the controller's own namespace when it runs in a cluster. A CIDRs object always reads from its own namespace.")
 		flag.IntVar(&cidrSource.MinMaskIPv4, "cidr-source-min-mask-ipv4", cidrSource.MinMaskIPv4, "Widest IPv4 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-32.")
 		flag.IntVar(&cidrSource.MinMaskIPv6, "cidr-source-min-mask-ipv6", cidrSource.MinMaskIPv6, "Widest IPv6 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-128.")
@@ -117,9 +117,10 @@ func main() {
 		setupLog.Fatal(err, " <- invalid --log-level")
 	}
 	cidrSource.Allowlist = allowlist
-	if err := validateHTTPHeaders(httpHeadersEnabled, secretLabelSelector, allowlist); err != nil {
+	if err := validateHTTPHeaders(httpHeadersEnabled, allowlist); err != nil {
 		setupLog.Fatal(err, " <- fix and restart")
 	}
+	secretLabelSelector = defaultSecretLabelSelector(httpHeadersEnabled, secretLabelSelector, annotationPrefix)
 	cidrSource.ClusterHeadersNamespace = resolveClusterHeadersNamespace(httpHeadersEnabled, cidrSource.ClusterHeadersNamespace)
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
@@ -247,25 +248,27 @@ type rbacFeatures struct {
 	leaderElectionNamespace string
 }
 
-// validateHTTPHeaders refuses --http-headers-enabled without the settings that keep the Secrets it
-// reads in check: a label selector (the controller reads through its cache, so only labelled
-// Secrets and ConfigMaps can be read at all) and an origin allowlist (header values only go to
-// listed hosts, not to any host the author of a CIDRs object picks).
-func validateHTTPHeaders(enabled bool, secretLabelSelector string, allowlist []string) error {
-	if !enabled {
-		return nil
-	}
-	var missing []string
-	if strings.TrimSpace(secretLabelSelector) == "" {
-		missing = append(missing, "--secret-label-selector (only labelled Secrets and ConfigMaps can be read)")
-	}
-	if len(allowlist) == 0 {
-		missing = append(missing, "--cidr-source-allowlist (header values only go to listed origins)")
-	}
-	if len(missing) > 0 {
-		return fmt.Errorf("--http-headers-enabled requires %s", strings.Join(missing, " and "))
+// validateHTTPHeaders refuses --http-headers-enabled without an origin allowlist: header values
+// only go to listed hosts, not to any host the author of a CIDRs object picks.
+func validateHTTPHeaders(enabled bool, allowlist []string) error {
+	if enabled && len(allowlist) == 0 {
+		return errors.New("--http-headers-enabled requires --cidr-source-allowlist (header values only go to listed origins)")
 	}
 	return nil
+}
+
+// defaultSecretLabelSelector returns the label selector of the Secrets and ConfigMaps the controller
+// may read for headersFrom: the flag value, or <annotation-prefix>/cidr-header-source=true. It is
+// never empty while headers are on: the controller reads through its cache, so only labelled
+// Secrets and ConfigMaps can be read at all.
+func defaultSecretLabelSelector(httpHeadersEnabled bool, flagValue, annotationPrefix string) string {
+	if !httpHeadersEnabled {
+		return ""
+	}
+	if strings.TrimSpace(flagValue) != "" {
+		return flagValue
+	}
+	return annotationPrefix + "/cidr-header-source=true"
 }
 
 // resolveClusterHeadersNamespace returns the namespace ClusterCIDRs may read headersFrom from: the

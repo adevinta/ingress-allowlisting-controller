@@ -8,22 +8,22 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-// TestValidateHTTPHeaders verifies that --http-headers-enabled is refused without a Secret label
-// selector or an origin allowlist, and names what is missing.
+// TestValidateHTTPHeaders verifies that --http-headers-enabled is refused without an origin
+// allowlist.
 func TestValidateHTTPHeaders(t *testing.T) {
-	allowlist := []string{"https://ip-ranges.amazonaws.com"}
-
-	assert.NoError(t, validateHTTPHeaders(false, "", nil), "nothing is required while it is off")
-	assert.NoError(t, validateHTTPHeaders(true, "ipam.adevinta.com/cidr-header-source=true", allowlist))
-
-	assert.EqualError(t, validateHTTPHeaders(true, "", allowlist),
-		"--http-headers-enabled requires --secret-label-selector (only labelled Secrets and ConfigMaps can be read)")
-	assert.EqualError(t, validateHTTPHeaders(true, "  ", allowlist),
-		"--http-headers-enabled requires --secret-label-selector (only labelled Secrets and ConfigMaps can be read)", "blank is empty")
-	assert.EqualError(t, validateHTTPHeaders(true, "a=b", nil),
+	assert.NoError(t, validateHTTPHeaders(false, nil), "nothing is required while it is off")
+	assert.NoError(t, validateHTTPHeaders(true, []string{"https://ip-ranges.amazonaws.com"}))
+	assert.EqualError(t, validateHTTPHeaders(true, nil),
 		"--http-headers-enabled requires --cidr-source-allowlist (header values only go to listed origins)")
-	assert.EqualError(t, validateHTTPHeaders(true, "", nil),
-		"--http-headers-enabled requires --secret-label-selector (only labelled Secrets and ConfigMaps can be read) and --cidr-source-allowlist (header values only go to listed origins)")
+}
+
+// TestDefaultSecretLabelSelector verifies that the Secrets and ConfigMaps readable as headers are
+// always restricted by a label, by default one under the annotation prefix.
+func TestDefaultSecretLabelSelector(t *testing.T) {
+	assert.Equal(t, "example.com/cidr-header-source=true", defaultSecretLabelSelector(true, "", "example.com"), "follows --annotation-prefix")
+	assert.Equal(t, "ipam.adevinta.com/cidr-header-source=true", defaultSecretLabelSelector(true, "  ", "ipam.adevinta.com"), "blank is unset")
+	assert.Equal(t, "team=platform", defaultSecretLabelSelector(true, "team=platform", "example.com"), "the flag wins")
+	assert.Equal(t, "", defaultSecretLabelSelector(false, "", "example.com"), "unused while headers are off")
 }
 
 // TestResolveClusterHeadersNamespace verifies that ClusterCIDRs read headersFrom from the flag

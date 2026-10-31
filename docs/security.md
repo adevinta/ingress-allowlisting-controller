@@ -223,9 +223,10 @@ A remote CIDR source can send the keys of a Secret or ConfigMap as HTTP headers.
 any Secret the controller can read to a host of their choosing. The controller therefore:
 
 - has it **off by default** (`--http-headers-enabled=false`): no access to Secrets or ConfigMaps;
-- when it is on, **refuses to start without `--secret-label-selector`**: it reads only through its
-  cache, which holds only labelled Secrets and ConfigMaps. RBAC can't filter by label and still
-  grants cluster-wide read; the selector is what limits it;
+- when it is on, **reads only labelled Secrets and ConfigMaps**: it reads through its cache, which
+  holds only those matching `--secret-label-selector` (default
+  `<annotation-prefix>/cidr-header-source=true`). RBAC can't filter by label and still grants
+  cluster-wide read; the selector is what limits it;
 - when it is on, **refuses to start without `--cidr-source-allowlist`**: header values only go to
   listed origins;
 - lets a `CIDRs` object read only from its own namespace, and a `ClusterCIDRs` only from

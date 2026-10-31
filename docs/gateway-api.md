@@ -236,7 +236,7 @@ metadata:
   name: my-route
   namespace: my-app
   labels:
-    common-platform.io/allowlisting: enabled   # required if --httproute-label-selector is set
+    example.com/allowlisting: enabled   # required if --httproute-label-selector is set
   annotations:
     ipam.adevinta.com/cluster-allowlist-group: office-ips
 spec:
