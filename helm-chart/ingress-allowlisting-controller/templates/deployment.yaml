@@ -38,8 +38,8 @@ spec:
         image: {{ .Values.image.fullyQualifiedURL }}
         imagePullPolicy: {{ .Values.pullPolicy }}
         args:
-{{- if not .Values.ingress.enabled }}
-        - "--ingress-support-enabled=false"
+{{- if .Values.ingress.enabled }}
+        - "--ingress-support-enabled"
 {{- end }}
 {{- if .Values.gateway.enabled }}
         - "--gateway-support-enabled"
@@ -65,8 +65,8 @@ spec:
 {{- with .Values.annotationPrefix }}
         - "--annotation-prefix={{ . }}"
 {{- end }}
-{{- if not .Values.httpHeadersEnabled }}
-        - "--http-headers-enabled=false"
+{{- if .Values.httpHeadersEnabled }}
+        - "--http-headers-enabled"
 {{- end }}
 {{- if and .Values.httpHeadersEnabled .Values.secretLabelSelector }}
         - "--secret-label-selector={{ .Values.secretLabelSelector }}"

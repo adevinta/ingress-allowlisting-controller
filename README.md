@@ -32,6 +32,18 @@ Verify:
 kubectl get pods -n ingress-allowlisting
 ```
 
+By default every kind the controller writes allowlists to is off: it only reconciles `CIDRs` and
+`ClusterCIDRs`, and warns about it at startup. Enable the kinds you use, for example:
+
+```bash
+helm upgrade --install ingress-allowlisting-controller ./ --namespace ingress-allowlisting \
+  --set ingress.enabled=true --set httproute.enabled=true
+```
+
+The values are `ingress`, `gateway`, `httproute`, `networkpolicy` and `service` (`.enabled`).
+`headersFrom` in remote CIDR sources needs `httpHeadersEnabled: true` (off by default: it reads
+Secrets and ConfigMaps cluster-wide).
+
 By default the controller runs as a single replica. For more, enable leader election: only the
 leader reconciles, the others take over within seconds. The chart then adds a Role for the lease
 in the release namespace and a PodDisruptionBudget, and refuses several replicas without it.

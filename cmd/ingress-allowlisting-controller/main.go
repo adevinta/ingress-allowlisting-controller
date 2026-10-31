@@ -83,7 +83,7 @@ func main() {
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Prefix of the allowlist annotations the controller reads: <prefix>/allowlist-group and <prefix>/cluster-allowlist-group.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
-		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
+		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", false, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
 		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
 		flag.IntVar(&cidrSource.MinMaskIPv4, "cidr-source-min-mask-ipv4", cidrSource.MinMaskIPv4, "Widest IPv4 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-32.")
 		flag.IntVar(&cidrSource.MinMaskIPv6, "cidr-source-min-mask-ipv6", cidrSource.MinMaskIPv6, "Widest IPv6 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-128.")
@@ -102,7 +102,7 @@ func main() {
 		flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
 	})
 	flagGroup("Ingress (nginx)", func() {
-		flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
+		flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", false, "Enable Ingress support for the controller")
 	})
 	flagGroup("NetworkPolicy", func() {
 		flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
@@ -150,7 +150,7 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
-	checkRBAC(restConfig, requiredPermissions(rbacFeatures{
+	features := rbacFeatures{
 		ingress:        ingressSupportEnabled,
 		gateway:        gatewaySupportEnabled,
 		networkPolicy:  networkPolicySupportEnabled,
@@ -161,7 +161,9 @@ func main() {
 		// Resolved like controller-runtime does for the lease, so the preflight checks the
 		// namespace the lease really lives in (the chart grants it with a namespaced Role).
 		leaderElectionNamespace: resolveLeaderElectionNamespace(enableLeaderElection, leaderElectionNamespace),
-	}, l4Writers, l7Writers))
+	}
+	warnIfNoDestination(features)
+	checkRBAC(restConfig, requiredPermissions(features, l4Writers, l7Writers))
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -238,6 +240,15 @@ type rbacFeatures struct {
 	ingress, gateway, networkPolicy, service, httpRoute, httpHeaders, leaderElection bool
 	// leaderElectionNamespace is where the lease and the leader election Events are written.
 	leaderElectionNamespace string
+}
+
+// warnIfNoDestination warns at startup when every kind the controller writes allowlists to is
+// disabled (the default): it then only reconciles CIDRs and ClusterCIDRs and allowlists nothing.
+func warnIfNoDestination(f rbacFeatures) {
+	if f.ingress || f.gateway || f.httpRoute || f.networkPolicy || f.service {
+		return
+	}
+	setupLog.Warn("no allowlist destination is enabled, the controller only reconciles CIDRs and ClusterCIDRs and watches no Ingress, Gateway, HTTPRoute, NetworkPolicy or Service. Enable the ones you need: --ingress-support-enabled, --gateway-support-enabled, --httproute-support-enabled, --networkpolicy-support-enabled, --service-support-enabled")
 }
 
 // inClusterNamespaceFile holds the pod's namespace (the ServiceAccount token mount).

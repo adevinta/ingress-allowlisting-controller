@@ -275,7 +275,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | Flag | Default | Description |
 |---|---|---|
 | `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations. Change this to run two instances of the controller side-by-side without annotation conflicts. |
-| `--http-headers-enabled` | `true` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field). Disabling this removes Secret/ConfigMap RBAC requirements entirely and skips reactive re-reconciliation when those objects change. |
+| `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). It needs cluster-wide read access to Secrets and ConfigMaps (narrow the cache with `--secret-label-selector`). While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. |
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
 | `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching and processing one remote source: connect, response headers, body and processing. See [Resource limits](#resource-limits-on-remote-sources). |
