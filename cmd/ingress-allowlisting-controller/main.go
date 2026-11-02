@@ -214,7 +214,16 @@ func main() {
 		setupLog.Fatal(err, "unable to set up ready check")
 	}
 
-	if err = controllers.SetupControllersWithManager(mgr, ingressSupportEnabled, gatewaySupportEnabled, networkPolicySupportEnabled, serviceSupportEnabled, httpRouteSupportEnabled, "", annotationPrefix, httpHeadersEnabled, cidrSource); err != nil {
+	if err = controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{
+		IngressEnabled:       ingressSupportEnabled,
+		GatewayEnabled:       gatewaySupportEnabled,
+		NetworkPolicyEnabled: networkPolicySupportEnabled,
+		ServiceEnabled:       serviceSupportEnabled,
+		HTTPRouteEnabled:     httpRouteSupportEnabled,
+		HTTPHeadersEnabled:   httpHeadersEnabled,
+		AnnotationPrefix:     annotationPrefix,
+		CIDRSource:           cidrSource,
+	}); err != nil {
 		setupLog.Fatal(err, "unable to setup controllers")
 	}
 
