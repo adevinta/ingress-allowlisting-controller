@@ -84,14 +84,7 @@ func (w *TraefikL7Writer) ensureHTTPRouteFilters(ctx context.Context, route *gat
 		return err
 	}
 	patch := client.MergeFrom(latest.DeepCopy())
-	filter := gatewayApiv1.HTTPRouteFilter{
-		Type: gatewayApiv1.HTTPRouteFilterExtensionRef,
-		ExtensionRef: &gatewayApiv1.LocalObjectReference{
-			Group: gatewayApiv1.Group("traefik.io"),
-			Kind:  gatewayApiv1.Kind("Middleware"),
-			Name:  gatewayApiv1.ObjectName(mwName),
-		},
-	}
+	filter := traefikFilter(mwName)
 	changed := false
 	for i := range latest.Spec.Rules {
 		if !hasTraefikFilter(latest.Spec.Rules[i].Filters, mwName) {
@@ -105,13 +98,29 @@ func (w *TraefikL7Writer) ensureHTTPRouteFilters(ctx context.Context, route *gat
 	return w.client.Patch(ctx, latest, patch)
 }
 
+// traefikFilter is the filter that attaches the Middleware mwName to a route rule. Adding
+// (ensureHTTPRouteFilters) and removing (removeHTTPRouteFilters) must agree on it exactly: a filter
+// that removal doesn't recognise would stay on the route and point at a deleted Middleware.
+func traefikFilter(mwName string) gatewayApiv1.HTTPRouteFilter {
+	return gatewayApiv1.HTTPRouteFilter{
+		Type: gatewayApiv1.HTTPRouteFilterExtensionRef,
+		ExtensionRef: &gatewayApiv1.LocalObjectReference{
+			Group: gatewayApiv1.Group("traefik.io"),
+			Kind:  gatewayApiv1.Kind("Middleware"),
+			Name:  gatewayApiv1.ObjectName(mwName),
+		},
+	}
+}
+
+// isTraefikFilter reports whether f is traefikFilter(mwName).
+func isTraefikFilter(f gatewayApiv1.HTTPRouteFilter, mwName string) bool {
+	want := traefikFilter(mwName)
+	return f.Type == want.Type && f.ExtensionRef != nil && *f.ExtensionRef == *want.ExtensionRef
+}
+
 func hasTraefikFilter(filters []gatewayApiv1.HTTPRouteFilter, mwName string) bool {
 	for _, f := range filters {
-		if f.Type == gatewayApiv1.HTTPRouteFilterExtensionRef &&
-			f.ExtensionRef != nil &&
-			string(f.ExtensionRef.Group) == "traefik.io" &&
-			string(f.ExtensionRef.Kind) == "Middleware" &&
-			string(f.ExtensionRef.Name) == mwName {
+		if isTraefikFilter(f, mwName) {
 			return true
 		}
 	}
@@ -183,11 +192,7 @@ func (w *TraefikL7Writer) removeHTTPRouteFilters(ctx context.Context, route *gat
 	for i := range route.Spec.Rules {
 		kept := route.Spec.Rules[i].Filters[:0]
 		for _, f := range route.Spec.Rules[i].Filters {
-			if f.Type == gatewayApiv1.HTTPRouteFilterExtensionRef &&
-				f.ExtensionRef != nil &&
-				string(f.ExtensionRef.Group) == "traefik.io" &&
-				string(f.ExtensionRef.Kind) == "Middleware" &&
-				string(f.ExtensionRef.Name) == mwName {
+			if isTraefikFilter(f, mwName) {
 				changed = true
 				continue
 			}
