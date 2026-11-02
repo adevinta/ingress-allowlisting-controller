@@ -1442,3 +1442,38 @@ func TestCIDRsReconcileFromCSVWithBareIPs(t *testing.T) {
 	require.Len(t, cidrs.Status.Conditions, 1)
 	assert.Equal(t, "All CIDRs are up to date (1 invalid entries ignored)", cidrs.Status.Conditions[0].Message)
 }
+
+// TestInvalidInlineCIDRsAreReported verifies that invalid entries in spec.cidrs are left out of
+// status.cidrs and named in the condition, so the object's author sees the typo. Before, they were
+// copied into the status, the condition said everything was up to date, and only a log line of the
+// controller, on every reconcile of every object using the group, mentioned them.
+func TestInvalidInlineCIDRsAreReported(t *testing.T) {
+	ctx := context.TODO()
+	scheme, err := Scheme()
+	require.NoError(t, err)
+	obj := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "office", Namespace: "mynamespace"},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			CIDRs: []string{"203.0.113.0/24", "198.51.100.7", "10.20.30", "192.0.2.0/33", "10.0.0.5/8"},
+		}},
+	}
+	c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).WithStatusSubresource(obj).Build()
+	reconciler := &CIDRReconciler{CIDRs: &ipamv1alpha1.CIDRs{}, CIDRsList: &ipamv1alpha1.CIDRsList{}, Client: c}
+
+	_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+	require.NoError(t, err)
+	got := &ipamv1alpha1.CIDRs{}
+	require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), got))
+
+	assert.Equal(t, []string{"10.0.0.5/8", "198.51.100.7/32", "203.0.113.0/24"}, got.Status.CIDRs, "valid entries kept as written, the bare IP as a host route")
+	require.Len(t, got.Status.Conditions, 1)
+	assert.Equal(t, `All CIDRs are up to date (invalid entries in spec.cidrs ignored: "10.20.30", "192.0.2.0/33")`, got.Status.Conditions[0].Message)
+	assert.Equal(t, []string{"203.0.113.0/24", "198.51.100.7", "10.20.30", "192.0.2.0/33", "10.0.0.5/8"}, got.Spec.CIDRs, "the spec is unchanged")
+}
+
+// TestQuoteFirst verifies that the condition names at most a few invalid entries.
+func TestQuoteFirst(t *testing.T) {
+	assert.Equal(t, `"a"`, quoteFirst([]string{"a"}, 5))
+	assert.Equal(t, `"a", "b", and 3 more`, quoteFirst([]string{"a", "b", "c", "d", "e"}, 2))
+	assert.Equal(t, `"10.0.0 "`, quoteFirst([]string{"10.0.0 "}, 5), "quoted, so stray spaces are visible")
+}

@@ -15,6 +15,7 @@ import (
 	"net/http"
 	"slices"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
@@ -69,6 +70,32 @@ func normalizeExternalCIDRs(values []string) (cidrs []string, dropped int) {
 	return cidrs, dropped
 }
 
+// normalizeInlineCIDRs checks spec.cidrs like remote values (CIDRs kept as written, bare IPs as
+// host routes) into a new slice, and returns the invalid entries. They come from the object's own
+// spec, so unlike remote values they can be named in the condition.
+func normalizeInlineCIDRs(values []string) (cidrs, invalid []string) {
+	for _, v := range values {
+		if c, ok := normalizeCIDR(v); ok {
+			cidrs = append(cidrs, c)
+		} else {
+			invalid = append(invalid, v)
+		}
+	}
+	return cidrs, invalid
+}
+
+// quoteFirst quotes the first max values, comma-separated, and says how many more there are.
+func quoteFirst(values []string, max int) string {
+	quoted := make([]string, 0, max)
+	for _, v := range values[:min(len(values), max)] {
+		quoted = append(quoted, strconv.Quote(v))
+	}
+	if more := len(values) - max; more > 0 {
+		quoted = append(quoted, fmt.Sprintf("and %d more", more))
+	}
+	return strings.Join(quoted, ", ")
+}
+
 type CIDRReconciler struct {
 	client.Client
 	CIDRs              ipamv1alpha1.CIDRsGetter
@@ -96,7 +123,9 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	status := cidrs.GetStatus()
 	specs := cidrs.GetSpec()
 
-	status.CIDRs = specs.CIDRsSource.CIDRs
+	// A new slice: sorting and compacting below must not change the spec.
+	var invalidInline []string
+	status.CIDRs, invalidInline = normalizeInlineCIDRs(specs.CIDRsSource.CIDRs)
 	requeue, raised := effectiveRequeueAfter(specs.RequeueAfter)
 
 	dropped, fetchErr := r.addHTTPSource(ctx, cidrs, &status)
@@ -121,6 +150,9 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			// echoing the response.
 			message = fmt.Sprintf("%s (%d invalid entries ignored)", message, dropped)
 		}
+		if len(invalidInline) > 0 {
+			message = fmt.Sprintf("%s (invalid entries in spec.cidrs ignored: %s)", message, quoteFirst(invalidInline, 5))
+		}
 		if raised {
 			message = fmt.Sprintf("%s (requeueAfter %s is below the minimum, refetched every %s)", message, specs.RequeueAfter.Duration, minRequeueAfter)
 		}
@@ -129,16 +161,6 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			Status:  v1.ConditionTrue,
 			Message: message,
 		})
-	}
-
-	// Bare IPs become host routes. Inline values are otherwise kept as typed (remote ones are
-	// already normalized by addHTTPSource).
-	for i, cidr := range status.CIDRs {
-		if _, _, err := net.ParseCIDR(cidr); err != nil {
-			if c, ok := normalizeCIDR(cidr); ok {
-				status.CIDRs[i] = c
-			}
-		}
 	}
 
 	sort.Strings(status.CIDRs)
