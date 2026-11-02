@@ -103,26 +103,40 @@ func gatewayOwnerName(obj client.Object) string {
 	return obj.GetLabels()[gatewayNameLabel]
 }
 
-func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, gatewaySupportEnabled bool, networkPolicySupportEnabled bool, serviceSupportEnabled bool, httpRouteSupportEnabled bool, namePrefix string, annotationPrefix string, httpHeadersEnabled bool, cidrSource CIDRSourceOptions) error {
+// SetupOptions selects which controllers SetupControllersWithManager starts, and how they work.
+type SetupOptions struct {
+	// The kinds allowlists are written to, as the --<kind>-support-enabled flags.
+	IngressEnabled, GatewayEnabled, NetworkPolicyEnabled, ServiceEnabled, HTTPRouteEnabled bool
+	// HTTPHeadersEnabled lets remote CIDR sources read headers from Secrets and ConfigMaps.
+	HTTPHeadersEnabled bool
+	// NamePrefix tells several controller instances apart (controller names, managed-by label).
+	NamePrefix string
+	// AnnotationPrefix is the prefix of the allowlist annotations, e.g. ipam.adevinta.com.
+	AnnotationPrefix string
+	// CIDRSource are the guardrails for remote CIDR sources; unset fields take the defaults.
+	CIDRSource CIDRSourceOptions
+}
+
+func SetupControllersWithManager(mgr ctrl.Manager, opts SetupOptions) error {
 	// Unset fields mean "default"; anything explicitly set must be in range, so a bad value stops
 	// startup instead of silently weakening (or disabling) a protection.
-	cidrSource = cidrSource.withDefaults()
+	cidrSource := opts.CIDRSource.withDefaults()
 	if err := cidrSource.Validate(); err != nil {
 		return fmt.Errorf("invalid CIDR source options: %w", err)
 	}
 
 	cidrResolver := resolvers.CidrResolver{
-		AnnotationPrefix: annotationPrefix,
+		AnnotationPrefix: opts.AnnotationPrefix,
 		Client:           mgr.GetClient(),
 		Recorder:         mgr.GetEventRecorder("ingress-allowlisting-controller"),
 	}
 
-	if ingressSupportEnabled {
+	if opts.IngressEnabled {
 		if err := (&IngressReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			CidrResolver: cidrResolver,
-		}).SetupWithManager(mgr, namePrefix); err != nil {
+		}).SetupWithManager(mgr, opts.NamePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Ingress"}
 		}
 	}
@@ -131,24 +145,24 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		Client:             mgr.GetClient(),
 		CIDRs:              &ipamv1alpha1.CIDRs{},
 		CIDRsList:          &ipamv1alpha1.CIDRsList{},
-		HTTPHeadersEnabled: httpHeadersEnabled,
+		HTTPHeadersEnabled: opts.HTTPHeadersEnabled,
 		SourceOptions:      cidrSource,
-	}).SetupWithManager(mgr, namePrefix); err != nil {
+	}).SetupWithManager(mgr, opts.NamePrefix); err != nil {
 		return &setupError{error: err, controllerType: "CIDRs"}
 	}
 	if err := (&CIDRReconciler{
 		Client:             mgr.GetClient(),
 		CIDRs:              &ipamv1alpha1.ClusterCIDRs{},
 		CIDRsList:          &ipamv1alpha1.ClusterCIDRsList{},
-		HTTPHeadersEnabled: httpHeadersEnabled,
+		HTTPHeadersEnabled: opts.HTTPHeadersEnabled,
 		SourceOptions:      cidrSource,
-	}).SetupWithManager(mgr, namePrefix); err != nil {
+	}).SetupWithManager(mgr, opts.NamePrefix); err != nil {
 		return &setupError{error: err, controllerType: "ClusterCIDRs"}
 	}
 
 	managedBy := "ingress-allowlisting-controller"
-	if namePrefix != "" {
-		managedBy = namePrefix + "-ingress-allowlisting-controller"
+	if opts.NamePrefix != "" {
+		managedBy = opts.NamePrefix + "-ingress-allowlisting-controller"
 	}
 
 	mapper := mgr.GetRESTMapper()
@@ -161,50 +175,50 @@ func SetupControllersWithManager(mgr ctrl.Manager, ingressSupportEnabled bool, g
 		setupLog.Infof("detected Traefik: enabling Traefik writer")
 	}
 
-	if httpRouteSupportEnabled && len(l7Writers) == 0 {
+	if opts.HTTPRouteEnabled && len(l7Writers) == 0 {
 		setupLog.Warnf("httproute support is enabled but no L7 writer was detected (neither Istio nor Traefik CRDs found); HTTPRoutes will be reconciled but no allowlist resources will be written")
 	}
 
-	if gatewaySupportEnabled {
+	if opts.GatewayEnabled {
 		gatewayReconciler := GatewayAllowlistingReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			CidrResolver: cidrResolver,
 			L4Writers:    l4Writers,
 		}
-		if err := gatewayReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+		if err := gatewayReconciler.SetupWithManager(mgr, opts.NamePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Gateway"}
 		}
 	}
-	if networkPolicySupportEnabled {
+	if opts.NetworkPolicyEnabled {
 		networkPolicyReconciler := NetworkPolicyReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			CidrResolver: cidrResolver,
 		}
-		if err := networkPolicyReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+		if err := networkPolicyReconciler.SetupWithManager(mgr, opts.NamePrefix); err != nil {
 			return &setupError{error: err, controllerType: "NetworkPolicy"}
 		}
 	}
-	if serviceSupportEnabled {
+	if opts.ServiceEnabled {
 		serviceReconciler := ServiceReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			CidrResolver: cidrResolver,
 		}
-		if err := serviceReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+		if err := serviceReconciler.SetupWithManager(mgr, opts.NamePrefix); err != nil {
 			return &setupError{error: err, controllerType: "Service"}
 		}
 	}
 
-	if httpRouteSupportEnabled {
+	if opts.HTTPRouteEnabled {
 		httpRouteReconciler := HTTPRouteAllowlistingReconciler{
 			Client:       mgr.GetClient(),
 			Scheme:       mgr.GetScheme(),
 			CidrResolver: cidrResolver,
 			L7Writers:    l7Writers,
 		}
-		if err := httpRouteReconciler.SetupWithManager(mgr, namePrefix); err != nil {
+		if err := httpRouteReconciler.SetupWithManager(mgr, opts.NamePrefix); err != nil {
 			return &setupError{error: err, controllerType: "HTTPRoute"}
 		}
 	}

@@ -335,8 +335,7 @@ func TestConfiguredMinMaskIsHonouredOnFetch(t *testing.T) {
 
 func TestSetupRejectsInvalidCIDRSourceOptions(t *testing.T) {
 	// SetupControllersWithManager must refuse options that would silently weaken a protection.
-	err := SetupControllersWithManager(nil, false, false, false, false, false, "", "ipam.adevinta.com", false,
-		CIDRSourceOptions{MinMaskIPv4: 99})
+	err := SetupControllersWithManager(nil, SetupOptions{AnnotationPrefix: "ipam.adevinta.com", CIDRSource: CIDRSourceOptions{MinMaskIPv4: 99}})
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "min-mask-ipv4")
 }

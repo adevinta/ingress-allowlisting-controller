@@ -247,7 +247,7 @@ func TestCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{IngressEnabled: true, HTTPHeadersEnabled: true, NamePrefix: t.Name(), AnnotationPrefix: "ipam.example.com"}))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -320,7 +320,7 @@ func TestClusterCIDRsControllerTriggersIngressReconciliation(t *testing.T) {
 		Metrics: metricsserver.Options{BindAddress: "0"},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, false, false, false, false, t.Name(), "custom.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{IngressEnabled: true, HTTPHeadersEnabled: true, NamePrefix: t.Name(), AnnotationPrefix: "custom.example.com"}))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -399,7 +399,7 @@ func TestCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{IngressEnabled: true, GatewayEnabled: true, HTTPHeadersEnabled: true, NamePrefix: t.Name(), AnnotationPrefix: "ipam.example.com"}))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
@@ -463,7 +463,7 @@ func TestCIDRsControllerDoesNotWatchSecretsAndConfigMapsWhenDisabled(t *testing.
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, t.Name(), "ipam.adevinta.com", false, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{NamePrefix: t.Name(), AnnotationPrefix: "ipam.adevinta.com"}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -509,7 +509,7 @@ func TestCIDRsControllerWatchesSecretsAndConfigMapsWhenEnabled(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, false, false, false, false, false, t.Name(), "ipam.adevinta.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{HTTPHeadersEnabled: true, NamePrefix: t.Name(), AnnotationPrefix: "ipam.adevinta.com"}))
 
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
@@ -575,7 +575,7 @@ func TestClusterCIDRsControllerTriggersGatewayReconciliation(t *testing.T) {
 		},
 	})
 	require.NoError(t, err)
-	require.NoError(t, controllers.SetupControllersWithManager(mgr, true, true, false, false, false, t.Name(), "ipam.example.com", true, controllers.DefaultCIDRSourceOptions()))
+	require.NoError(t, controllers.SetupControllersWithManager(mgr, controllers.SetupOptions{IngressEnabled: true, GatewayEnabled: true, HTTPHeadersEnabled: true, NamePrefix: t.Name(), AnnotationPrefix: "ipam.example.com"}))
 
 	go func() {
 		require.NoError(t, mgr.Start(context.Background()))
