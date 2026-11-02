@@ -41,18 +41,19 @@ const (
 )
 
 // guardExternalBreadth returns an error if any externally-fetched CIDR is wider
-// than the minimum mask allowed for its address family. A non-positive
-// minMaskV4/minMaskV6 falls back to the package default.
+// than the minimum mask allowed for its address family. Unset masks take their
+// defaults from withDefaults, the one place guardrail defaults come from.
 //
 // Invalid entries are ignored here; they are filtered out downstream by
 // net.ParseCIDR in the resolver. A bare IP is treated as a full-length host
 // route (/32 or /128) and always passes.
-func guardExternalBreadth(cidrs []string, minMaskV4, minMaskV6 int) error {
-	if minMaskV4 <= 0 {
-		minMaskV4 = defaultMinMaskIPv4
-	}
-	if minMaskV6 <= 0 {
-		minMaskV6 = defaultMinMaskIPv6
+func guardExternalBreadth(cidrs []string, opts CIDRSourceOptions) error {
+	opts = opts.withDefaults()
+	minMaskV4, minMaskV6 := opts.MinMaskIPv4, opts.MinMaskIPv6
+	// Validate refuses such values at startup. Should one get here anyway, refuse the source:
+	// with a mask below 1 the guard would let even 0.0.0.0/0 through.
+	if minMaskV4 < 1 || minMaskV6 < 1 {
+		return fmt.Errorf("invalid breadth limit: minimum masks /%d (IPv4) and /%d (IPv6)", minMaskV4, minMaskV6)
 	}
 
 	for _, c := range cidrs {
