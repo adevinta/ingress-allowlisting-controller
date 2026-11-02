@@ -1477,3 +1477,27 @@ func TestQuoteFirst(t *testing.T) {
 	assert.Equal(t, `"a", "b", and 3 more`, quoteFirst([]string{"a", "b", "c", "d", "e"}, 2))
 	assert.Equal(t, `"10.0.0 "`, quoteFirst([]string{"10.0.0 "}, 5), "quoted, so stray spaces are visible")
 }
+
+// TestHeaderValuesAreTrimmed verifies that header values from Secrets and ConfigMaps lose
+// surrounding whitespace. A value created with kubectl --from-file usually ends in a newline, and
+// Go refuses to send such a header ("invalid header field value"), so the whole fetch failed.
+func TestHeaderValuesAreTrimmed(t *testing.T) {
+	ctx := context.TODO()
+	secret := &v1.Secret{
+		ObjectMeta: metav1.ObjectMeta{Name: "api-key", Namespace: "mynamespace"},
+		Data:       map[string][]byte{"X-Api-Key": []byte("s3cr3t\n")},
+	}
+	cm := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "extra", Namespace: "mynamespace"},
+		Data:       map[string]string{"X-Client": "  ingress-allowlisting\r\n"},
+	}
+	reconciler := &CIDRReconciler{Client: fake.NewClientBuilder().WithObjects(secret, cm).Build()}
+	headers := http.Header{}
+
+	require.NoError(t, reconciler.updateClientHeaders(ctx, "mynamespace", headers, []ipamv1alpha1.HeadersFrom{
+		{SecretRef: ipamv1alpha1.ObjectRef{Name: "api-key"}},
+		{ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "extra"}},
+	}))
+
+	assert.Equal(t, http.Header{"X-Api-Key": {"s3cr3t"}, "X-Client": {"ingress-allowlisting"}}, headers)
+}

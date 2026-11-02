@@ -68,6 +68,9 @@ spec:
 - `headersFrom.secretRef` — all keys in the Secret are sent as HTTP request headers
 - `headersFrom.configMapRef` — all keys in the ConfigMap are sent as HTTP request headers
 
+  Values are trimmed, so a value created with `kubectl create secret --from-file` (which usually
+  ends in a newline) works. Every key is sent, so reference a Secret that holds only the headers.
+
 ### Headers from Secrets and ConfigMaps (`headersFrom`)
 
 `headersFrom` is off by default and ignored while it is off: no Secret or ConfigMap is read or
