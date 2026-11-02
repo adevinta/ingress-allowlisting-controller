@@ -26,9 +26,6 @@ const (
 	YAML Format = "YAML"
 )
 
-// EDIT THIS FILE!  THIS IS SCAFFOLDING FOR YOU TO OWN!
-// NOTE: json tags are required.  Any new fields you add must have json tags for the fields to be serialized.
-
 type CIDRsLocation struct {
 	// URI should be a URL to fetch the CIDRs from
 	// remote services.
@@ -78,9 +75,6 @@ type CIDRsSource struct {
 
 // CIDRsSpec defines the desired state of CIDRs
 type CIDRsSpec struct {
-	// INSERT ADDITIONAL SPEC FIELDS - desired state of IpAllowlistingGroup
-	// Important: Run "make" to regenerate code after modifying this file
-
 	// RequeueAfter is how often a remote source is fetched again (e.g. 15m). At least 1m: one worker
 	// fetches every source in turn, so a shorter interval would delay every other object.
 	// +kubebuilder:validation:Optional
@@ -166,17 +160,6 @@ type ClusterCIDRsList struct {
 	metav1.TypeMeta `json:",inline"`
 	metav1.ListMeta `json:"metadata,omitempty"`
 	Items           []ClusterCIDRs `json:"items"`
-}
-
-func (c *CIDRs) IsSubmitted() bool {
-	return !c.ObjectMeta.CreationTimestamp.IsZero()
-}
-
-func (c *CIDRs) IsBeingDeleted() bool {
-	return !c.ObjectMeta.DeletionTimestamp.IsZero()
-}
-
-func (c *CIDRs) SetInitialStatus() {
 }
 
 func (c *CIDRs) DeepCopyCIDRs() CIDRsGetter {
