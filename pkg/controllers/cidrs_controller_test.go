@@ -1261,3 +1261,60 @@ func toYamlReader(t *testing.T, data any) io.Reader {
 	require.NoError(t, err)
 	return bytes.NewReader(b)
 }
+
+// TestCIDRsStateFollowsTheLastReconcile verifies that status.state says how the last reconcile went,
+// like the UpToDate condition: an object whose fetch failed once must not stay UpdateFailed after
+// the source works again, and an object that never failed is Ready too.
+func TestCIDRsStateFollowsTheLastReconcile(t *testing.T) {
+	ctx := context.TODO()
+	scheme, err := Scheme()
+	require.NoError(t, err)
+
+	failing := true
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("- 10.1.0.0/16\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	remote := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "remote", Namespace: "mynamespace"},
+		Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{
+			Location: ipamv1alpha1.CIDRsLocation{URI: server.URL},
+		}},
+	}
+	inline := &ipamv1alpha1.CIDRs{
+		ObjectMeta: metav1.ObjectMeta{Name: "inline", Namespace: "mynamespace"},
+		Spec:       ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"10.2.0.0/16"}}},
+	}
+	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(remote, inline).WithStatusSubresource(remote, inline).Build()
+	reconciler := &CIDRReconciler{
+		CIDRs: &ipamv1alpha1.CIDRs{}, CIDRsList: &ipamv1alpha1.CIDRsList{}, Client: fakeClient,
+		SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // the feed is on 127.0.0.1
+	}
+	reconcileAndGet := func(t *testing.T, obj *ipamv1alpha1.CIDRs) *ipamv1alpha1.CIDRs {
+		t.Helper()
+		_, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		require.NoError(t, err)
+		got := &ipamv1alpha1.CIDRs{}
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(obj), got))
+		require.Len(t, got.Status.Conditions, 1)
+		return got
+	}
+
+	got := reconcileAndGet(t, remote)
+	assert.Equal(t, ipamv1alpha1.CIDRsStateUpdateFailed, got.Status.State, "the fetch failed")
+	assert.Equal(t, v1.ConditionFalse, got.Status.Conditions[0].Status)
+
+	failing = false
+	got = reconcileAndGet(t, remote)
+	assert.Equal(t, []string{"10.1.0.0/16"}, got.Status.CIDRs)
+	assert.Equal(t, v1.ConditionTrue, got.Status.Conditions[0].Status)
+	assert.Equal(t, ipamv1alpha1.CIDRsStateReady, got.Status.State, "the source works again: no longer UpdateFailed")
+
+	got = reconcileAndGet(t, inline)
+	assert.Equal(t, ipamv1alpha1.CIDRsStateReady, got.Status.State, "an object that never failed is Ready")
+}
