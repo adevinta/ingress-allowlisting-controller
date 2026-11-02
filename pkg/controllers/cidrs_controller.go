@@ -110,6 +110,8 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			Message: fmt.Sprintf("Failed to get CIDRs from http source: %v", fetchErr),
 		})
 	} else {
+		// Like the condition, state says how this reconcile went: an earlier failure must not stick.
+		status.State = ipamv1alpha1.CIDRsStateReady
 		message := "All CIDRs are up to date"
 		if dropped > 0 {
 			// A count, never the values: a misconfigured CEL expression stays visible without
