@@ -16,7 +16,7 @@ func TestGuardExternalBreadth_AllowsRealFeedMasks(t *testing.T) {
 		"2600:1400::/24", // Akamai's widest IPv6 block
 		"52.94.0.0/16",
 		"2600:1f00::/40",
-	}, 0, 0))
+	}, CIDRSourceOptions{}))
 }
 
 // TestGuardExternalBreadth_AllowsTypicalAllowlist verifies ordinary narrow allowlists pass.
@@ -26,19 +26,19 @@ func TestGuardExternalBreadth_AllowsTypicalAllowlist(t *testing.T) {
 		"192.168.0.0/16",
 		"203.0.113.5/32",
 		"2001:db8::/48",
-	}, 0, 0))
+	}, CIDRSourceOptions{}))
 }
 
 // TestGuardExternalBreadth_BareIPs verifies bare addresses count as /32 or /128 and pass.
 func TestGuardExternalBreadth_BareIPs(t *testing.T) {
-	assert.NoError(t, guardExternalBreadth([]string{"203.0.113.5", "2001:db8::1"}, 0, 0))
+	assert.NoError(t, guardExternalBreadth([]string{"203.0.113.5", "2001:db8::1"}, CIDRSourceOptions{}))
 }
 
 // TestGuardExternalBreadth_RejectsDefaultRoute verifies the whole-space blunder is rejected.
 func TestGuardExternalBreadth_RejectsDefaultRoute(t *testing.T) {
-	assert.Error(t, guardExternalBreadth([]string{"0.0.0.0/0"}, 0, 0),
+	assert.Error(t, guardExternalBreadth([]string{"0.0.0.0/0"}, CIDRSourceOptions{}),
 		"0.0.0.0/0 must be rejected")
-	assert.Error(t, guardExternalBreadth([]string{"::/0"}, 0, 0),
+	assert.Error(t, guardExternalBreadth([]string{"::/0"}, CIDRSourceOptions{}),
 		"::/0 must be rejected")
 }
 
@@ -47,7 +47,7 @@ func TestGuardExternalBreadth_RejectsDefaultRoute(t *testing.T) {
 // themselves too wide.
 func TestGuardExternalBreadth_RejectsTooWide(t *testing.T) {
 	for _, c := range []string{"0.0.0.0/1", "0.0.0.0/3", "10.0.0.0/7", "2000::/3", "2001:db8::/19"} {
-		assert.Error(t, guardExternalBreadth([]string{c}, 0, 0), "%s must be rejected", c)
+		assert.Error(t, guardExternalBreadth([]string{c}, CIDRSourceOptions{}), "%s must be rejected", c)
 	}
 }
 
@@ -56,35 +56,35 @@ func TestGuardExternalBreadth_RejectsTooWide(t *testing.T) {
 func TestGuardExternalBreadth_RejectsOneBadEntryAmongGood(t *testing.T) {
 	assert.Error(t, guardExternalBreadth([]string{
 		"10.0.0.0/8", "192.168.0.0/16", "0.0.0.0/2", "172.16.0.0/12",
-	}, 0, 0))
+	}, CIDRSourceOptions{}))
 }
 
 // TestGuardExternalBreadth_RejectsV4Mapped verifies IPv4-mapped IPv6 prefixes are measured in
 // IPv4 space, so a mapped block that covers all of IPv4 is rejected rather than read as a narrow
 // /96. ::ffff:0.0.0.0/96 covers the entire IPv4 range; ::ffff:0.0.0.0/104 is the mapped /8 limit.
 func TestGuardExternalBreadth_RejectsV4Mapped(t *testing.T) {
-	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/96"}, 0, 0),
+	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/96"}, CIDRSourceOptions{}),
 		"::ffff:0.0.0.0/96 covers all of IPv4 and must be rejected")
-	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/100"}, 0, 0),
+	assert.Error(t, guardExternalBreadth([]string{"::ffff:0.0.0.0/100"}, CIDRSourceOptions{}),
 		"::ffff:0.0.0.0/100 (mapped /4) must be rejected")
-	assert.NoError(t, guardExternalBreadth([]string{"::ffff:10.0.0.0/104"}, 0, 0),
+	assert.NoError(t, guardExternalBreadth([]string{"::ffff:10.0.0.0/104"}, CIDRSourceOptions{}),
 		"::ffff:10.0.0.0/104 (mapped /8) is exactly at the limit and must pass")
 }
 
 // TestGuardExternalBreadth_IgnoresInvalidEntries verifies non-CIDR, non-IP entries are skipped.
 func TestGuardExternalBreadth_IgnoresInvalidEntries(t *testing.T) {
-	assert.NoError(t, guardExternalBreadth([]string{"not-a-cidr", "", "10.0.0.0/8"}, 0, 0))
+	assert.NoError(t, guardExternalBreadth([]string{"not-a-cidr", "", "10.0.0.0/8"}, CIDRSourceOptions{}))
 }
 
 // TestGuardExternalBreadth_CustomMasks verifies operator-supplied limits override defaults.
 func TestGuardExternalBreadth_CustomMasks(t *testing.T) {
 	// Tighten IPv4 to /16: a /8 now fails, a /16 passes.
-	assert.Error(t, guardExternalBreadth([]string{"10.0.0.0/8"}, 16, 0),
+	assert.Error(t, guardExternalBreadth([]string{"10.0.0.0/8"}, CIDRSourceOptions{MinMaskIPv4: 16}),
 		"/8 must fail a /16 minimum")
-	assert.NoError(t, guardExternalBreadth([]string{"10.1.0.0/16"}, 16, 0),
+	assert.NoError(t, guardExternalBreadth([]string{"10.1.0.0/16"}, CIDRSourceOptions{MinMaskIPv4: 16}),
 		"/16 must pass a /16 minimum")
 	// v6 limit is independent.
-	assert.Error(t, guardExternalBreadth([]string{"2001:db8::/40"}, 0, 48),
+	assert.Error(t, guardExternalBreadth([]string{"2001:db8::/40"}, CIDRSourceOptions{MinMaskIPv6: 48}),
 		"/40 must fail a /48 minimum")
 }
 
@@ -115,4 +115,13 @@ func TestPrefixLen(t *testing.T) {
 			assert.Equal(t, c.is4, is4, "family mismatch for %q", c.in)
 		}
 	}
+}
+
+// TestGuardExternalBreadth_RefusesAMaskBelowOne verifies the guard fails closed on a mask below 1,
+// which Validate refuses at startup: rather than guessing, it refuses the source, so even
+// 0.0.0.0/0 can't get through.
+func TestGuardExternalBreadth_RefusesAMaskBelowOne(t *testing.T) {
+	err := guardExternalBreadth([]string{"0.0.0.0/0"}, CIDRSourceOptions{MinMaskIPv4: -1})
+	assert.ErrorContains(t, err, "invalid breadth limit")
+	assert.ErrorContains(t, guardExternalBreadth([]string{"10.0.0.0/8"}, CIDRSourceOptions{MinMaskIPv6: -3}), "invalid breadth limit")
 }

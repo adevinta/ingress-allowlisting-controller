@@ -577,7 +577,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	// misconfiguration produced a prefix wider than the minimum mask (e.g. a
 	// stray 0.0.0.0/0). An admin may still allow 0.0.0.0/0 inline. Returning an
 	// error here preserves the last-known-good status.
-	if err := guardExternalBreadth(cidrValues, opts.MinMaskIPv4, opts.MinMaskIPv6); err != nil {
+	if err := guardExternalBreadth(cidrValues, opts); err != nil {
 		log.DefaultLogger.WithContext(ctx).
 			WithField("cidrs", cidrs.GetName()).
 			WithField("uri", redactURI(spec.CIDRsSource.Location.URI)).
