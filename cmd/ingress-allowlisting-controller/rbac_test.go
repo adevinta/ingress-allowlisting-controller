@@ -188,3 +188,61 @@ func TestRequiredPermissionsFollowFeatures(t *testing.T) {
 	assert.Contains(t, all, writers.Permission{Group: "ipam.adevinta.com", Resource: "cidrs", Subresource: "status", Verb: "update"})
 	assert.Contains(t, all, writers.Permission{Group: "gateway.networking.k8s.io", Resource: "httproutes", Verb: "patch"}, "the Traefik writer patches routes")
 }
+
+// grantedBeyond lists the group/resource/verb combinations the rules grant but the preflight never
+// checks, so the code never uses them. Namespaces are not compared here: that the lease is granted
+// per namespace is tested separately.
+func grantedBeyond(rules []rbacv1.PolicyRule, required []writers.Permission) []string {
+	need := map[string]bool{}
+	for _, p := range required {
+		resource := p.Resource
+		if p.Subresource != "" {
+			resource += "/" + p.Subresource
+		}
+		need[p.Group+" "+resource+" "+p.Verb] = true
+	}
+	var extra []string
+	for _, r := range rules {
+		for _, g := range r.APIGroups {
+			for _, res := range r.Resources {
+				for _, v := range r.Verbs {
+					if !need[g+" "+res+" "+v] {
+						extra = append(extra, g+" "+res+" "+v)
+					}
+				}
+			}
+		}
+	}
+	return extra
+}
+
+// TestRBACGrantsNothingBeyondWhatIsUsed verifies, the other way round from the tests above, that
+// the chart's controller roles and the role generated from the kubebuilder markers grant nothing
+// the controller doesn't use: least privilege, and no "just in case" rule creeping back in.
+func TestRBACGrantsNothingBeyondWhatIsUsed(t *testing.T) {
+	l4, l7 := allWriters()
+	features := allFeatures
+	features.leaderElectionNamespace = "iac-test"
+	required := requiredPermissions(features, l4, l7)
+
+	t.Run("generated role", func(t *testing.T) {
+		role, err := os.ReadFile("../../config/rbac/role.yaml")
+		require.NoError(t, err)
+		assert.Empty(t, grantedBeyond(parseRoles(t, role).cluster, required))
+	})
+
+	t.Run("chart", func(t *testing.T) {
+		if _, err := exec.LookPath("helm"); err != nil {
+			t.Skip("helm not installed")
+		}
+		out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller", "--namespace", "iac-test",
+			"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,cidrSource.allowlist={https://a.example.com},leaderElection.enabled=true").Output()
+		require.NoError(t, err)
+		rules := parseRoles(t, out)
+		all := slices.Clone(rules.cluster)
+		for _, namespaced := range rules.namespaced {
+			all = append(all, namespaced...)
+		}
+		assert.Empty(t, grantedBeyond(all, required))
+	})
+}

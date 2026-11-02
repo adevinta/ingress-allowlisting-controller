@@ -26,7 +26,6 @@ rules:
   verbs:
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
@@ -62,44 +61,33 @@ rules:
   - get
   - list
   - patch
-  - update
   - watch
 - apiGroups:
   - ipam.adevinta.com
   resources:
   - cidrs
-  - cidrs/status
   - clustercidrs
-  - clustercidrs/status
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
-  - update
   - watch
+- apiGroups:
+  - ipam.adevinta.com
+  resources:
+  - cidrs/status
+  - clustercidrs/status
+  verbs:
+  - update
 - apiGroups:
   - networking.k8s.io
   resources:
   - ingresses
   - networkpolicies
   verbs:
-  - create
-  - delete
   - get
   - list
-  - patch
   - update
   - watch
-- apiGroups:
-  - networking.k8s.io
-  resources:
-  - ingresses/status
-  verbs:
-  - get
-  - patch
-  - update
 - apiGroups:
   - security.istio.io
   resources:
@@ -109,7 +97,6 @@ rules:
   - delete
   - get
   - list
-  - patch
   - update
   - watch
 - apiGroups:
