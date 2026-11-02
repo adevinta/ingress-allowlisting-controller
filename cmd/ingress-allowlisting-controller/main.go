@@ -30,8 +30,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager/signals"
 	metricsserver "sigs.k8s.io/controller-runtime/pkg/metrics/server"
 
-	"sigs.k8s.io/controller-runtime/pkg/webhook"
-
 	authorizationv1 "k8s.io/api/authorization/v1"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -178,7 +176,6 @@ func main() {
 			BindAddress: metricsAddr,
 		},
 		HealthProbeBindAddress:  healthProbeAddr,
-		WebhookServer:           webhook.NewServer(webhook.Options{Port: 9443}),
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionNamespace: leaderElectionNamespace,
 		LeaderElectionID:        leaderElectionID,
