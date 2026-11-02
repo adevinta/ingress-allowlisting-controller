@@ -60,4 +60,4 @@ stays and no longer follows CIDRs changes. Remove or edit `whitelist-source-rang
 
 | Flag | Default | Description |
 |---|---|---|
-| `--ingress-support-enabled` | `true` | Enable or disable Ingress support. Unlike other reconcilers, Ingress is on by default and must be explicitly disabled if not needed. |
+| `--ingress-support-enabled` | `false` | Enable Ingress support (chart: `ingress.enabled: true`). Off by default, like every other kind. |

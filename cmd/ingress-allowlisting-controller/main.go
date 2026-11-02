@@ -83,8 +83,9 @@ func main() {
 	flag.StringVar(&as, "as", "", "The user to impersonate to run this controller")
 	flag.StringVar(&annotationPrefix, "annotation-prefix", "ipam.adevinta.com", "Prefix of the allowlist annotations the controller reads: <prefix>/allowlist-group and <prefix>/cluster-allowlist-group.")
 	flagGroup("CIDRs / ClusterCIDRs", func() {
-		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", true, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
-		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector to restrict which Secrets and ConfigMaps are cached as HTTP header sources (e.g. 'ipam.adevinta.com/cidr-header-source=true'). Only effective when --http-headers-enabled=true.")
+		flag.BoolVar(&httpHeadersEnabled, "http-headers-enabled", false, "Enable reading Secrets and ConfigMaps as HTTP header sources for CIDR URL fetches. Disabling removes secret/configmap access entirely and skips reactive re-reconciliation on their changes.")
+		flag.StringVar(&secretLabelSelector, "secret-label-selector", "", "Label selector of the Secrets and ConfigMaps the controller caches and may read as HTTP header sources; others can't be read. Defaults to '<annotation-prefix>/cidr-header-source=true'. Only used with --http-headers-enabled.")
+		flag.StringVar(&cidrSource.ClusterHeadersNamespace, "cluster-cidrs-headers-namespace", "", "The only namespace the headersFrom of a ClusterCIDRs may read Secrets and ConfigMaps from. Defaults to the controller's own namespace when it runs in a cluster. A CIDRs object always reads from its own namespace.")
 		flag.IntVar(&cidrSource.MinMaskIPv4, "cidr-source-min-mask-ipv4", cidrSource.MinMaskIPv4, "Widest IPv4 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-32.")
 		flag.IntVar(&cidrSource.MinMaskIPv6, "cidr-source-min-mask-ipv6", cidrSource.MinMaskIPv6, "Widest IPv6 prefix (smallest mask length) accepted from a remote CIDR source. A fetch containing a wider prefix is rejected and the last-known-good allowlist is kept. Range 1-128.")
 		flag.DurationVar(&cidrSource.FetchTimeout, "cidr-source-fetch-timeout", cidrSource.FetchTimeout, "Maximum time for fetching and processing one remote CIDR source (connect, response headers, body and processing).")
@@ -102,7 +103,7 @@ func main() {
 		flag.StringVar(&httpRouteLabelSelector, "httproute-label-selector", "", "Label selector to filter HTTPRoutes watched by the controller (e.g. 'app.kubernetes.io/managed-by=my-team'). Restricts the informer cache at the API server level.")
 	})
 	flagGroup("Ingress (nginx)", func() {
-		flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", true, "Enable Ingress support for the controller")
+		flag.BoolVar(&ingressSupportEnabled, "ingress-support-enabled", false, "Enable Ingress support for the controller")
 	})
 	flagGroup("NetworkPolicy", func() {
 		flag.BoolVar(&networkPolicySupportEnabled, "networkpolicy-support-enabled", false, "Enable networkpolicy support for the controller")
@@ -116,6 +117,11 @@ func main() {
 		setupLog.Fatal(err, " <- invalid --log-level")
 	}
 	cidrSource.Allowlist = allowlist
+	if err := validateHTTPHeaders(httpHeadersEnabled, allowlist); err != nil {
+		setupLog.Fatal(err, " <- fix and restart")
+	}
+	secretLabelSelector = defaultSecretLabelSelector(httpHeadersEnabled, secretLabelSelector, annotationPrefix)
+	cidrSource.ClusterHeadersNamespace = resolveClusterHeadersNamespace(httpHeadersEnabled, cidrSource.ClusterHeadersNamespace)
 	ctrl.SetLogger(log.NewLogr(log.DefaultLogger))
 
 	if err := cidrSource.Validate(); err != nil {
@@ -150,7 +156,7 @@ func main() {
 
 	// nil client is fine here — writers are only used to call RequiredPermissions(), not for K8s ops.
 	l4Writers, l7Writers := controllers.BuildWriterRegistries(nil, preflightMapper, "preflight", annotationPrefix)
-	checkRBAC(restConfig, requiredPermissions(rbacFeatures{
+	features := rbacFeatures{
 		ingress:        ingressSupportEnabled,
 		gateway:        gatewaySupportEnabled,
 		networkPolicy:  networkPolicySupportEnabled,
@@ -161,7 +167,9 @@ func main() {
 		// Resolved like controller-runtime does for the lease, so the preflight checks the
 		// namespace the lease really lives in (the chart grants it with a namespaced Role).
 		leaderElectionNamespace: resolveLeaderElectionNamespace(enableLeaderElection, leaderElectionNamespace),
-	}, l4Writers, l7Writers))
+	}
+	warnIfNoDestination(features)
+	checkRBAC(restConfig, requiredPermissions(features, l4Writers, l7Writers))
 
 	mgrOptions := ctrl.Options{
 		Scheme: scheme,
@@ -240,8 +248,67 @@ type rbacFeatures struct {
 	leaderElectionNamespace string
 }
 
+// validateHTTPHeaders refuses --http-headers-enabled without an origin allowlist: header values
+// only go to listed hosts, not to any host the author of a CIDRs object picks.
+func validateHTTPHeaders(enabled bool, allowlist []string) error {
+	if enabled && len(allowlist) == 0 {
+		return errors.New("--http-headers-enabled requires --cidr-source-allowlist (header values only go to listed origins)")
+	}
+	return nil
+}
+
+// defaultSecretLabelSelector returns the label selector of the Secrets and ConfigMaps the controller
+// may read for headersFrom: the flag value, or <annotation-prefix>/cidr-header-source=true. It is
+// never empty while headers are on: the controller reads through its cache, so only labelled
+// Secrets and ConfigMaps can be read at all.
+func defaultSecretLabelSelector(httpHeadersEnabled bool, flagValue, annotationPrefix string) string {
+	if !httpHeadersEnabled {
+		return ""
+	}
+	if strings.TrimSpace(flagValue) != "" {
+		return flagValue
+	}
+	return annotationPrefix + "/cidr-header-source=true"
+}
+
+// resolveClusterHeadersNamespace returns the namespace ClusterCIDRs may read headersFrom from: the
+// flag value, or the controller's own namespace when it runs in a cluster. Without either, a
+// ClusterCIDRs can't use headersFrom. While headers are off it is empty whatever the flag says, so
+// the startup log doesn't show a restriction for a feature that is off.
+func resolveClusterHeadersNamespace(httpHeadersEnabled bool, flagValue string) string {
+	if !httpHeadersEnabled {
+		return ""
+	}
+	if flagValue != "" {
+		return flagValue
+	}
+	ns, ok := readInClusterNamespace()
+	if !ok {
+		setupLog.Warn("ClusterCIDRs can't use headersFrom: not running in a cluster and no --cluster-cidrs-headers-namespace is set")
+	}
+	return ns
+}
+
+// warnIfNoDestination warns at startup when every kind the controller writes allowlists to is
+// disabled (the default): it then only reconciles CIDRs and ClusterCIDRs and allowlists nothing.
+func warnIfNoDestination(f rbacFeatures) {
+	if f.ingress || f.gateway || f.httpRoute || f.networkPolicy || f.service {
+		return
+	}
+	setupLog.Warn("no allowlist destination is enabled, the controller only reconciles CIDRs and ClusterCIDRs and watches no Ingress, Gateway, HTTPRoute, NetworkPolicy or Service. Enable the ones you need: --ingress-support-enabled, --gateway-support-enabled, --httproute-support-enabled, --networkpolicy-support-enabled, --service-support-enabled")
+}
+
 // inClusterNamespaceFile holds the pod's namespace (the ServiceAccount token mount).
 var inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
+
+// readInClusterNamespace returns the pod's own namespace, and false when not running in a cluster.
+func readInClusterNamespace() (string, bool) {
+	ns, err := os.ReadFile(inClusterNamespaceFile)
+	if err != nil || strings.TrimSpace(string(ns)) == "" {
+		return "", false
+	}
+	return strings.TrimSpace(string(ns)), true
+}
 
 // resolveLeaderElectionNamespace returns the flag value, or, like controller-runtime, the pod's own
 // namespace when running in a cluster. Without either, leader election can't start: the manager
@@ -250,11 +317,11 @@ func resolveLeaderElectionNamespace(enabled bool, flagValue string) string {
 	if !enabled || flagValue != "" {
 		return flagValue
 	}
-	ns, err := os.ReadFile(inClusterNamespaceFile)
-	if err != nil || strings.TrimSpace(string(ns)) == "" {
+	ns, ok := readInClusterNamespace()
+	if !ok {
 		setupLog.Fatal(errors.New("--enable-leader-election needs --leader-election-namespace when not running in a cluster"), "RBAC preflight failed")
 	}
-	return strings.TrimSpace(string(ns))
+	return ns
 }
 
 // watched is what a resource the controller reads through its cache needs: the informer lists and

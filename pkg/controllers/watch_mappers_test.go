@@ -55,7 +55,7 @@ func TestWatchMappersLogDroppedChanges(t *testing.T) {
 		logs := captureLogs(t)
 		mapper := newObjectRefToCIDRsFuncMap(failingListClient(), &ipamv1alpha1.CIDRsList{}, func(h ipamv1alpha1.HeadersFrom) ipamv1alpha1.ObjectRef {
 			return h.SecretRef
-		})
+		}, (&CIDRReconciler{}).resolveNamespace)
 		secret := &v1.PartialObjectMetadata{ObjectMeta: v1.ObjectMeta{Name: "token", Namespace: "team-a"}}
 
 		assert.Empty(t, mapper(context.Background(), secret))

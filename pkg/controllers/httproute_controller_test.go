@@ -1926,7 +1926,7 @@ func TestRuleCountReductionDeletesStaleAPs(t *testing.T) {
 }
 
 // TestLabelRemovalDeletesAPs verifies that when an HTTPRoute is evicted from the informer
-// cache (e.g. label common-platform.io/allowlisting removed), the controller deletes any
+// cache (e.g. label example.com/allowlisting removed), the controller deletes any
 // previously-created APs rather than leaving them orphaned.
 // This simulates the watch-selector scenario: the route's label is removed, the route drops
 // out of the cache, and the controller receives a reconcile request for a now-missing route.

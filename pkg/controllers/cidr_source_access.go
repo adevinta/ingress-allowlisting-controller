@@ -217,7 +217,11 @@ const maxSourceRedirects = 10
 // Proxy settings from the environment are honoured as before. When a proxy is used, the destination
 // guard applies to the connection to the proxy, so a proxy on a private address needs
 // AllowPrivateDestinations; the allowlist is still checked against the request URL either way.
-func newSourceHTTPClient(opts CIDRSourceOptions, origins []allowedOrigin) *http.Client {
+//
+// refHeaders are the headers read from headersFrom. Go forwards custom headers on any redirect
+// (it drops only Authorization, Cookie and the like on a cross-host one), so they are removed
+// before a redirect leaves the origin of the first request.
+func newSourceHTTPClient(opts CIDRSourceOptions, origins []allowedOrigin, refHeaders []string) *http.Client {
 	var transport *http.Transport
 	if base, ok := http.DefaultTransport.(*http.Transport); ok {
 		transport = base.Clone()
@@ -240,6 +244,11 @@ func newSourceHTTPClient(opts CIDRSourceOptions, origins []allowedOrigin) *http.
 				WithField("from", via[len(via)-1].URL.Redacted()).
 				WithField("to", req.URL.Redacted()).
 				Debug("external CIDR source redirected")
+			if originOf(req.URL) != originOf(via[0].URL) {
+				for _, k := range refHeaders {
+					req.Header.Del(k)
+				}
+			}
 			return checkAllowed(origins, req.URL)
 		},
 	}

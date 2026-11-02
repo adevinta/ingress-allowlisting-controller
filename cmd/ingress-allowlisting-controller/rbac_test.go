@@ -110,7 +110,7 @@ func TestRequiredPermissionsGrantedByChart(t *testing.T) {
 	}
 	const ns = "iac-test"
 	out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller", "--namespace", ns,
-		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,leaderElection.enabled=true").Output()
+		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,cidrSource.allowlist={https://a.example.com},leaderElection.enabled=true").Output()
 	require.NoError(t, err)
 
 	rules := parseRoles(t, out)
@@ -144,7 +144,7 @@ func TestChartAggregatesOnlyCIDRsIntoDefaultRoles(t *testing.T) {
 		t.Skip("helm not installed")
 	}
 	out, err := exec.Command("helm", "template", "test", "../../helm-chart/ingress-allowlisting-controller",
-		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,leaderElection.enabled=true").Output()
+		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,cidrSource.allowlist={https://a.example.com},leaderElection.enabled=true").Output()
 	require.NoError(t, err)
 
 	aggregated := parseRoles(t, out).aggregated

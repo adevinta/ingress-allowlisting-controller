@@ -216,6 +216,30 @@ in the Gateway API docs for the exact configuration for ArgoCD, Flux, and Helm.
 
 ---
 
+## Secrets sent as headers (`headersFrom`)
+
+A remote CIDR source can send the keys of a Secret or ConfigMap as HTTP headers. Whoever writes a
+`CIDRs` or `ClusterCIDRs` object picks both the Secret and the URL, so without limits it could send
+any Secret the controller can read to a host of their choosing. The controller therefore:
+
+- has it **off by default** (`--http-headers-enabled=false`): no access to Secrets or ConfigMaps;
+- when it is on, **reads only labelled Secrets and ConfigMaps**: it reads through its cache, which
+  holds only those matching `--secret-label-selector` (default
+  `<annotation-prefix>/cidr-header-source=true`). RBAC can't filter by label and still grants
+  cluster-wide read; the selector is what limits it;
+- when it is on, **refuses to start without `--cidr-source-allowlist`**: header values only go to
+  listed origins;
+- lets a `CIDRs` object read only from its own namespace, and a `ClusterCIDRs` only from
+  `--cluster-cidrs-headers-namespace` (default: the controller's namespace), never `kube-system`
+  or another tenant's namespace;
+- **drops the headers on a redirect to another origin**, which Go doesn't do for custom headers.
+
+Label only the Secrets meant as headers, and keep them in namespaces whose writers you trust with
+them: anyone who can create a `CIDRs` object in a namespace can send its labelled Secrets to an
+allowlisted origin.
+
+See [Headers from Secrets and ConfigMaps](cidrs.md#headers-from-secrets-and-configmaps-headersfrom).
+
 ## Breadth limit on remote CIDR sources
 
 **Applies to:** `CIDRs`/`ClusterCIDRs` objects with a remote `location.uri` source.

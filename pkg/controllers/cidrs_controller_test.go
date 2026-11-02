@@ -1050,42 +1050,48 @@ func TestUpdateClientHeaders(t *testing.T) {
 			)
 		})
 	})
-	t.Run("When the object is custer-scoped", func(t *testing.T) {
-		t.Run("When no namespace is provided in the objectRef", func(t *testing.T) {
+	// A ClusterCIDRs reads only from --cluster-cidrs-headers-namespace, here mynamespace.
+	t.Run("When the object is cluster-scoped", func(t *testing.T) {
+		clusterReconciler := &CIDRReconciler{
+			SourceOptions: CIDRSourceOptions{ClusterHeadersNamespace: testNamespaceName},
+			Client:        fakeClient,
+		}
+		want := http.Header{
+			http.CanonicalHeaderKey("header-in-cm"):     []string{"value1"},
+			http.CanonicalHeaderKey("header-in-both"):   []string{"value2", "value4"},
+			http.CanonicalHeaderKey("header-in-secret"): []string{"value3"},
+		}
+		t.Run("When no namespace is provided in the objectRef, the allowed one is used", func(t *testing.T) {
 			headers := http.Header{}
-			assert.Error(t, reconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
-				{
-					ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "my-configmap"},
-				},
-				{
-					SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret"},
-				},
+			assert.NoError(t, clusterReconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
+				{ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "my-configmap"}},
+				{SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret"}},
 			}))
-			assert.Equal(
-				t,
-				http.Header{},
-				headers,
-			)
+			assert.Equal(t, want, headers)
 		})
-		t.Run("when the namespace is provided in the objectRef", func(t *testing.T) {
+		t.Run("When the allowed namespace is provided in the objectRef", func(t *testing.T) {
 			headers := http.Header{}
-			assert.NoError(t, reconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
-				{
-					ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "my-configmap", Namespace: "mynamespace"},
-				},
-				{
-					SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "mynamespace"},
-				},
+			assert.NoError(t, clusterReconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
+				{ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "my-configmap", Namespace: testNamespaceName}},
+				{SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: testNamespaceName}},
 			}))
-			assert.Equal(
-				t,
-				http.Header{
-					http.CanonicalHeaderKey("header-in-cm"):     []string{"value1"},
-					http.CanonicalHeaderKey("header-in-both"):   []string{"value2", "value4"},
-					http.CanonicalHeaderKey("header-in-secret"): []string{"value3"},
-				},
-				headers,
-			)
+			assert.Equal(t, want, headers)
+		})
+		t.Run("When another namespace is provided in the objectRef", func(t *testing.T) {
+			headers := http.Header{}
+			err := clusterReconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
+				{SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "kube-system"}},
+			})
+			assert.ErrorContains(t, err, "may only read from namespace mynamespace (--cluster-cidrs-headers-namespace), not kube-system")
+			assert.Equal(t, http.Header{}, headers)
+		})
+		t.Run("When no namespace is allowed", func(t *testing.T) {
+			headers := http.Header{}
+			err := reconciler.updateClientHeaders(ctx, "", headers, []ipamv1alpha1.HeadersFrom{
+				{SecretRef: ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: testNamespaceName}},
+			})
+			assert.ErrorContains(t, err, "no --cluster-cidrs-headers-namespace is set")
+			assert.Equal(t, http.Header{}, headers)
 		})
 	})
 }
@@ -1127,6 +1133,7 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 			testCaseObjectRefToCIDRsMapper(
 				t,
 				&ipamv1alpha1.CIDRsList{},
+				"",
 				[]client.Object{
 					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref").withNamespace("secret-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
 					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref-in-same-namespace").withNamespace("secret-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "secret-namespace"}).build(),
@@ -1143,6 +1150,7 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 			testCaseObjectRefToCIDRsMapper(
 				t,
 				&ipamv1alpha1.CIDRsList{},
+				"",
 				[]client.Object{
 					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref").withNamespace("secret-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
 				},
@@ -1151,49 +1159,46 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 				[]client.ObjectKey{},
 			)
 		})
+		// A CIDRs object only reads Secrets of its own namespace: a reference to another one fails
+		// the fetch, so a change there must not trigger it either.
 		t.Run("When cidrs are in the other namespaces than the secret", func(t *testing.T) {
 			testCaseObjectRefToCIDRsMapper(
 				t,
 				&ipamv1alpha1.CIDRsList{},
+				"",
 				[]client.Object{
 					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref").withNamespace("other-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
 					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("cidr-with-secret-ref-in-other-namespace").withNamespace("other-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "secret-namespace"}).build(),
 				},
 				"secret-namespace",
 				"my-secret",
-				[]client.ObjectKey{
-					{Namespace: "other-namespace", Name: "cidr-with-secret-ref-in-other-namespace"},
-				},
+				[]client.ObjectKey{},
 			)
 		})
 	})
+	// A ClusterCIDRs reads only from --cluster-cidrs-headers-namespace (here secret-namespace); a
+	// reference without a namespace means that one.
 	t.Run("when using cluster scope cidrs", func(t *testing.T) {
-		t.Run("references have namespaces", func(t *testing.T) {
-			testCaseObjectRefToCIDRsMapper(
-				t,
-				&ipamv1alpha1.CIDRsList{},
-				[]client.Object{
-					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("one-cidr-with-secret-ref").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "secret-namespace"}).build(),
-					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("other-cidr-with-secret-ref").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "secret-namespace"}).build(),
-				},
-				"secret-namespace",
-				"my-secret",
-				[]client.ObjectKey{
-					{Name: "one-cidr-with-secret-ref"},
-					{Name: "other-cidr-with-secret-ref"},
-				},
+		clusterObjects := []client.Object{
+			newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("ref-with-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "secret-namespace"}).build(),
+			newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("ref-without-namespace").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
+			newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("ref-to-kube-system").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret", Namespace: "kube-system"}).build(),
+		}
+		t.Run("a Secret in the allowed namespace", func(t *testing.T) {
+			testCaseObjectRefToCIDRsMapper(t, &ipamv1alpha1.CIDRsList{}, "secret-namespace", clusterObjects,
+				"secret-namespace", "my-secret",
+				[]client.ObjectKey{{Name: "ref-with-namespace"}, {Name: "ref-without-namespace"}},
 			)
 		})
-		t.Run("references have no namespaces", func(t *testing.T) {
-			testCaseObjectRefToCIDRsMapper(
-				t,
-				&ipamv1alpha1.CIDRsList{},
-				[]client.Object{
-					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("one-cidr-with-secret-ref").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
-					newCIDRBuilder(&ipamv1alpha1.CIDRs{}).withName("other-cidr-with-secret-ref").withSecretRef(ipamv1alpha1.ObjectRef{Name: "my-secret"}).build(),
-				},
-				"secret-namespace",
-				"my-secret",
+		t.Run("a Secret in another namespace", func(t *testing.T) {
+			testCaseObjectRefToCIDRsMapper(t, &ipamv1alpha1.CIDRsList{}, "secret-namespace", clusterObjects,
+				"kube-system", "my-secret",
+				[]client.ObjectKey{},
+			)
+		})
+		t.Run("no allowed namespace", func(t *testing.T) {
+			testCaseObjectRefToCIDRsMapper(t, &ipamv1alpha1.CIDRsList{}, "", clusterObjects,
+				"secret-namespace", "my-secret",
 				[]client.ObjectKey{},
 			)
 		})
@@ -1207,7 +1212,7 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 			withConfigMapRef(ipamv1alpha1.ObjectRef{Name: "my-configmap"}).
 			build()
 		k8sClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).Build()
-		mapper := newObjectRefToCIDRsFuncMap(k8sClient, &ipamv1alpha1.CIDRsList{}, configMapSource)
+		mapper := newObjectRefToCIDRsFuncMap(k8sClient, &ipamv1alpha1.CIDRsList{}, configMapSource, (&CIDRReconciler{}).resolveNamespace)
 
 		requests := mapper(context.Background(), &v1.ConfigMap{ObjectMeta: metav1.ObjectMeta{
 			Namespace: "configmap-namespace",
@@ -1218,7 +1223,9 @@ func TestObjectRefToCIDRsMapper(t *testing.T) {
 	})
 }
 
-func testCaseObjectRefToCIDRsMapper(t *testing.T, cidrsList ipamv1alpha1.CIDRsGetterList, objects []client.Object, secretNamespace, secretName string, expectedRequestKeys []client.ObjectKey) {
+// testCaseObjectRefToCIDRsMapper maps a change of the Secret secretNamespace/secretName, with
+// clusterHeadersNamespace as --cluster-cidrs-headers-namespace.
+func testCaseObjectRefToCIDRsMapper(t *testing.T, cidrsList ipamv1alpha1.CIDRsGetterList, clusterHeadersNamespace string, objects []client.Object, secretNamespace, secretName string, expectedRequestKeys []client.ObjectKey) {
 	t.Helper()
 	scheme, err := Scheme()
 	require.NoError(t, err)
@@ -1226,7 +1233,8 @@ func testCaseObjectRefToCIDRsMapper(t *testing.T, cidrsList ipamv1alpha1.CIDRsGe
 		objects...,
 	).Build()
 
-	CIDRsSecretMapper := newObjectRefToCIDRsFuncMap(k8sClient, cidrsList, secretSource)
+	reconciler := &CIDRReconciler{SourceOptions: CIDRSourceOptions{ClusterHeadersNamespace: clusterHeadersNamespace}}
+	CIDRsSecretMapper := newObjectRefToCIDRsFuncMap(k8sClient, cidrsList, secretSource, reconciler.resolveNamespace)
 
 	expectedRequests := make([]reconcile.Request, len(expectedRequestKeys))
 	for i, key := range expectedRequestKeys {

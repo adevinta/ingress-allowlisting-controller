@@ -81,7 +81,7 @@ Resource kinds covered so far:
 
 | Kind | Controller flag | Where the allowlist is checked |
 |---|---|---|
-| Ingress | `--ingress-support-enabled` (default on) | `nginx.ingress.kubernetes.io/whitelist-source-range` annotation |
+| Ingress | `--ingress-support-enabled` | `nginx.ingress.kubernetes.io/whitelist-source-range` annotation |
 | NetworkPolicy | `--networkpolicy-support-enabled` | `spec.ingress[0].from` and `spec.egress[0].to` ipBlocks (must be identical) |
 | Service | `--service-support-enabled` | `spec.loadBalancerSourceRanges` of a `type: LoadBalancer` Service |
 | Istio Gateway | `--gateway-support-enabled` | `remoteIpBlocks` of the AuthorizationPolicy named after the Gateway |

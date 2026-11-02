@@ -78,7 +78,7 @@ func installAllowlistingController(ctx context.Context, t *testing.T, k8sClient 
 
 func startMain(t *testing.T, as string) {
 	t.Helper()
-	os.Args = []string{"ingress-allowlisting-controller", "--as", as, "--cidr-source-allow-private-destinations"} // the remote-CIDRs test serves from 127.0.0.1
+	os.Args = []string{"ingress-allowlisting-controller", "--as", as, "--ingress-support-enabled", "--cidr-source-allow-private-destinations"} // the remote-CIDRs test serves from 127.0.0.1
 	go func() {
 		main()
 	}()
@@ -186,7 +186,7 @@ func TestIngressAllowlistingController(t *testing.T) {
 	k8sClient, err := client.New(cfg, client.Options{Scheme: scheme})
 	require.NoError(t, err)
 
-	installAllowlistingController(ctx, t, k8sClient)
+	installAllowlistingController(ctx, t, k8sClient, "--set", "ingress.enabled=true")
 	deleteAllowlistingDeployment(t, k8sClient)
 
 	sa := &v1.ServiceAccount{

@@ -12,6 +12,7 @@ import (
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	v1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -408,6 +409,75 @@ func TestRefusedSourceDoesNotReadSecrets(t *testing.T) {
 	assert.Contains(t, msg, "source not in allowlist")
 	assert.NotContains(t, msg, "does-not-exist", "the Secret must not even be looked up")
 	assert.Zero(t, hits.Load())
+}
+
+// TestHeadersFromDroppedOnCrossOriginRedirect verifies that the headers read from headersFrom
+// reach only the origin of the source: Go forwards custom headers on any redirect, so a source (or
+// whoever controls it) could otherwise pass a Secret on to another host, even an allowlisted one.
+func TestHeadersFromDroppedOnCrossOriginRedirect(t *testing.T) {
+	// fetch reconciles a CIDRs object whose headersFrom reads X-Api-Key from a Secret and returns
+	// the X-Api-Key the final server received.
+	fetch := func(t *testing.T, start string, final *httptest.Server, allowlist ...string) (string, *ipamv1alpha1.CIDRs) {
+		t.Helper()
+		var received atomic.Value
+		received.Store("")
+		final.Config.Handler = http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/redirect" {
+				http.Redirect(w, r, "/list", http.StatusFound)
+				return
+			}
+			received.Store(r.Header.Get("X-Api-Key"))
+			yamlList("10.1.0.0/16")(w, r)
+		})
+		ctx := context.TODO()
+		scheme, err := Scheme()
+		require.NoError(t, err)
+		secret := &v1.Secret{
+			ObjectMeta: metav1.ObjectMeta{Name: "api-key", Namespace: "mynamespace"},
+			Data:       map[string][]byte{"X-Api-Key": []byte("s3cr3t")},
+		}
+		cidrs := &ipamv1alpha1.CIDRs{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: "mynamespace"},
+			Spec: ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{Location: ipamv1alpha1.CIDRsLocation{
+				URI:         start,
+				HeadersFrom: []ipamv1alpha1.HeadersFrom{{SecretRef: ipamv1alpha1.ObjectRef{Name: "api-key"}}},
+			}}},
+		}
+		fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs, secret).WithStatusSubresource(cidrs).Build()
+		reconciler := &CIDRReconciler{
+			CIDRs: &ipamv1alpha1.CIDRs{}, CIDRsList: &ipamv1alpha1.CIDRsList{}, Client: fakeClient,
+			HTTPHeadersEnabled: true,
+			SourceOptions:      CIDRSourceOptions{AllowPrivateDestinations: true, Allowlist: allowlist},
+		}
+		_, err = reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
+		require.NoError(t, err)
+		require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
+		return received.Load().(string), cidrs
+	}
+
+	t.Run("a redirect within the origin keeps the headers", func(t *testing.T) {
+		server := httptest.NewServer(nil)
+		t.Cleanup(server.Close)
+
+		got, cidrs := fetch(t, server.URL+"/redirect", server, server.URL)
+
+		assert.Equal(t, "s3cr3t", got)
+		assert.Equal(t, []string{"10.1.0.0/16"}, cidrs.Status.CIDRs)
+	})
+
+	t.Run("a redirect to another origin drops them, even an allowlisted one", func(t *testing.T) {
+		other := httptest.NewServer(nil)
+		t.Cleanup(other.Close)
+		source := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.Redirect(w, r, other.URL+"/list", http.StatusFound)
+		}))
+		t.Cleanup(source.Close)
+
+		got, cidrs := fetch(t, source.URL, other, source.URL, other.URL)
+
+		assert.Empty(t, got, "the Secret's header must not reach another origin")
+		assert.Equal(t, []string{"10.1.0.0/16"}, cidrs.Status.CIDRs, "the fetch itself still succeeds")
+	})
 }
 
 func TestCIDRSourceOptionsValidateAllowlist(t *testing.T) {
