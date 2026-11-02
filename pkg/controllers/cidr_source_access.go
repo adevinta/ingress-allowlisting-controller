@@ -241,8 +241,8 @@ func newSourceHTTPClient(opts CIDRSourceOptions, origins []allowedOrigin, refHea
 				return fmt.Errorf("stopped after %d redirects", maxSourceRedirects)
 			}
 			log.DefaultLogger.WithContext(req.Context()).
-				WithField("from", via[len(via)-1].URL.Redacted()).
-				WithField("to", req.URL.Redacted()).
+				WithField("from", redactURL(via[len(via)-1].URL)).
+				WithField("to", redactURL(req.URL)).
 				Debug("external CIDR source redirected")
 			if originOf(req.URL) != originOf(via[0].URL) {
 				for _, k := range refHeaders {
@@ -289,4 +289,31 @@ func (o CIDRSourceOptions) warnIfPermissive() {
 	if o.AllowPrivateDestinations {
 		setupLog.Warn("--cidr-source-allow-private-destinations is set: remote CIDR sources may connect to loopback, link-local (cloud metadata), private and other internal addresses.")
 	}
+}
+
+// redactURI is a source URI as shown in logs and in the status: scheme, host and path only.
+// Credentials can sit in the user info or the query (?token=...), and logs and the status are read
+// by more people than the object's spec.
+func redactURI(uri string) string {
+	u, err := url.Parse(uri)
+	if err != nil {
+		return "<invalid URI>"
+	}
+	return redactURL(u)
+}
+
+// redactURL is redactURI for a parsed URL.
+func redactURL(u *url.URL) string {
+	return (&url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path}).String()
+}
+
+// redactFetchError redacts the URL Go puts into a failed request's error (it masks only the
+// password, not the query). Done once where the request fails, so the condition and every log line
+// showing the error get the redacted URL.
+func redactFetchError(err error) error {
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		urlErr.URL = redactURI(urlErr.URL)
+	}
+	return err
 }

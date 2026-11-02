@@ -498,7 +498,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	logFields := map[string]interface{}{
 		"cidrs":     cidrs.GetName(),
 		"namespace": cidrs.GetNamespace(),
-		"uri":       spec.CIDRsSource.Location.URI,
+		"uri":       redactURI(spec.CIDRsSource.Location.URI),
 	}
 	defer func() {
 		if err == nil {
@@ -511,7 +511,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 
 	req, err := http.NewRequestWithContext(ctx, "GET", spec.CIDRsSource.Location.URI, nil)
 	if err != nil {
-		return 0, err
+		return 0, redactFetchError(err) // a parse error repeats the raw URI
 	}
 	// Refuse a source that is not allowed before anything else happens — in particular before any
 	// Secret is read for headersFrom. Redirects are checked again by the client.
@@ -536,7 +536,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	}
 	resp, err := newSourceHTTPClient(opts, origins, slices.Collect(maps.Keys(refHeaders))).Do(req)
 	if err != nil {
-		return 0, err
+		return 0, redactFetchError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
@@ -581,7 +581,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if err := guardExternalBreadth(cidrValues, opts.MinMaskIPv4, opts.MinMaskIPv6); err != nil {
 		log.DefaultLogger.WithContext(ctx).
 			WithField("cidrs", cidrs.GetName()).
-			WithField("uri", spec.CIDRsSource.Location.URI).
+			WithField("uri", redactURI(spec.CIDRsSource.Location.URI)).
 			Error(err, "rejecting external CIDR source: coverage too broad, keeping last-known-good allowlist")
 		return 0, err
 	}
