@@ -10,6 +10,8 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	rbacv1 "k8s.io/api/rbac/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
+	restclient "k8s.io/client-go/rest"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 )
@@ -93,4 +95,16 @@ func TestChartHighAvailability(t *testing.T) {
 		assert.Contains(t, out, "maxUnavailable: 1")
 		assert.Equal(t, 1, strings.Count(out, "kind: RoleBinding"))
 	})
+}
+
+// TestLeaderElectionIDIsAValidLeaseName verifies that the lease name passes the checks client-go
+// and the API server apply to object names. The scaffolded ID contained '/': client-go refused
+// every request for it ("may not contain '/'"), so with --enable-leader-election no replica ever
+// became leader and nothing was reconciled.
+func TestLeaderElectionIDIsAValidLeaseName(t *testing.T) {
+	assert.Empty(t, restclient.IsValidPathSegmentName(leaderElectionID), "client-go refuses the request")
+	assert.Empty(t, validation.IsDNS1123Subdomain(leaderElectionID), "the API server refuses the Lease")
+
+	// The old ID, to show what the test catches.
+	assert.NotEmpty(t, restclient.IsValidPathSegmentName("c72663fe.github.com/adevinta/ingress-allowlisting-controller"))
 }
