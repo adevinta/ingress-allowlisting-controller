@@ -623,6 +623,9 @@ func (r *CIDRReconciler) getObjectFromRef(ctx context.Context, namespace string,
 	return r.Get(ctx, client.ObjectKeyFromObject(dest), dest)
 }
 
+// updateClientHeaders adds every key of the referenced Secrets and ConfigMaps as a header. Values
+// are trimmed: one stored with kubectl --from-file usually ends in a newline, and Go refuses to send
+// a header value containing one, so the whole fetch would fail.
 func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace string, headers http.Header, headersRef []ipamv1alpha1.HeadersFrom) error {
 	for _, source := range headersRef {
 		if source.ConfigMapRef.Name != "" {
@@ -632,7 +635,7 @@ func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace stri
 				return err
 			}
 			for k, v := range cm.Data {
-				headers.Add(k, v)
+				headers.Add(k, strings.TrimSpace(v))
 			}
 		}
 		if source.SecretRef.Name != "" {
@@ -642,7 +645,7 @@ func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace stri
 				return err
 			}
 			for k, v := range secret.Data {
-				headers.Add(k, string(v))
+				headers.Add(k, strings.TrimSpace(string(v)))
 			}
 		}
 	}
