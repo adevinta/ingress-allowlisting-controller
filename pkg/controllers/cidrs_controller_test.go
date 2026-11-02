@@ -1426,3 +1426,19 @@ func TestGitHubResponseKeepsTheSizeCap(t *testing.T) {
 
 	requireFailedKeepingLastGood(t, cidrs, "response body too large")
 }
+
+// TestCIDRsReconcileFromCSVWithBareIPs verifies that a CSV source is handled like a YAML one: bare
+// IPs become host routes (/32, /128) and other values are counted as ignored. Before, CSV kept only
+// values that parsed as CIDRs, so a feed of bare IPs ended up empty, and nothing was counted.
+func TestCIDRsReconcileFromCSVWithBareIPs(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("10.0.0.0/8,192.0.2.7\n2001:db8::1, not-an-ip \n#1.1.1.1"))
+	}))
+	t.Cleanup(server.Close)
+
+	cidrs := reconcileFromServer(t, server.URL, ipamv1alpha1.Processing{Format: ipamv1alpha1.CSV}, CIDRSourceOptions{})
+
+	assert.Equal(t, []string{"10.0.0.0/8", "192.0.2.7/32", "2001:db8::1/128"}, cidrs.Status.CIDRs)
+	require.Len(t, cidrs.Status.Conditions, 1)
+	assert.Equal(t, "All CIDRs are up to date (1 invalid entries ignored)", cidrs.Status.Conditions[0].Message)
+}
