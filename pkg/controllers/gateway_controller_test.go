@@ -13,9 +13,9 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	corev1 "k8s.io/api/core/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
@@ -36,7 +36,7 @@ func init() {
 // newGatewayClass creates an Istio GatewayClass with the given name.
 func newGatewayClass(name string) *gatewayApiv1.GatewayClass {
 	return &gatewayApiv1.GatewayClass{
-		ObjectMeta: v1.ObjectMeta{Name: name},
+		ObjectMeta: metav1.ObjectMeta{Name: name},
 		Spec: gatewayApiv1.GatewayClassSpec{
 			ControllerName: gatewayApiv1.GatewayController(writers.IstioControllerName),
 		},
@@ -68,20 +68,20 @@ func newGatewayReconciler(t *testing.T, k8sClient client.Client, scheme *runtime
 // v - ingress has already an allowed list it is overwritten
 func TestReconcileGateway(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	globalCidrs := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "globalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet",
 			"ipam.adevinta.com/allowlist-group":         "localnet,dnssource",
 		}},
@@ -91,7 +91,7 @@ func TestReconcileGateway(t *testing.T) {
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -132,16 +132,16 @@ func TestReconcileGateway(t *testing.T) {
 
 func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
 	globalNet := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "globalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "globalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	anotherGlobalNet := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "anotherglobalnet"},
+		ObjectMeta: metav1.ObjectMeta{Name: "anotherglobalnet"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"15.13.12.0/24"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "globalnet,anotherglobalnet",
 		}},
 		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
@@ -149,7 +149,7 @@ func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, globalNet, anotherGlobalNet, gwClass).Build()
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -191,7 +191,7 @@ func TestReconcileGatewayWithClusterCIDR(t *testing.T) {
 
 func TestReconcileGatewayNoAnnotations(t *testing.T) {
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test"},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test"},
 	}
 
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
@@ -212,20 +212,20 @@ func TestReconcileGatewayNoAnnotations(t *testing.T) {
 
 func TestReconcileGatewayPartialNotFound(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,notexisting"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,notexisting"}},
 		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -264,23 +264,23 @@ func TestReconcileGatewayPartialNotFound(t *testing.T) {
 
 func TestReconcileGatewayWithInvalidCIDRIpsNoError(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0/16", "172.16.0.0/12", "10.0.0.0/8", "10.0.0.0"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
 		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -325,13 +325,13 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 	t.Run("Namespace CIDR not found", func(t *testing.T) {
 		gwClass := newGatewayClass("istio")
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "notexisting,alsonotexisting"}},
 			Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, gwClass).Build()
 		reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 		expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "mynamespace",
 				// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 				ResourceVersion: "999",
@@ -368,7 +368,7 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 		assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
 		events := &corev1.EventList{}
-		k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"})
+		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
 
 		expectedEvents := &corev1.EventList{
 			Items: []corev1.Event{
@@ -389,13 +389,13 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 	t.Run("Cluster CIDR not found", func(t *testing.T) {
 		gwClass := newGatewayClass("istio")
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "notexisting,alsonotexisting"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "notexisting,alsonotexisting"}},
 			Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway, gwClass).Build()
 		reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 		expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-			ObjectMeta: v1.ObjectMeta{
+			ObjectMeta: metav1.ObjectMeta{
 				Namespace: "mynamespace",
 				// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 				ResourceVersion: "999",
@@ -432,7 +432,7 @@ func TestReconcileGatewayCIDRsNotFound(t *testing.T) {
 		assert.Equal(t, expectedPolicy.Spec.Action, generatedAuthorizationPolicy.Spec.Action)
 
 		events := &corev1.EventList{}
-		k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"})
+		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
 
 		expectedEvents := &corev1.EventList{
 			Items: []corev1.Event{
@@ -464,23 +464,23 @@ func TestReconcileGatewayError(t *testing.T) {
 
 func TestReconcileGatewayInvalidAnnotationFormat(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16", "172.16.0.0/12", "10.0.0.0/8"}},
 	}
 	dnssourceCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.1.1.1/32", "8.8.8.8/32"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnssource"}},
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet, dnssource"}},
 		Spec:       gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
 	}
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, dnssourceCidrs, gateway, gwClass).Build()
 
 	reconciler := newGatewayReconciler(t, k8sClient, extendedScheme)
 	expectedPolicy := istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: v1.ObjectMeta{
+		ObjectMeta: metav1.ObjectMeta{
 			Namespace: "mynamespace",
 			// https://github.com/kubernetes-sigs/controller-runtime/blob/master/pkg/client/fake/client.go#L196
 			ResourceVersion: "999",
@@ -520,11 +520,11 @@ func TestReconcileGatewayInvalidAnnotationFormat(t *testing.T) {
 func TestCidrToGatewayMapper(t *testing.T) {
 	t.Run("CIDR is being used in the ingress, should return the ingress", func(t *testing.T) {
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet,dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		requests := newGatewaysFromCIDRFuncMap(k8sClient, "ipam.adevinta.com/allowlist-group")(context.Background(), &cidr)
 		assert.Len(t, requests, 1)
@@ -533,11 +533,11 @@ func TestCidrToGatewayMapper(t *testing.T) {
 
 	t.Run("CIDR is not being used in the ingress, should return an empty list", func(t *testing.T) {
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newGatewaysFromCIDRFuncMap(k8sClient, cidrResolver.Annotation())(context.Background(), &cidr)
@@ -545,14 +545,14 @@ func TestCidrToGatewayMapper(t *testing.T) {
 	})
 	t.Run("One CIDR is being used in the ingress, should return just that one", func(t *testing.T) {
 		gateway1 := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace"},
 		}
 		gateway2 := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test2", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test2", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway1, gateway2).Build()
 		cidr := ipamv1alpha1.CIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "dnssource", Namespace: "mynamespace"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newGatewaysFromCIDRFuncMap(k8sClient, cidrResolver.Annotation())(context.Background(), &cidr)
@@ -564,11 +564,11 @@ func TestCidrToGatewayMapper(t *testing.T) {
 func TestClusterCidrToGatewayMapper(t *testing.T) {
 	t.Run("ClusterCIDR is being used in the ingress, should return the ingress", func(t *testing.T) {
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "localnet,dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "localnet,dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 		cidr := ipamv1alpha1.ClusterCIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newGatewaysFromCIDRFuncMap(k8sClient, cidrResolver.ClusterAnnotation())(context.Background(), &cidr)
@@ -578,11 +578,11 @@ func TestClusterCidrToGatewayMapper(t *testing.T) {
 
 	t.Run("ClusterCIDR is not being used in the ingress, should return an empty list", func(t *testing.T) {
 		gateway := &gatewayApiv1.Gateway{
-			ObjectMeta: v1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "dnssource"}},
+			ObjectMeta: metav1.ObjectMeta{Name: "test", Namespace: "mynamespace", Annotations: map[string]string{"ipam.adevinta.com/cluster-allowlist-group": "dnssource"}},
 		}
 		k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(gateway).Build()
 		cidr := ipamv1alpha1.ClusterCIDRs{
-			ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+			ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		}
 		cidrResolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
 		requests := newGatewaysFromCIDRFuncMap(k8sClient, cidrResolver.ClusterAnnotation())(context.Background(), &cidr)
@@ -594,12 +594,12 @@ func TestClusterCidrToGatewayMapper(t *testing.T) {
 // annotation from a Gateway triggers deletion of its AuthorizationPolicy.
 func TestGatewayAnnotationRemovalDeletesAP(t *testing.T) {
 	cidr := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "ns"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "ns"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "ns", Name: "my-gw", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "ns", Name: "my-gw", Annotations: map[string]string{
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
@@ -629,16 +629,16 @@ func TestGatewayAnnotationRemovalDeletesAP(t *testing.T) {
 func TestReconcileGatewayDuplicateCIDRsAcrossGroups(t *testing.T) {
 	sharedCIDR := "10.0.0.0/8"
 	staticAkamai := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "static-akamai"},
+		ObjectMeta: metav1.ObjectMeta{Name: "static-akamai"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{sharedCIDR, "1.2.3.0/24"}},
 	}
 	dynamicAkamai := &ipamv1alpha1.ClusterCIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "dynamic-akamai"},
+		ObjectMeta: metav1.ObjectMeta{Name: "dynamic-akamai"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{sharedCIDR, "5.6.7.0/24"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/cluster-allowlist-group": "static-akamai,dynamic-akamai",
 		}},
 		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},
@@ -662,12 +662,12 @@ func TestReconcileGatewayDuplicateCIDRsAcrossGroups(t *testing.T) {
 // the gateway controller still cleans up the AuthorizationPolicy rather than leaving it orphaned.
 func TestReconcileGatewayClassDeletedCleansUpAP(t *testing.T) {
 	localnetCidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"10.0.0.0/8"}},
 	}
 	gwClass := newGatewayClass("istio")
 	gateway := &gatewayApiv1.Gateway{
-		ObjectMeta: v1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
+		ObjectMeta: metav1.ObjectMeta{Namespace: "mynamespace", Name: "test", Annotations: map[string]string{
 			"ipam.adevinta.com/allowlist-group": "localnet",
 		}},
 		Spec: gatewayApiv1.GatewaySpec{GatewayClassName: "istio"},

@@ -492,7 +492,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if err != nil {
 		return 0, err
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
 		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}

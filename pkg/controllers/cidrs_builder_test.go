@@ -56,53 +56,6 @@ func (b *cidrBuilder) withNamespace(namespace string) *cidrBuilder {
 	return b
 }
 
-func (b *cidrBuilder) withSpec(spec ipamv1alpha1.CIDRsSpec) *cidrBuilder {
-	b.spec = spec
-	return b
-}
-
-func (b *cidrBuilder) withStatus(status ipamv1alpha1.CIDRsStatus) *cidrBuilder {
-	b.status = &status
-	return b
-}
-
-func (b *cidrBuilder) withCIDRs(cidrs []string) *cidrBuilder {
-	b.spec.CIDRsSource.CIDRs = cidrs
-	return b
-}
-
-func (b *cidrBuilder) withoutCIDRs() *cidrBuilder {
-	b.spec.CIDRsSource.CIDRs = nil
-	return b
-}
-
-func (b *cidrBuilder) withState(state ipamv1alpha1.CIDRsState) *cidrBuilder {
-	if b.status == nil {
-		b.status = &ipamv1alpha1.CIDRsStatus{}
-	}
-	b.status.State = state
-	switch state {
-	case ipamv1alpha1.CIDRsStateUpdateFailed:
-		b.status.UpsertCondition(ipamv1alpha1.Condition{
-			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
-			Status:  v1.ConditionFalse,
-			Message: "Faked because of state failed for test purposed",
-		})
-	case ipamv1alpha1.CIDRsStateReady:
-		b.status.UpsertCondition(ipamv1alpha1.Condition{
-			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
-			Status:  v1.ConditionTrue,
-			Message: "Faked because of state ready for test purposed",
-		})
-	}
-	return b
-}
-
-func (b *cidrBuilder) withFetchURL(url string) *cidrBuilder {
-	b.spec.CIDRsSource.Location.URI = url
-	return b
-}
-
 func (b *cidrBuilder) withSecretRef(secretRef ipamv1alpha1.ObjectRef) *cidrBuilder {
 	b.spec.CIDRsSource.Location.HeadersFrom = append(b.spec.CIDRsSource.Location.HeadersFrom, ipamv1alpha1.HeadersFrom{SecretRef: secretRef})
 	return b

@@ -43,7 +43,7 @@ func testCIDRsStatusIsUpdated(ctx context.Context, t *testing.T, k8sClient clien
 	t.Helper()
 	require.NoError(t, k8sClient.Create(ctx, cidr))
 	t.Cleanup(func() {
-		k8sClient.Delete(ctx, cidr)
+		_ = k8sClient.Delete(ctx, cidr) // best effort: the kind cluster is deleted anyway
 	})
 	assert.Eventually(t, func() bool {
 		err := k8sClient.Get(ctx, client.ObjectKeyFromObject(cidr), cidr)

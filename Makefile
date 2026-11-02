@@ -61,6 +61,12 @@ fmt:
 vet:
 	go vet ./...
 
+# Run golangci-lint (checks in .golangci.yml), the same version as the CI
+GOLANGCI_LINT = go run github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.15.0
+lint:
+	$(GOLANGCI_LINT) run --timeout 10m ./...
+	$(GOLANGCI_LINT) run --timeout 10m --build-tags functional ./test/functional/
+
 # Generate code
 generate: controller-gen
 	$(CONTROLLER_GEN) object:headerFile="${PWD}/hack/boilerplate.go.txt" paths="./..."
@@ -92,4 +98,4 @@ functional-clean:
 controller-gen:
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4
 
-.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet generate docker-build docker-push controller-gen functional functional-clean
+.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet lint generate docker-build docker-push controller-gen functional functional-clean

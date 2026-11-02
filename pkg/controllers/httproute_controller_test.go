@@ -386,7 +386,7 @@ func TestReconcileHTTPRouteAllCIDRsNotFound(t *testing.T) {
 	assert.ElementsMatch(t, []string{"127.0.0.2/32"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
 	events := &corev1.EventList{}
-	k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"})
+	require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
 	assert.NotEmpty(t, events.Items)
 	assert.Equal(t, "LookupAllowListingGroup", events.Items[0].Action)
 }

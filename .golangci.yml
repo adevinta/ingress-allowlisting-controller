@@ -1,0 +1,27 @@
+# golangci-lint v2. CI runs it on every PR (test.yaml), with the version pinned there.
+version: "2"
+
+linters:
+  # errcheck, govet, ineffassign, staticcheck, unused
+  default: standard
+  settings:
+    errcheck:
+      # Printing text (help output, the functional tests' plan): a failed write is not worth
+      # handling.
+      exclude-functions:
+        - fmt.Fprint
+        - fmt.Fprintf
+        - fmt.Fprintln
+    staticcheck:
+      checks:
+        # staticcheck's defaults ...
+        - all
+        - -ST1000
+        - -ST1003
+        - -ST1016
+        - -ST1020
+        - -ST1021
+        - -ST1022
+        # ... and not QF1008 ("could remove embedded field from selector"): the full path, as in
+        # spec.CIDRsSource.Location.URI, says where a field comes from.
+        - -QF1008
