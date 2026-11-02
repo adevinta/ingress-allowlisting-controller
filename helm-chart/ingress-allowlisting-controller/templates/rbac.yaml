@@ -5,19 +5,17 @@ apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
   name: {{ .Release.Name }}
+# Exactly what the controller uses (the RBAC preflight checks the same list at startup; a test
+# keeps both in line).
 rules:
-- apiGroups: 
-  - "ipam.adevinta.com"
-  resources:
-  - "cidrs"
-  - "clustercidrs"
-  - "cidrs/status"
-  - "clustercidrs/status"
-  verbs: ["get", "list", "watch", "create", "update", "patch"]
+# It reads CIDRs and ClusterCIDRs and writes only their status.
+- apiGroups: ["ipam.adevinta.com"]
+  resources: ["cidrs", "clustercidrs"]
+  verbs: ["get", "list", "watch"]
+- apiGroups: ["ipam.adevinta.com"]
+  resources: ["cidrs/status", "clustercidrs/status"]
+  verbs: ["update"]
 {{- if .Values.ingress.enabled }}
-- apiGroups: ["extensions"]
-  resources: ["ingresses"]
-  verbs: ["list", "get", "update", "watch"]
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingresses"]
   verbs: ["list", "get", "update", "watch"]
@@ -47,13 +45,13 @@ rules:
   verbs: ["list","get", "watch"]
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
-  verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
+  verbs: ["list", "get", "watch", "create", "update", "delete"]
 {{- end }}
 {{- if .Values.httproute.enabled }}
 # patch: the Traefik writer adds and removes its Middleware filter on the route with a patch.
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["httproutes"]
-  verbs: ["list", "get", "watch", "update", "patch"]
+  verbs: ["list", "get", "watch", "patch"]
 - apiGroups: ["gateway.networking.k8s.io"]
   resources: ["gateways", "gatewayclasses"]
   verbs: ["list", "get", "watch"]
@@ -63,7 +61,7 @@ rules:
   verbs: ["get"]
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
-  verbs: ["list", "get", "watch", "create", "update", "delete", "patch"]
+  verbs: ["list", "get", "watch", "create", "update", "delete"]
 - apiGroups: ["traefik.io"]
   resources: ["middlewares"]
   verbs: ["list", "get", "watch", "create", "update", "delete"]

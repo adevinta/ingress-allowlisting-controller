@@ -27,7 +27,7 @@ type NetworkPolicyReconciler struct {
 
 var ErrMultipleRulesNotSupported = errors.New("networkpolicy with multiple egress or ingress rules is not supported")
 
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=networkpolicies,verbs=get;list;watch;update
 
 func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("networkpolicy", req.NamespacedName)

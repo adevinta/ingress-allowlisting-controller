@@ -108,11 +108,10 @@ type CIDRReconciler struct {
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs;clustercidrs,verbs=get;list;watch
 
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs/status,verbs=get;list;watch;create;update;patch;delete
-// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=clustercidrs/status,verbs=get;list;watch;create;update;patch;delete
+// The controller writes only the status of CIDRs and ClusterCIDRs.
+// +kubebuilder:rbac:groups=ipam.adevinta.com,resources=cidrs/status;clustercidrs/status,verbs=update
 
 func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cidrs := r.CIDRs.DeepCopyCIDRs()

@@ -24,7 +24,7 @@ type ServiceReconciler struct {
 	CidrResolver resolvers.CidrResolver
 }
 
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update;patch
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("service", req.NamespacedName)
