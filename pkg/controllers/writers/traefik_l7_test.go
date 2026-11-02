@@ -291,3 +291,23 @@ func TestTraefikL7Writer_DoesNotImplementMerge(t *testing.T) {
 	_, ok := iface.(MergeableL7PolicyWriter)
 	assert.False(t, ok, "TraefikL7Writer must not implement MergeableL7PolicyWriter")
 }
+
+// TestIsTraefikFilter verifies which filters count as the controller's: exactly the one
+// traefikFilter builds, so adding and removing it always agree.
+func TestIsTraefikFilter(t *testing.T) {
+	assert.True(t, isTraefikFilter(traefikFilter("my-route"), "my-route"))
+
+	other := traefikFilter("other-route")
+	assert.False(t, isTraefikFilter(other, "my-route"), "another Middleware")
+
+	group := traefikFilter("my-route")
+	group.ExtensionRef.Group = "example.com"
+	assert.False(t, isTraefikFilter(group, "my-route"), "another group")
+
+	kind := traefikFilter("my-route")
+	kind.ExtensionRef.Kind = "TLSOption"
+	assert.False(t, isTraefikFilter(kind, "my-route"), "another kind")
+
+	assert.False(t, isTraefikFilter(gatewayApiv1.HTTPRouteFilter{Type: gatewayApiv1.HTTPRouteFilterExtensionRef}, "my-route"), "no extensionRef")
+	assert.False(t, isTraefikFilter(gatewayApiv1.HTTPRouteFilter{Type: gatewayApiv1.HTTPRouteFilterRequestHeaderModifier}, "my-route"), "another filter type")
+}
