@@ -7,8 +7,6 @@ import (
 	"net"
 	"strings"
 
-	"github.com/prometheus/client_golang/prometheus"
-
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/util"
@@ -134,9 +132,8 @@ func resolveName(ctx context.Context, namespace, name string, resolver cidrResol
 	return ips, false, nil
 }
 
-func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver cidrResolver, object client.Object, c client.Client, recorder events.EventRecorder, cache *ResolutionCache) ([]string, error) {
+func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver cidrResolver, object client.Object, c client.Client, recorder events.EventRecorder, cache *ResolutionCache, groups *[]groupResult) ([]string, error) {
 	log := log.DefaultLogger.WithContext(ctx)
-	kind := metricKind(c, object)
 	allowNames := strings.Split(annotationValue, ",")
 	var allowedIps []string
 	for _, group := range allowNames {
@@ -148,14 +145,9 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 			notFoundEvent(recorder, c, object, resolver.Kind(), trimmedName)
 		}
 
+		*groups = append(*groups, groupResult{kind: resolver.Kind(), name: trimmedName, missing: err != nil || notFound || len(ipList) == 0})
 		if err != nil {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
 			return nil, err
-		}
-		if notFound || len(ipList) == 0 {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(1.0)
-		} else {
-			cidrsNotFound.With(prometheus.Labels{"namespace": object.GetNamespace(), "object": kind, "name": object.GetName(), "cidrs_name": trimmedName}).Set(0.0)
 		}
 
 		for _, ip := range ipList {
@@ -248,7 +240,8 @@ func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object c
 	log := log.DefaultLogger.WithContext(ctx)
 	// The series are rebuilt from the current annotation: a group removed from it, or the whole
 	// annotation, takes its series with it.
-	ForgetObject(object.GetNamespace(), metricKind(r.Client, object), object.GetName())
+	kind := metricKind(r.Client, object)
+	ForgetObject(object.GetNamespace(), kind, object.GetName())
 	allowlistedGroups, okCidrAnnotation := object.GetAnnotations()[r.Annotation()]
 	allowlistedClusterGroups, okClusterCidrAnnotation := object.GetAnnotations()[r.ClusterAnnotation()]
 	if !okCidrAnnotation && !okClusterCidrAnnotation {
@@ -257,11 +250,14 @@ func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object c
 		log.Debug(object.GetObjectKind().GroupVersionKind().Kind, " does not have the allowlist group annotation, ignoring ", object.GetName(), "namespace", object.GetNamespace())
 		return []string{}, fmt.Errorf("%w: %q or %q", ErrAnnotationNotFound, r.Annotation(), r.ClusterAnnotation())
 	}
+	// Written once both annotations are resolved, also when one fails.
+	var groups []groupResult
+	defer func() { recordGroupMetrics(object.GetNamespace(), kind, object.GetName(), groups) }()
 	var allowedIps []string
 	var err error
 	if okCidrAnnotation {
 		namespacedCIDRResolver := &NamespacedCIDRResolver{Client: r.Client}
-		allowedIps, err = getIpsFromAnnotation(ctx, allowlistedGroups, namespacedCIDRResolver, object, r.Client, r.Recorder, cache)
+		allowedIps, err = getIpsFromAnnotation(ctx, allowlistedGroups, namespacedCIDRResolver, object, r.Client, r.Recorder, cache, &groups)
 		if err != nil {
 			return []string{}, err
 		}
@@ -269,7 +265,7 @@ func (r *CidrResolver) GetCidrsFromObjectWithCache(ctx context.Context, object c
 	var allowedClusterIps []string
 	if okClusterCidrAnnotation {
 		clusterCIDRResolver := &ClusterCIDRResolver{Client: r.Client}
-		allowedClusterIps, err = getIpsFromAnnotation(ctx, allowlistedClusterGroups, clusterCIDRResolver, object, r.Client, r.Recorder, cache)
+		allowedClusterIps, err = getIpsFromAnnotation(ctx, allowlistedClusterGroups, clusterCIDRResolver, object, r.Client, r.Recorder, cache, &groups)
 		if err != nil {
 			return []string{}, err
 		}
