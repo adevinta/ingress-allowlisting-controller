@@ -181,7 +181,7 @@ func main() {
 		WebhookServer:           webhook.NewServer(webhook.Options{Port: 9443}),
 		LeaderElection:          enableLeaderElection,
 		LeaderElectionNamespace: leaderElectionNamespace,
-		LeaderElectionID:        "c72663fe.github.com/adevinta/ingress-allowlisting-controller",
+		LeaderElectionID:        leaderElectionID,
 	}
 	byObject := map[client.Object]cache.ByObject{}
 	if httpRouteSupportEnabled && httpRouteLabelSelector != "" {
@@ -298,6 +298,11 @@ func warnIfNoDestination(f rbacFeatures) {
 	}
 	setupLog.Warn("no allowlist destination is enabled, the controller only reconciles CIDRs and ClusterCIDRs and watches no Ingress, Gateway, HTTPRoute, NetworkPolicy or Service. Enable the ones you need: --ingress-support-enabled, --gateway-support-enabled, --httproute-support-enabled, --networkpolicy-support-enabled, --service-support-enabled")
 }
+
+// leaderElectionID is the name of the Lease the replicas compete for with --enable-leader-election.
+// It must be a valid object name: the scaffolded "c72663fe.github.com/adevinta/..." contained '/',
+// which client-go refuses, so no replica could ever take the lease and none reconciled.
+const leaderElectionID = "c72663fe.ipam.adevinta.com"
 
 // inClusterNamespaceFile holds the pod's namespace (the ServiceAccount token mount).
 var inClusterNamespaceFile = "/var/run/secrets/kubernetes.io/serviceaccount/namespace"
