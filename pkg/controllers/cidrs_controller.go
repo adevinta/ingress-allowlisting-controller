@@ -2,6 +2,7 @@ package controllers
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"encoding/base64"
 	"encoding/csv"
@@ -680,36 +681,44 @@ func (r *CIDRReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) e
 	return build.Complete(r)
 }
 
+// getHTTPResponseBody returns the body to process. GitHub's Contents API wraps the file in a JSON
+// object, with the file in "content" (base64 or plain): that is unwrapped. Every other response,
+// from GitHub (e.g. /meta, list endpoints) or elsewhere, is returned unchanged. GitHub sends
+// x-github-media-type: github.v3 on all of them, so the header alone doesn't tell them apart.
 func getHTTPResponseBody(resp *http.Response) (io.Reader, error) {
-	if githubMediaTypeHeader := resp.Header.Get("x-github-media-type"); githubMediaTypeHeader != "" {
-		mediaType := strings.Split(githubMediaTypeHeader, ";")[0]
-		if mediaType == "github.v3" {
-			response := map[string]interface{}{}
-			err := json.NewDecoder(resp.Body).Decode(&response)
-			if err != nil {
-				return nil, fmt.Errorf("failed to decode github response: %w", err)
-			}
-			if content, ok := response["content"]; ok {
-				contentString, ok := content.(string)
-				if !ok {
-					return nil, fmt.Errorf("failed to decode github response, unexpected content type %T for message", content)
-				}
-				switch response["encoding"] {
-				case "base64":
-					decoded, err := base64.StdEncoding.DecodeString(contentString)
-					if err != nil {
-						return nil, fmt.Errorf("failed to decode base64 content: %w", err)
-					}
-					return strings.NewReader(string(decoded)), nil
-				case "", nil:
-					return strings.NewReader(contentString), nil
-				default:
-					return nil, errors.New("unexpected encoding")
-				}
-			}
-		}
+	mediaType := strings.TrimSpace(strings.Split(resp.Header.Get("x-github-media-type"), ";")[0])
+	if mediaType != "github.v3" {
+		return resp.Body, nil
 	}
-	return resp.Body, nil
+	// The body is already capped (see addHTTPSource), so reading it into memory is bounded.
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return nil, err
+	}
+	var response map[string]interface{}
+	if err := json.Unmarshal(body, &response); err != nil {
+		return bytes.NewReader(body), nil // not a JSON object (e.g. a list): nothing to unwrap
+	}
+	content, ok := response["content"]
+	if !ok {
+		return bytes.NewReader(body), nil
+	}
+	contentString, ok := content.(string)
+	if !ok {
+		return nil, fmt.Errorf("failed to decode github response, unexpected content type %T for message", content)
+	}
+	switch response["encoding"] {
+	case "base64":
+		decoded, err := base64.StdEncoding.DecodeString(contentString)
+		if err != nil {
+			return nil, fmt.Errorf("failed to decode base64 content: %w", err)
+		}
+		return bytes.NewReader(decoded), nil
+	case "", nil:
+		return strings.NewReader(contentString), nil
+	default:
+		return nil, errors.New("unexpected encoding")
+	}
 }
 
 func secretSource(headerFrom ipamv1alpha1.HeadersFrom) ipamv1alpha1.ObjectRef {

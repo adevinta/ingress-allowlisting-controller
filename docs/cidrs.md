@@ -102,8 +102,19 @@ spec:
     uri: https://api.github.com/repos/my-org/my-repo/contents/path/to/cidrs.json
 ```
 
-The GitHub Contents API returns a JSON object; use a CEL expression to decode and extract the
-list if needed.
+The GitHub Contents API wraps the file in a JSON object (base64 in `content`); the controller
+unwraps it, so CEL or JSONPath see the file itself.
+
+Other GitHub API responses are processed as they are, e.g. GitHub's own IP ranges from
+[`/meta`](https://docs.github.com/en/rest/meta/meta), here its webhook senders:
+
+```yaml
+spec:
+  requeueAfter: 1h
+  location:
+    uri: https://api.github.com/meta
+    cel: data.hooks
+```
 
 ### Breadth limit on remote sources
 

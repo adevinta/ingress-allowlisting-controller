@@ -1373,3 +1373,56 @@ func TestRequeueAfterMinimum(t *testing.T) {
 	result, _ = reconcileWith(t, &metav1.Duration{Duration: time.Millisecond})
 	assert.Equal(t, time.Minute, result.RequeueAfter, "a failed fetch is retried at the minimum too, not every millisecond")
 }
+
+// TestCIDRsReconcileFromGitHubResponsesWithoutContent verifies that api.github.com responses other
+// than the Contents API are processed as they are. GitHub sends x-github-media-type: github.v3 on
+// every response, so /meta (GitHub's own IP ranges, an object without "content") and list
+// endpoints (arrays) used to fail: the body was consumed while looking for "content".
+func TestCIDRsReconcileFromGitHubResponsesWithoutContent(t *testing.T) {
+	cases := []struct {
+		name, body, cel string
+		want            []string
+	}{
+		{
+			name: "object without content, like /meta",
+			body: `{"verifiable_password_authentication":false,"hooks":["192.30.252.0/22","185.199.108.0/22"],"actions":["4.148.0.0/16"]}`,
+			cel:  `data.hooks`,
+			want: []string{"185.199.108.0/22", "192.30.252.0/22"},
+		},
+		{
+			name: "array",
+			body: `[{"cidr":"10.1.0.0/16"},{"cidr":"10.2.0.0/16"}]`,
+			cel:  `data.map(e, e.cidr)`,
+			want: []string{"10.1.0.0/16", "10.2.0.0/16"},
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				w.Header().Set("x-github-media-type", "github.v3; format=json")
+				_, _ = w.Write([]byte(tc.body))
+			}))
+			t.Cleanup(server.Close)
+
+			cidrs := reconcileFromServer(t, server.URL, ipamv1alpha1.Processing{CEL: tc.cel}, CIDRSourceOptions{})
+
+			require.Len(t, cidrs.Status.Conditions, 1)
+			assert.Equal(t, "All CIDRs are up to date", cidrs.Status.Conditions[0].Message)
+			assert.Equal(t, tc.want, cidrs.Status.CIDRs)
+		})
+	}
+}
+
+// TestGitHubResponseKeepsTheSizeCap verifies that a GitHub response, now read in one piece to look
+// for "content", is still refused when it exceeds the response size cap.
+func TestGitHubResponseKeepsTheSizeCap(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("x-github-media-type", "github.v3; format=json")
+		_, _ = w.Write([]byte(`{"hooks":["192.30.252.0/22","185.199.108.0/22","140.82.112.0/20"]}`))
+	}))
+	t.Cleanup(server.Close)
+
+	cidrs := reconcileFromServer(t, server.URL, ipamv1alpha1.Processing{CEL: `data.hooks`}, CIDRSourceOptions{MaxResponseBytes: 20})
+
+	requireFailedKeepingLastGood(t, cidrs, "response body too large")
+}
