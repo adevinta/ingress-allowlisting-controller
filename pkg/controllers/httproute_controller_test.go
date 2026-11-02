@@ -20,7 +20,6 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
@@ -72,7 +71,7 @@ func newTestGatewayWithListeners(name, namespace, className string, listeners ..
 
 func newHTTPRouteReconciler(t *testing.T, k8sClient client.Client, scheme *runtime.Scheme) *HTTPRouteAllowlistingReconciler {
 	t.Helper()
-	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	resolver := newTestCidrResolver(k8sClient)
 	l7Writers := writers.L7WriterRegistry{
 		writers.IstioControllerName: writers.NewIstioL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
 	}
@@ -160,9 +159,7 @@ func TestReconcileHTTPRoute(t *testing.T) {
 	assert.Equal(t, "mynamespace", generatedPolicy.Labels["ipam.adevinta.com/owner-namespace"])
 	assert.Equal(t, "test", generatedPolicy.Labels["ipam.adevinta.com/owner-name"])
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 // TestReconcileHTTPRouteNoHostnames verifies that an HTTPRoute without hostnames gets no Istio AP,
@@ -385,10 +382,9 @@ func TestReconcileHTTPRouteAllCIDRsNotFound(t *testing.T) {
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []string{"127.0.0.2/32"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
-	events := &corev1.EventList{}
-	require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.NotEmpty(t, events.Items)
-	assert.Equal(t, "LookupAllowListingGroup", events.Items[0].Action)
+	events := recordedEvents(t, reconciler.CidrResolver)
+	require.NotEmpty(t, events, "a missing CIDRs object must be reported with an Event")
+	assert.Contains(t, events[0], "Warning AllowlistGroupNotFound")
 }
 
 func TestReconcileHTTPRouteTargetRefs(t *testing.T) {

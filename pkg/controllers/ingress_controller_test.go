@@ -12,7 +12,6 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	corev1 "k8s.io/api/core/v1"
 	netv1 "k8s.io/api/networking/v1"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
@@ -24,7 +23,7 @@ var extendedScheme = runtime.NewScheme()
 
 func newIngressReconciler(t *testing.T, k8sClient client.Client) *IngressReconciler {
 	t.Helper()
-	resolver := resolvers.CidrResolver{Client: k8sClient, AnnotationPrefix: resolvers.DefaultPrefix}
+	resolver := newTestCidrResolver(k8sClient)
 	return &IngressReconciler{Client: k8sClient, CidrResolver: resolver}
 }
 
@@ -82,9 +81,7 @@ func TestReconcileIngress(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileIngressWithClusterCIDR(t *testing.T) {
@@ -121,9 +118,7 @@ func TestReconcileIngressWithClusterCIDR(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileIngressNoAnnotations(t *testing.T) {
@@ -137,9 +132,7 @@ func TestReconcileIngressNoAnnotations(t *testing.T) {
 	_, err := reconciler.reconcileIngress(context.Background(), *ingress)
 	assert.ErrorIs(t, err, resolvers.ErrAnnotationNotFound)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileIngressPartialNotFound(t *testing.T) {
@@ -205,9 +198,7 @@ func TestReconcileIngressWithInvalidCIDRIpsNoError(t *testing.T) {
 	assert.NoError(t, err)
 	assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
-	events := &corev1.EventList{}
-	assert.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-	assert.Empty(t, events.Items)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver))
 }
 
 func TestReconcileIngressCIDRsNotFound(t *testing.T) {
@@ -236,23 +227,9 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
-		events := &corev1.EventList{}
-		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-
-		expectedEvents := &corev1.EventList{
-			Items: []corev1.Event{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: "mynamespace",
-						Name:      "ingresstest-allowlist-cidrs-not-found",
-					},
-					Action: "LookupAllowListingGroup",
-				},
-			},
-		}
-
-		assert.NotEmpty(t, events.Items)
-		assert.Equal(t, events.Items[0].Action, expectedEvents.Items[0].Action)
+		events := recordedEvents(t, reconciler.CidrResolver)
+		require.NotEmpty(t, events, "a missing CIDRs object must be reported with an Event")
+		assert.Contains(t, events[0], "Warning AllowlistGroupNotFound")
 	})
 
 	t.Run("Cluster CIDR not found", func(t *testing.T) {
@@ -281,23 +258,9 @@ func TestReconcileIngressCIDRsNotFound(t *testing.T) {
 		assert.NoError(t, err)
 		assert.Equal(t, expectedIngress.ObjectMeta, result.ObjectMeta)
 
-		events := &corev1.EventList{}
-		require.NoError(t, k8sClient.List(context.Background(), events, &client.ListOptions{Namespace: "mynamespace"}))
-
-		expectedEvents := &corev1.EventList{
-			Items: []corev1.Event{
-				{
-					ObjectMeta: metav1.ObjectMeta{
-						Namespace: "mynamespace",
-						Name:      "ingresstest-allowlist-cidrs-not-found",
-					},
-					Action: "LookupAllowListingGroup",
-				},
-			},
-		}
-
-		assert.Len(t, events.Items, 2)
-		assert.Equal(t, events.Items[0].Action, expectedEvents.Items[0].Action)
+		events := recordedEvents(t, reconciler.CidrResolver)
+		require.NotEmpty(t, events, "a missing CIDRs object must be reported with an Event")
+		assert.Contains(t, events[0], "Warning AllowlistGroupNotFound")
 	})
 }
 

@@ -32,9 +32,10 @@ rules:
   resources: ["services"]
   verbs: ["list", "get", "update", "watch"]
 {{- end }}
-- apiGroups: [""]
+# Events for missing CIDRs objects (events.k8s.io/v1, written by an event recorder: no reads).
+- apiGroups: ["events.k8s.io"]
   resources: ["events"]
-  verbs: ["list","get", "update", "create", "watch"]
+  verbs: ["create", "patch"]
 {{- if .Values.httpHeadersEnabled }}
 - apiGroups: [""]
   resources: ["secrets", "configmaps"]
