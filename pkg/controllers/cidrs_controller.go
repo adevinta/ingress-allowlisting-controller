@@ -23,6 +23,7 @@ import (
 	"github.com/google/cel-go/common/types/traits"
 	"gopkg.in/yaml.v3"
 	v1 "k8s.io/api/core/v1"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/client-go/util/jsonpath"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -95,6 +96,7 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	specs := cidrs.GetSpec()
 
 	status.CIDRs = specs.CIDRsSource.CIDRs
+	requeue, raised := effectiveRequeueAfter(specs.RequeueAfter)
 
 	dropped, fetchErr := r.addHTTPSource(ctx, cidrs, &status)
 	// retry is set when a remote source did not produce a usable list, so it is fetched again soon
@@ -117,6 +119,9 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			// A count, never the values: a misconfigured CEL expression stays visible without
 			// echoing the response.
 			message = fmt.Sprintf("%s (%d invalid entries ignored)", message, dropped)
+		}
+		if raised {
+			message = fmt.Sprintf("%s (requeueAfter %s is below the minimum, refetched every %s)", message, specs.RequeueAfter.Duration, minRequeueAfter)
 		}
 		status.UpsertCondition(ipamv1alpha1.Condition{
 			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
@@ -163,17 +168,35 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		// it on a fixed interval: quick enough to recover from a short outage, slow enough not to
 		// hammer a broken feed. A shorter spec.requeueAfter wins.
 		after := r.SourceOptions.withDefaults().RetryInterval
-		if specs.RequeueAfter != nil && specs.RequeueAfter.Duration > 0 && specs.RequeueAfter.Duration < after {
-			after = specs.RequeueAfter.Duration
+		if requeue > 0 && requeue < after {
+			after = requeue
 		}
 		return ctrl.Result{RequeueAfter: after}, nil
 	}
 
-	if specs.RequeueAfter != nil && specs.RequeueAfter.Duration > 0 {
-		return ctrl.Result{RequeueAfter: specs.RequeueAfter.Duration}, nil
+	if requeue > 0 {
+		return ctrl.Result{RequeueAfter: requeue}, nil
 	}
 
 	return ctrl.Result{}, nil
+}
+
+// minRequeueAfter is the shortest spec.requeueAfter the controller honours. One worker fetches
+// every remote source of a kind in turn, so an object asking for, say, 1ms would refetch its
+// source (up to 5 MiB) nonstop and delay every other object's update. The CRD refuses smaller
+// values too; this also covers objects created before that check, or with it not enforced.
+const minRequeueAfter = time.Minute
+
+// effectiveRequeueAfter returns how soon an object is reconciled again: spec.requeueAfter, raised
+// to minRequeueAfter, or 0 when it is unset. raised says the value was raised.
+func effectiveRequeueAfter(requeueAfter *metav1.Duration) (after time.Duration, raised bool) {
+	if requeueAfter == nil || requeueAfter.Duration <= 0 {
+		return 0, false
+	}
+	if requeueAfter.Duration < minRequeueAfter {
+		return minRequeueAfter, true
+	}
+	return requeueAfter.Duration, false
 }
 
 func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {

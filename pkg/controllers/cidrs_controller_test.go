@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/stretchr/testify/assert"
@@ -1317,4 +1318,58 @@ func TestCIDRsStateFollowsTheLastReconcile(t *testing.T) {
 
 	got = reconcileAndGet(t, inline)
 	assert.Equal(t, ipamv1alpha1.CIDRsStateReady, got.Status.State, "an object that never failed is Ready")
+}
+
+// TestRequeueAfterMinimum verifies that spec.requeueAfter below one minute is raised to it, on a
+// successful fetch and when retrying a failed one, and that the condition says so: a tiny value
+// would otherwise make the single worker refetch that source nonstop.
+func TestRequeueAfterMinimum(t *testing.T) {
+	ctx := context.TODO()
+	scheme, err := Scheme()
+	require.NoError(t, err)
+	failing := false
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if failing {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("- 10.1.0.0/16\n"))
+	}))
+	t.Cleanup(server.Close)
+
+	reconcileWith := func(t *testing.T, requeueAfter *metav1.Duration) (reconcile.Result, *ipamv1alpha1.CIDRs) {
+		t.Helper()
+		obj := &ipamv1alpha1.CIDRs{
+			ObjectMeta: metav1.ObjectMeta{Name: "feed", Namespace: "mynamespace"},
+			Spec: ipamv1alpha1.CIDRsSpec{RequeueAfter: requeueAfter, CIDRsSource: ipamv1alpha1.CIDRsSource{
+				Location: ipamv1alpha1.CIDRsLocation{URI: server.URL},
+			}},
+		}
+		c := fake.NewClientBuilder().WithScheme(scheme).WithObjects(obj).WithStatusSubresource(obj).Build()
+		reconciler := &CIDRReconciler{
+			CIDRs: &ipamv1alpha1.CIDRs{}, CIDRsList: &ipamv1alpha1.CIDRsList{}, Client: c,
+			SourceOptions: CIDRSourceOptions{AllowPrivateDestinations: true}, // the feed is on 127.0.0.1
+		}
+		result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(obj)})
+		require.NoError(t, err)
+		got := &ipamv1alpha1.CIDRs{}
+		require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), got))
+		require.Len(t, got.Status.Conditions, 1)
+		return result, got
+	}
+
+	result, got := reconcileWith(t, &metav1.Duration{Duration: time.Millisecond})
+	assert.Equal(t, time.Minute, result.RequeueAfter, "1ms is raised to the minimum")
+	assert.Equal(t, "All CIDRs are up to date (requeueAfter 1ms is below the minimum, refetched every 1m0s)", got.Status.Conditions[0].Message)
+
+	result, got = reconcileWith(t, &metav1.Duration{Duration: 15 * time.Minute})
+	assert.Equal(t, 15*time.Minute, result.RequeueAfter)
+	assert.Equal(t, "All CIDRs are up to date", got.Status.Conditions[0].Message)
+
+	result, _ = reconcileWith(t, nil)
+	assert.Zero(t, result.RequeueAfter, "unset: no periodic refetch")
+
+	failing = true
+	result, _ = reconcileWith(t, &metav1.Duration{Duration: time.Millisecond})
+	assert.Equal(t, time.Minute, result.RequeueAfter, "a failed fetch is retried at the minimum too, not every millisecond")
 }

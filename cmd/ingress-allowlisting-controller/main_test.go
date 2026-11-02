@@ -22,6 +22,7 @@ import (
 	appsv1 "k8s.io/api/apps/v1"
 	v1 "k8s.io/api/core/v1"
 	networkingv1 "k8s.io/api/networking/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/e2e-framework/pkg/env"
@@ -201,6 +202,25 @@ func TestIngressAllowlistingController(t *testing.T) {
 	}, 5*time.Minute, 5*time.Second)
 
 	startMain(t, fmt.Sprintf("system:serviceaccount:%s:%s", allowListingNamespace, releaseName))
+
+	t.Run("The API server refuses a requeueAfter below one minute", func(t *testing.T) {
+		withRequeueAfter := func(name string, d time.Duration) *ipamv1alpha1.CIDRs {
+			return &ipamv1alpha1.CIDRs{
+				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: testNamespace},
+				Spec: ipamv1alpha1.CIDRsSpec{
+					RequeueAfter: &metav1.Duration{Duration: d},
+					CIDRsSource:  ipamv1alpha1.CIDRsSource{CIDRs: []string{"10.0.0.0/8"}},
+				},
+			}
+		}
+		err := k8sClient.Create(ctx, withRequeueAfter("requeue-too-short", time.Millisecond))
+		require.True(t, apierrors.IsInvalid(err), "want an Invalid error, got %v", err)
+		assert.Contains(t, err.Error(), "requeueAfter must be at least 1m")
+
+		allowed := withRequeueAfter("requeue-fine", 15*time.Minute)
+		require.NoError(t, k8sClient.Create(ctx, allowed))
+		require.NoError(t, k8sClient.Delete(ctx, allowed))
+	})
 
 	t.Run("Local CIDRs should provide CIDRs in status", func(t *testing.T) {
 		testCIDRsStatusIsUpdated(

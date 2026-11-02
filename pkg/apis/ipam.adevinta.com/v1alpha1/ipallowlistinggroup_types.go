@@ -81,7 +81,10 @@ type CIDRsSpec struct {
 	// INSERT ADDITIONAL SPEC FIELDS - desired state of IpAllowlistingGroup
 	// Important: Run "make" to regenerate code after modifying this file
 
+	// RequeueAfter is how often a remote source is fetched again (e.g. 15m). At least 1m: one worker
+	// fetches every source in turn, so a shorter interval would delay every other object.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:XValidation:rule="duration(self) >= duration('1m')",message="requeueAfter must be at least 1m"
 	RequeueAfter *metav1.Duration `json:"requeueAfter,omitempty"`
 
 	CIDRsSource `json:",inline" yaml:",inline"`
