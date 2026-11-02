@@ -5,7 +5,7 @@ name: release pending main commit
 # "build images" for main when its HEAD has no release tag and no build is running for it.
 on:
   schedule:
-    - cron: "17 * * * *"
+    - cron: "30 7 * * *"
   workflow_dispatch:
 
 permissions:
