@@ -109,11 +109,12 @@ func TestCIDRsReconcileRemoteAllInvalidKeepsLastKnownGood(t *testing.T) {
 	assert.Equal(t, "Refusing to update removing all CIDRs", stored.Status.Conditions[0].Message)
 }
 
-// TestCIDRsReconcileInlineValues verifies that inline spec.cidrs are kept as typed: bare IPs become
-// host routes (IPv6 included), anything else is left alone.
+// TestCIDRsReconcileInlineValues verifies that inline spec.cidrs are kept as written, with bare IPs
+// as host routes (IPv6 included), and that invalid ones are left out and named in the condition:
+// they come from the object's own spec, unlike remote values, which are only counted.
 func TestCIDRsReconcileInlineValues(t *testing.T) {
 	stored := reconcileRemote(t, `["192.168.0.0/16"]`, []string{"10.0.0.5/8", "1.2.3.4", "2001:db8::1", "typo"}, ipamv1alpha1.CIDRsStatus{})
 
-	assert.Equal(t, []string{"1.2.3.4/32", "10.0.0.5/8", "192.168.0.0/16", "2001:db8::1/128", "typo"}, stored.Status.CIDRs)
-	assert.Equal(t, "All CIDRs are up to date", stored.Status.Conditions[0].Message, "inline values are not counted as dropped")
+	assert.Equal(t, []string{"1.2.3.4/32", "10.0.0.5/8", "192.168.0.0/16", "2001:db8::1/128"}, stored.Status.CIDRs)
+	assert.Equal(t, `All CIDRs are up to date (invalid entries in spec.cidrs ignored: "typo")`, stored.Status.Conditions[0].Message)
 }
