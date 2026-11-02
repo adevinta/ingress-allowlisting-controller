@@ -2448,3 +2448,22 @@ func TestManagedByLabel(t *testing.T) {
 	assert.Equal(t, "team-a-ingress-allowlisting-controller", managedByLabel("team-a"))
 	assert.Equal(t, managedByLabel("team-a"), (&HTTPRouteAllowlistingReconciler{Prefix: "team-a"}).managedByValue())
 }
+
+// TestOwnedTypesFollowTheWriters verifies that the controllers watch exactly the types their
+// writers create: a writer without a watch would leave a deleted or edited policy unrepaired, a
+// watch without a writer would watch a type nothing writes.
+func TestOwnedTypesFollowTheWriters(t *testing.T) {
+	ap, mw := &istiosecurityv1.AuthorizationPolicy{}, &writers.TraefikMiddleware{}
+
+	assert.Empty(t, l4OwnedTypes(writers.L4WriterRegistry{}), "no Istio: nothing to watch")
+	assert.Equal(t, []client.Object{ap}, l4OwnedTypes(writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil)}))
+
+	assert.Empty(t, l7OwnedTypes(writers.L7WriterRegistry{}))
+	assert.Equal(t, []client.Object{mw}, l7OwnedTypes(writers.L7WriterRegistry{
+		writers.TraefikControllerName: writers.NewTraefikL7Writer(nil, "m", resolvers.CidrResolver{}),
+	}))
+	assert.Equal(t, []client.Object{ap, mw}, l7OwnedTypes(writers.L7WriterRegistry{
+		writers.IstioControllerName:   writers.NewIstioL7Writer(nil, "m", resolvers.CidrResolver{}),
+		writers.TraefikControllerName: writers.NewTraefikL7Writer(nil, "m", resolvers.CidrResolver{}),
+	}))
+}

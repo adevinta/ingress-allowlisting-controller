@@ -566,6 +566,19 @@ func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
 	return hasLocal || hasCluster
 }
 
+// l7OwnedTypes are the types the HTTPRoute controller watches as its own: those of its writers,
+// see l4OwnedTypes.
+func l7OwnedTypes(l7 writers.L7WriterRegistry) []client.Object {
+	var owned []client.Object
+	if _, ok := l7[writers.IstioControllerName]; ok {
+		owned = append(owned, &istiosecurityv1.AuthorizationPolicy{})
+	}
+	if _, ok := l7[writers.TraefikControllerName]; ok {
+		owned = append(owned, &writers.TraefikMiddleware{})
+	}
+	return owned
+}
+
 func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	r.Prefix = namePrefix
 	r.APIReader = mgr.GetAPIReader()
@@ -591,11 +604,8 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 
 	build := ctrl.NewControllerManagedBy(mgr).
 		For(&gatewayApiv1.HTTPRoute{}, builder.WithPredicates(annotationPredicate))
-	if isCRDInstalled(mgr.GetRESTMapper(), "security.istio.io", "v1", "AuthorizationPolicy") {
-		build = build.Owns(&istiosecurityv1.AuthorizationPolicy{})
-	}
-	if isCRDInstalled(mgr.GetRESTMapper(), "traefik.io", "v1alpha1", "Middleware") {
-		build = build.Owns(&writers.TraefikMiddleware{})
+	for _, owned := range l7OwnedTypes(r.L7Writers) {
+		build = build.Owns(owned)
 	}
 	build = build.
 		Watches(
