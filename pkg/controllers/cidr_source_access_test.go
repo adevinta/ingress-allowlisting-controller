@@ -497,3 +497,31 @@ func TestCIDRSourceOptionsValidateAllowlist(t *testing.T) {
 	assert.False(t, CIDRSourceOptions{}.withDefaults().AllowPrivateDestinations)
 	assert.False(t, DefaultCIDRSourceOptions().AllowPrivateDestinations)
 }
+
+// TestRedactURI verifies that a source URI is shown as scheme, host and path only: credentials
+// can sit in the user info or the query (?token=), and logs and status are read by more people
+// than the object's spec.
+func TestRedactURI(t *testing.T) {
+	for in, want := range map[string]string{
+		"http://user:pa55w0rd@feeds.example.com/feed.json?token=SECRET&countries=DE": "http://feeds.example.com/feed.json",
+		"https://ip-ranges.amazonaws.com/ip-ranges.json":                             "https://ip-ranges.amazonaws.com/ip-ranges.json",
+		"https://feeds.example.com:8443/a/b#section":                                 "https://feeds.example.com:8443/a/b",
+		"https://api.github.com/meta?":                                               "https://api.github.com/meta",
+		"://not a url":                                                               "<invalid URI>",
+	} {
+		assert.Equal(t, want, redactURI(in), in)
+	}
+}
+
+// TestFetchErrorInConditionIsRedacted verifies that a failed fetch doesn't put the source's token
+// or password into the status condition: Go's error text contains the URL with its query.
+func TestFetchErrorInConditionIsRedacted(t *testing.T) {
+	cidrs := reconcileFromServer(t, "http://user:pa55w0rd@127.0.0.1:1/feed.json?token=SECRET-TOKEN", ipamv1alpha1.Processing{}, CIDRSourceOptions{})
+
+	require.Len(t, cidrs.Status.Conditions, 1)
+	msg := cidrs.Status.Conditions[0].Message
+	assert.Contains(t, msg, `"http://127.0.0.1:1/feed.json"`, "the redacted URL still says which source failed")
+	assert.NotContains(t, msg, "SECRET-TOKEN")
+	assert.NotContains(t, msg, "pa55w0rd")
+	assert.NotContains(t, msg, "user")
+}

@@ -264,6 +264,9 @@ Notes:
   applies to the connection to the proxy, so a proxy on a private address needs
   `--cidr-source-allow-private-destinations`; the allowlist is still checked against the request
   URL either way.
+- **The source URI in logs and status.** Log lines and the `UpToDate` condition show a source as
+  scheme, host and path only (`https://feeds.example.com/feed.json`), without user info, query or
+  fragment: credentials in the URL (`?token=...`, `user:password@`) stay in the object's spec.
 - **Custom headers on redirects.** Go drops only `Authorization` and `Cookie` when a redirect
   leaves the host. The controller also drops every header from `headersFrom` when a redirect
   leaves the origin of `uri` (scheme, host and port), so they never reach another host.
