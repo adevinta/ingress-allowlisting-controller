@@ -103,6 +103,16 @@ func gatewayOwnerName(obj client.Object) string {
 	return obj.GetLabels()[gatewayNameLabel]
 }
 
+// managedByLabel is the app.kubernetes.io/managed-by value on the objects the writers create, for
+// a controller instance with the given name prefix. The writers set it and the HTTPRoute
+// controller lists by it to find them again, so both must use this one function.
+func managedByLabel(namePrefix string) string {
+	if namePrefix != "" {
+		return namePrefix + "-ingress-allowlisting-controller"
+	}
+	return "ingress-allowlisting-controller"
+}
+
 // SetupOptions selects which controllers SetupControllersWithManager starts, and how they work.
 type SetupOptions struct {
 	// The kinds allowlists are written to, as the --<kind>-support-enabled flags.
@@ -160,10 +170,7 @@ func SetupControllersWithManager(mgr ctrl.Manager, opts SetupOptions) error {
 		return &setupError{error: err, controllerType: "ClusterCIDRs"}
 	}
 
-	managedBy := "ingress-allowlisting-controller"
-	if opts.NamePrefix != "" {
-		managedBy = opts.NamePrefix + "-ingress-allowlisting-controller"
-	}
+	managedBy := managedByLabel(opts.NamePrefix)
 
 	mapper := mgr.GetRESTMapper()
 	l4Writers, l7Writers := BuildWriterRegistries(mgr.GetClient(), mapper, managedBy, cidrResolver)

@@ -61,10 +61,7 @@ func (r *HTTPRouteAllowlistingReconciler) granularityAnnotation() string {
 }
 
 func (r *HTTPRouteAllowlistingReconciler) managedByValue() string {
-	if r.Prefix != "" {
-		return r.Prefix + "-ingress-allowlisting-controller"
-	}
-	return "ingress-allowlisting-controller"
+	return managedByLabel(r.Prefix)
 }
 
 func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {

@@ -2439,3 +2439,12 @@ func TestTraefikMiddlewareDeletedWhenParentRefRemoved(t *testing.T) {
 	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw)
 	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "Middleware must be deleted when parentRef is removed")
 }
+
+// TestManagedByLabel verifies the managed-by value the writers set and the HTTPRoute controller
+// lists by: one function, so they can't drift apart (the controller would no longer find, and so
+// no longer clean up, its own policies).
+func TestManagedByLabel(t *testing.T) {
+	assert.Equal(t, "ingress-allowlisting-controller", managedByLabel(""))
+	assert.Equal(t, "team-a-ingress-allowlisting-controller", managedByLabel("team-a"))
+	assert.Equal(t, managedByLabel("team-a"), (&HTTPRouteAllowlistingReconciler{Prefix: "team-a"}).managedByValue())
+}
