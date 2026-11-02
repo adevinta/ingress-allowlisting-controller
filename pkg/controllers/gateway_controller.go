@@ -90,11 +90,22 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	return ctrl.Result{}, nil
 }
 
+// l4OwnedTypes are the types the Gateway controller watches as its own, so it repairs a policy
+// someone deleted or changed: those of its writers. The writers exist only for the CRDs installed
+// (BuildWriterRegistries), so the CRDs are checked in one place and writers and watches always match.
+func l4OwnedTypes(l4 writers.L4WriterRegistry) []client.Object {
+	var owned []client.Object
+	if _, ok := l4[writers.IstioControllerName]; ok {
+		owned = append(owned, &istiosecurityv1.AuthorizationPolicy{})
+	}
+	return owned
+}
+
 func (r *GatewayAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, namePrefix string) error {
 	build := ctrl.NewControllerManagedBy(mgr).
 		For(&gatewayApiv1.Gateway{})
-	if isCRDInstalled(mgr.GetRESTMapper(), "security.istio.io", "v1", "AuthorizationPolicy") {
-		build = build.Owns(&istiosecurityv1.AuthorizationPolicy{})
+	for _, owned := range l4OwnedTypes(r.L4Writers) {
+		build = build.Owns(owned)
 	}
 	build = build.
 		Watches(
