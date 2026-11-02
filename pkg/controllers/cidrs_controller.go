@@ -240,20 +240,18 @@ func processCSV(reader io.Reader, processing ipamv1alpha1.Processing) ([]string,
 		return nil, fmt.Errorf("failed to read comma-separated values: %w", err)
 	}
 
-	var cidrs []string
+	// Every value goes on as it is: like the YAML path, normalizeExternalCIDRs turns bare IPs into
+	// host routes and counts what is neither a CIDR nor an IP.
+	cidrValues := []string{}
 	for _, records := range csvArray {
 		for _, record := range records {
-			if record != "" {
-				cidr := strings.TrimSpace(record)
-				_, _, err := net.ParseCIDR(cidr)
-				if err == nil {
-					cidrs = append(cidrs, cidr)
-				}
+			if v := strings.TrimSpace(record); v != "" {
+				cidrValues = append(cidrValues, v)
 			}
 		}
 	}
 
-	return cidrs, nil
+	return cidrValues, nil
 }
 
 // processYAMLFormat handles YAML processing with optional CEL expression or JSONPath
