@@ -169,7 +169,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		if mw, ok := writer.(writers.MergeableL7PolicyWriter); ok && mergeKey != "" {
 			// Even when this route isn't allowed: the merged AP is rewritten without it.
 			invokedWriters[controllerName] = struct{}{}
-			if err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey); err != nil {
+			if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey)); err != nil {
 				return ctrl.Result{}, err
 			}
 			continue
@@ -207,21 +207,21 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		switch granularity {
 		case "host":
 			// One policy per route, host-matched, no path restriction.
-			if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
+			if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil)); err != nil {
 				return ctrl.Result{}, err
 			}
 			log.Debugf("policy (host) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
 		default:
 			// granularity=rule (default): one policy per HTTPRoute rule.
 			for ruleIdx, paths := range rulePaths {
-				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, paths); err != nil {
+				if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, paths)); err != nil {
 					return ctrl.Result{}, err
 				}
 				log.Debugf("policy (rule) created/updated for HTTPRoute %s rule %d → gateway %s/%s", httproute.GetName(), ruleIdx, gateway.Namespace, gateway.Name)
 			}
 			// Fallback: HTTPRoute with no rules — single policy, no path restriction.
 			if len(rulePaths) == 0 {
-				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
+				if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil)); err != nil {
 					return ctrl.Result{}, err
 				}
 				log.Debugf("policy (rule/fallback) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)

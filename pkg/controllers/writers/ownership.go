@@ -1,6 +1,14 @@
 package writers
 
 import (
+	"context"
+	"errors"
+	"fmt"
+	"strings"
+
+	log "github.com/adevinta/go-log-toolkit"
+	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -74,6 +82,60 @@ func ownedBy(prefix, managedBy, ownerNamespace, ownerName string) []client.ListO
 		ownerNamespaceLabel(prefix): LabelSafe(ownerNamespace),
 		ownerNameLabel(prefix):      LabelSafe(ownerName),
 	}}
+}
+
+// ErrPolicyNotManaged is returned when the object a writer would write already exists and is not
+// ours (see isOurs): another instance's, or an admin's. The writer leaves it alone.
+var ErrPolicyNotManaged = errors.New("existing policy is not managed by this controller")
+
+// isOurs reports whether obj, found under the name a writer writes or deletes, is ours: our
+// ownership labels, with this kind and owner. A writer must not touch it otherwise: names are
+// predictable, so another instance, an admin or a tenant can have an object with the same name.
+//
+// legacyOwner is for the transition of Gateway policies, which had no labels before: one is ours
+// when it has no ownership labels of any instance and the Gateway with this UID as controller.
+func isOurs(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerName string, legacyOwner types.UID) bool {
+	labels := obj.GetLabels()
+	if labels[managedByLabel] == managedBy && ownerKind(obj, prefix) == kind &&
+		labels[ownerNamespaceLabel(prefix)] == LabelSafe(ownerNamespace) && labels[ownerNameLabel(prefix)] == LabelSafe(ownerName) {
+		return true
+	}
+	if legacyOwner == "" || hasOwnerLabels(obj) {
+		return false
+	}
+	owner := metav1.GetControllerOf(obj)
+	return owner != nil && owner.UID == legacyOwner
+}
+
+// hasOwnerLabels reports whether obj has the ownership labels of any instance, whatever its prefix.
+func hasOwnerLabels(obj client.Object) bool {
+	for key := range obj.GetLabels() {
+		if strings.HasSuffix(key, "/owner-name") {
+			return true
+		}
+	}
+	return false
+}
+
+// notOurs is the error for an object that is not ours, for the Warning Event and the log.
+func notOurs(kind string, obj client.Object, owner string) error {
+	return fmt.Errorf("%w: %s %s/%s already exists and doesn't belong to %s, left as it is",
+		ErrPolicyNotManaged, kind, obj.GetNamespace(), obj.GetName(), owner)
+}
+
+// deleteIfOurs deletes the object named like obj if it exists and ours reports it as ours; one
+// that isn't ours is left alone. The UID precondition makes sure the object deleted is the one
+// checked, not one recreated under the same name in between.
+func deleteIfOurs(ctx context.Context, c client.Client, obj client.Object, ours func(client.Object) bool, kind, what string) error {
+	if err := c.Get(ctx, client.ObjectKeyFromObject(obj), obj); err != nil {
+		return client.IgnoreNotFound(err)
+	}
+	if !ours(obj) {
+		log.DefaultLogger.WithContext(ctx).Debugf("%s %s/%s is not ours, not deleted (%s)", kind, obj.GetNamespace(), obj.GetName(), what)
+		return nil
+	}
+	uid := obj.GetUID()
+	return deleteLogged(ctx, c, obj, kind, what, client.Preconditions{UID: &uid})
 }
 
 // keepKinds returns the objects whose owner-kind is one of kinds.

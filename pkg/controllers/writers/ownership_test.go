@@ -11,6 +11,7 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
+	istioApiSecurityV1 "istio.io/api/security/v1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
@@ -125,4 +126,122 @@ func TestPoliciesWithoutOwnerKindStillCount(t *testing.T) {
 	require.NoError(t, l7.DeleteForRoute(ctx, testManagedBy, "gw-ns", "my-route"))
 	err = c.Get(ctx, client.ObjectKeyFromObject(routePolicy), &istiosecurityv1.AuthorizationPolicy{})
 	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "the old route policy is still found and deleted")
+}
+
+// othersLabels are the ownership labels of another instance, with the prefix other.example.com.
+func othersLabels(kind, ns, name string) map[string]string {
+	return map[string]string{
+		"app.kubernetes.io/managed-by":      testManagedBy,
+		"other.example.com/owner-kind":      kind,
+		"other.example.com/owner-namespace": ns,
+		"other.example.com/owner-name":      name,
+	}
+}
+
+func othersPolicy(ns, name string, labels map[string]string) *istiosecurityv1.AuthorizationPolicy {
+	return &istiosecurityv1.AuthorizationPolicy{
+		ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: labels},
+		Spec: istioApiSecurityV1.AuthorizationPolicy{Action: istioApiSecurityV1.AuthorizationPolicy_DENY, Rules: []*istioApiSecurityV1.Rule{{
+			From: []*istioApiSecurityV1.Rule_From{{Source: &istioApiSecurityV1.Source{RemoteIpBlocks: []string{"192.0.2.1/32"}}}},
+		}}},
+	}
+}
+
+// assertPolicyUntouched verifies that the policy ns/name still has the labels, action and owners of want.
+func assertPolicyUntouched(t *testing.T, c client.Client, want *istiosecurityv1.AuthorizationPolicy) {
+	t.Helper()
+	got := getPolicy(t, c, want.Namespace, want.Name)
+	assert.Equal(t, want.Labels, got.Labels, "labels")
+	assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_DENY, got.Spec.Action, "spec")
+	assert.Empty(t, got.OwnerReferences, "owner references")
+}
+
+// TestWritersLeaveOthersObjectsAlone verifies that a writer neither overwrites nor deletes an
+// object with the name it writes that isn't ours: another instance's (other labels), or one
+// without any ownership label, e.g. an admin's. It returns ErrPolicyNotManaged instead of writing.
+func TestWritersLeaveOthersObjectsAlone(t *testing.T) {
+	ctx := context.Background()
+	gw := testGateway("my-gw", "gw-ns")
+	route := testRoute("my-route", "gw-ns", "app.example.com")
+	owners := map[string]func(kind, ns, name string) map[string]string{
+		"another instance": othersLabels,
+		"no labels":        func(string, string, string) map[string]string { return nil },
+	}
+	for owner, labels := range owners {
+		t.Run(owner, func(t *testing.T) {
+			t.Run("Gateway policy", func(t *testing.T) {
+				theirs := othersPolicy("gw-ns", "my-gw", labels(OwnerKindGateway, "gw-ns", "my-gw"))
+				c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw.DeepCopy(), theirs.DeepCopy()).Build()
+				w := NewIstioL4Writer(c, testManagedBy, resolvers.DefaultPrefix)
+
+				assert.ErrorIs(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}), ErrPolicyNotManaged)
+				assertPolicyUntouched(t, c, theirs)
+				require.NoError(t, w.Delete(ctx, gw))
+				assertPolicyUntouched(t, c, theirs)
+			})
+
+			t.Run("route policy", func(t *testing.T) {
+				theirs := othersPolicy("gw-ns", "my-gw-my-route", labels(OwnerKindHTTPRoute, "gw-ns", "my-route"))
+				c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw.DeepCopy(), route.DeepCopy(), theirs.DeepCopy()).Build()
+				w := newIstioL7Writer(c)
+
+				err := w.Apply(ctx, istioL7Scheme, route, gw, []string{"10.0.0.0/8"}, []string{"app.example.com"}, nil)
+				assert.ErrorIs(t, err, ErrPolicyNotManaged)
+				assertPolicyUntouched(t, c, theirs)
+				// No CIDRs: the policy with that name would be deleted, if it were ours.
+				require.NoError(t, w.Apply(ctx, istioL7Scheme, route, gw, nil, []string{"app.example.com"}, nil))
+				assertPolicyUntouched(t, c, theirs)
+			})
+
+			t.Run("Middleware", func(t *testing.T) {
+				theirs := &TraefikMiddleware{
+					ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "gw-ns", Labels: labels(OwnerKindHTTPRoute, "gw-ns", "my-route")},
+					Spec:       TraefikMiddlewareSpec{IPAllowList: &TraefikIPAllowList{SourceRange: []string{"192.0.2.1/32"}}},
+				}
+				routeWithRule := testTraefikRouteWithRules("my-route", "gw-ns", "/")
+				c := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(routeWithRule, theirs.DeepCopyObject().(client.Object)).Build()
+
+				err := newTraefikWriter(c).Apply(ctx, traefikScheme, routeWithRule, gw, []string{"10.0.0.0/8"}, nil, nil)
+				assert.ErrorIs(t, err, ErrPolicyNotManaged)
+				got := &TraefikMiddleware{}
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(theirs), got))
+				assert.Equal(t, theirs.Labels, got.Labels)
+				assert.Equal(t, []string{"192.0.2.1/32"}, got.Spec.IPAllowList.SourceRange)
+				assert.Empty(t, got.OwnerReferences)
+
+				// The route must not use someone else's allowlist.
+				gotRoute := &gatewayApiv1.HTTPRoute{}
+				require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(routeWithRule), gotRoute))
+				assert.Empty(t, gotRoute.Spec.Rules[0].Filters, "no filter to a Middleware that isn't ours")
+			})
+		})
+	}
+}
+
+// TestGatewayPolicyWithoutLabelsIsAdoptedByItsGateway verifies the transition: a Gateway policy
+// written before the labels, recognised by its Gateway as controller owner, is still ours, and gets
+// the labels on its next write.
+func TestGatewayPolicyWithoutLabelsIsAdoptedByItsGateway(t *testing.T) {
+	ctx := context.Background()
+	gw := testGateway("my-gw", "gw-ns")
+	gw.UID = "gw-uid"
+	old := othersPolicy("gw-ns", "my-gw", nil)
+	isController := true
+	old.OwnerReferences = []metav1.OwnerReference{{APIVersion: "gateway.networking.k8s.io/v1", Kind: "Gateway", Name: "my-gw", UID: "gw-uid", Controller: &isController}}
+	c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw, old).Build()
+	w := NewIstioL4Writer(c, testManagedBy, resolvers.DefaultPrefix)
+
+	require.NoError(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}))
+	got := getPolicy(t, c, "gw-ns", "my-gw")
+	assert.Equal(t, OwnerKindGateway, got.Labels["ipam.adevinta.com/owner-kind"])
+	assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_ALLOW, got.Spec.Action)
+
+	// The same, but another instance's policy (its labels) for the same Gateway: not adopted.
+	theirs := othersPolicy("gw-ns", "my-gw", othersLabels(OwnerKindGateway, "gw-ns", "my-gw"))
+	theirs.OwnerReferences = old.OwnerReferences
+	c = fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw.DeepCopy(), theirs).Build()
+	w = NewIstioL4Writer(c, testManagedBy, resolvers.DefaultPrefix)
+	assert.ErrorIs(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}), ErrPolicyNotManaged)
+	require.NoError(t, w.Delete(ctx, gw))
+	getPolicy(t, c, "gw-ns", "my-gw") // still there
 }

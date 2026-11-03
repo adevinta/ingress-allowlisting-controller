@@ -21,10 +21,6 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
 
-// ErrPolicyNotManaged is returned when an AuthorizationPolicy with the target name already exists
-// but was not created by this controller for the same purpose, so it must not be overwritten.
-var ErrPolicyNotManaged = errors.New("existing policy is not managed by this controller")
-
 // mergedTuple is a single (cidr-set, host-set, paths) entry emitted per rule during ApplyMerged grouping.
 type mergedTuple struct {
 	cidrKey string   // sorted joined CIDRs — group key

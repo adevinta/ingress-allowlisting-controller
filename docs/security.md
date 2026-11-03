@@ -189,6 +189,15 @@ The labels under the prefix are what makes a resource the controller's, so two i
 different prefixes don't touch each other's resources. Policies created before `owner-kind`
 existed get it on their next update.
 
+**Names are predictable, so a resource with the same name can already exist:** another
+instance's, or one an admin or a tenant created. The controller only writes or deletes a resource
+with its labels, for the same owner. Anything else under that name is left as it is: the object
+that needs it gets no allowlist, a Warning Event `AllowlistPolicyConflict` and a log warning, and
+the reconcile is not retried. Once the other resource is removed or renamed, the next reconcile of
+the object (a change to it or to its CIDRs) writes the allowlist. Gateway policies created before
+the labels existed have none: they still count as the controller's when their Gateway is their
+controller owner, and get the labels on their next update.
+
 **Automatic cleanup on restart:** every time the controller starts it runs a one-time sweep
 over the HTTPRoute resources it owns. Any resource whose owner no longer exists is deleted.
 Restarting the controller is sufficient to clean up orphans.

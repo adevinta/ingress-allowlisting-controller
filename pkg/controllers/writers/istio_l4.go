@@ -42,6 +42,10 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 		},
 	}
 	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+		// ResourceVersion is set only when the policy exists.
+		if policy.ResourceVersion != "" && !w.isOurs(policy, gateway) {
+			return notOurs("AuthorizationPolicy", policy, "Gateway "+gateway.Name)
+		}
 		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
 			return err
 		}
@@ -71,7 +75,7 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 	return err
 }
 
-// Delete removes the AuthorizationPolicy associated with the given Gateway.
+// Delete removes the AuthorizationPolicy of the given Gateway, if it is ours.
 func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gateway) error {
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -79,5 +83,11 @@ func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gatewa
 			Namespace: gateway.Namespace,
 		},
 	}
-	return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "Gateway "+gateway.Name)
+	ours := func(obj client.Object) bool { return w.isOurs(obj, gateway) }
+	return deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "Gateway "+gateway.Name)
+}
+
+// isOurs reports whether policy is the one this writer created for gateway (see isOurs).
+func (w *IstioL4Writer) isOurs(policy client.Object, gateway *gatewayApiv1.Gateway) bool {
+	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name, gateway.UID)
 }

@@ -57,6 +57,11 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 		ObjectMeta: metav1.ObjectMeta{Name: route.Name, Namespace: route.Namespace},
 	}
 	op, err := ctrl.CreateOrUpdate(ctx, w.client, middleware, func() error {
+		// ResourceVersion is set only when the Middleware exists. One that isn't ours is left
+		// alone, and the route doesn't get a filter to it: it would use someone else's allowlist.
+		if middleware.ResourceVersion != "" && !isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name, "") {
+			return notOurs("Middleware", middleware, "HTTPRoute "+route.Namespace+"/"+route.Name)
+		}
 		if err := ctrl.SetControllerReference(route, middleware, scheme); err != nil {
 			return err
 		}

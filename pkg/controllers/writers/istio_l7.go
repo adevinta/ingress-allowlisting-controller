@@ -136,7 +136,8 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		policy := &istiosecurityv1.AuthorizationPolicy{}
 		policy.Name = apName
 		policy.Namespace = apNamespace
-		return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": no CIDRs or no hostnames")
+		ours := func(obj client.Object) bool { return w.isOurs(obj, route) }
+		return deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": no CIDRs or no hostnames")
 	}
 
 	policy := &istiosecurityv1.AuthorizationPolicy{
@@ -144,6 +145,10 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 	}
 	rules := buildAuthorizationRules(ips, hosts, paths)
 	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+		// ResourceVersion is set only when the policy exists.
+		if policy.ResourceVersion != "" && !w.isOurs(policy, route) {
+			return notOurs("AuthorizationPolicy", policy, "HTTPRoute "+route.Namespace+"/"+route.Name)
+		}
 		if !crossNamespace {
 			if err := ctrl.SetControllerReference(route, policy, scheme); err != nil {
 				return err
@@ -163,6 +168,11 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		logChange(ctx, op, "AuthorizationPolicy", policy, "HTTPRoute "+route.Namespace+"/"+route.Name)
 	}
 	return err
+}
+
+// isOurs reports whether policy is one this writer created for route (see isOurs).
+func (w *IstioL7Writer) isOurs(policy client.Object, route *gatewayApiv1.HTTPRoute) bool {
+	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name, "")
 }
 
 // ListManaged returns all AuthorizationPolicies managed by this controller (identified by managedBy label).

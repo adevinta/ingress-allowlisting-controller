@@ -82,7 +82,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
-	if err := writer.Apply(ctx, r.Scheme, &gateway, allowedIps); err != nil {
+	if err := notManaged(ctx, r.CidrResolver, "Gateway", &gateway, writer.Apply(ctx, r.Scheme, &gateway, allowedIps)); err != nil {
 		return ctrl.Result{}, err
 	}
 	log.Debugf("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())

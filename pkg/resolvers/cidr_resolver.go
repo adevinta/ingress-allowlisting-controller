@@ -199,6 +199,14 @@ func notFoundEvent(recorder events.EventRecorder, c client.Client, object client
 		"Couldn't update the allowlist because %s %q was not found", kind, name)
 }
 
+// WarningEvent records a Warning Event on object, aggregated like the not-found one. Fire-and-forget.
+func (r *CidrResolver) WarningEvent(object client.Object, reason, action, note string) {
+	if r.Recorder == nil {
+		return
+	}
+	r.Recorder.Eventf(eventReference(r.Client, object), nil, v1.EventTypeWarning, reason, action, "%s", note)
+}
+
 // eventReference is the object an Event is about, without its resourceVersion. The recorder only
 // aggregates identical Events, and the reference is part of that identity: with the version, every
 // update of the object (each reconcile writes it) would start a new Event instead of counting.
