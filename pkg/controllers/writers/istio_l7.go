@@ -148,7 +148,7 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: apNamespace},
 	}
 	rules := buildAuthorizationRules(ips, hosts, paths)
-	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+	_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 		if !crossNamespace {
 			if err := ctrl.SetControllerReference(route, policy, scheme); err != nil {
 				return err
