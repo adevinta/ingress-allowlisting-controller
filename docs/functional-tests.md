@@ -16,6 +16,7 @@ Ingress/NetworkPolicy setup your cluster really has.
 make functional                  # dry run: shows the target cluster and the plan, creates nothing
 make functional CONFIRM=<context> # runs it; CONFIRM must equal the current kube context name
 make functional-clean            # deletes namespaces (both -a and -b) left by interrupted or KEEP=1 runs
+make functional-clean IAC_RUN=<id> # only those of run <id> (iac-functional-<id>-a/-b)
 ```
 
 The dry run prints everything a real run would do:
@@ -29,7 +30,7 @@ Controller
   ingress-allowlisting/ingress-allowlisting-controller  ✔ available
   annotation prefix: ipam.adevinta.com
 
-Would create namespaces iac-functional-3de74c-a and iac-functional-3de74c-b (label iac-functional=true), deleted at the end unless KEEP=1
+Would create namespaces iac-functional-3de74c-a and iac-functional-3de74c-b (labels iac-functional=true, iac-functional-run=3de74c), deleted at the end unless KEEP=1
 
 Scenarios
   ✔ ingress          networking.k8s.io/v1 Ingress (nginx whitelist-source-range annotation)
@@ -53,6 +54,7 @@ For every resource kind the controller has enabled (read from the controller's o
 | `remote` | an object referencing all remote sources gets exactly the union of their statuses |
 | `missing-cidrs` | a reference to a CIDRs object that does not exist gives the deny-all `127.0.0.2/32` |
 | `isolation` | a reference to a CIDRs object that exists only in the **other** test namespace gives deny-all, never that namespace's CIDRs |
+| `other-instance` | another instance's things are left alone, watched for 30s each, see [Two instances](#two-instances) |
 
 Once per run, independent of the resource kinds, `conditions` checks the CIDRs object's
 `UpToDate` condition with a source that keeps failing:
@@ -108,6 +110,38 @@ fixed values.
 
 Out of scope for now: `ClusterCIDRs`, `headersFrom`, and Istio merge mode.
 
+## Two instances
+
+Several instances of the controller can run in one cluster, each with its own
+`--annotation-prefix`. Each instance only acts on objects annotated under its prefix, and labels
+what it creates with it (see [security.md](security.md)). The `other-instance` scenario checks
+this from the side of the instance under test, with a made-up other instance whose prefix is
+`other.iac-functional.invalid`:
+
+- an object annotated only under the other prefix gets no allowlist;
+- for Istio Gateway, Istio HTTPRoute and Traefik HTTPRoute: the AuthorizationPolicy or Middleware
+  the controller would create for our object already exists, labelled as the other instance's.
+  The controller must not change it, and must not delete it once our object loses its annotation.
+
+To check two real instances side by side, run the suite once against each, at the same time. Each
+run has its own namespaces, so the runs don't meet, and each controller must leave the other run's
+objects alone, as they are annotated under the other prefix.
+
+```bash
+# A: the Deployment in the cluster
+make functional CONFIRM=<context> IAC_CONTROLLER=ingress-allowlisting/ingress-allowlisting-controller \
+  IAC_ANNOTATION_PREFIX=ipam.adevinta.com
+
+# B: a second instance, e.g. run on your laptop with go run and another prefix
+make functional CONFIRM=<context> \
+  IAC_CONTROLLER_ARGS="--annotation-prefix=b.example.com --gateway-support-enabled --httproute-support-enabled" \
+  IAC_ANNOTATION_PREFIX=b.example.com
+```
+
+`IAC_ANNOTATION_PREFIX` is optional: it states the prefix you mean to test, and blocks the run if
+the controller found runs with another one. While a run is going on, clean up another one with
+`make functional-clean IAC_RUN=<id>`: without `IAC_RUN` it deletes the namespaces of every run.
+
 ## Prerequisites
 
 - The controller is installed and has an available replica. It is found by the Helm chart label
@@ -137,6 +171,8 @@ The objects are harmless:
 | `IAC_CONTEXT` | Use this kube context instead of the current one |
 | `IAC_CONTROLLER` | `namespace/name` of the controller Deployment, when several are found |
 | `IAC_CONTROLLER_ARGS` | The controller's arguments, when it runs outside the cluster (e.g. `go run` on your laptop). Replaces Deployment detection |
+| `IAC_ANNOTATION_PREFIX` | The annotation prefix the controller must run with; the run is blocked if it doesn't (default: whatever it runs with) |
+| `IAC_RUN` | For `make functional-clean`: delete only the namespaces of this run |
 | `IAC_ISTIO_GATEWAYCLASS`, `IAC_TRAEFIK_GATEWAYCLASS` | GatewayClass to use when several exist for that controller (default: the first by name) |
 | `IAC_TIMEOUT` | How long each wait may take (default `3m`) |
 | `KEEP` | Any value keeps the test namespaces for inspection; remove it later with `make functional-clean` |

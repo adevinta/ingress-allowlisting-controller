@@ -56,10 +56,10 @@ func TestFunctional(t *testing.T) {
 		t.Fatalf("cannot run: %s", strings.Join(b, "; "))
 	}
 
-	createNamespace(t, ctx, c, p.Namespace)
-	createNamespace(t, ctx, c, p.PeerNamespace)
+	createNamespace(t, ctx, c, p.Run, p.Namespace)
+	createNamespace(t, ctx, c, p.Run, p.PeerNamespace)
 	ns := p.Namespace
-	annotation := p.Controller.flag("annotation-prefix", defaultAnnotationPrefix) + "/allowlist-group"
+	annotation := p.AnnotationPrefix + "/allowlist-group"
 
 	// A CIDRs object that exists only in the peer namespace: objects in the main namespace that
 	// reference it by name must not get its CIDRs (see the isolation scenario).
@@ -218,14 +218,19 @@ func runTargetScenarios(t *testing.T, env scenarioEnv, tg target) {
 		expectAllowlist(t, "CIDRs of namespace "+env.peerNS+" not to be used in "+ns, observe(name), exactly(denyAll))
 	})
 
+	t.Run("other-instance", func(t *testing.T) {
+		otherInstanceScenario(t, env, tg, inline)
+	})
+
 	if tg.extraScenarios != nil {
 		tg.extraScenarios(t, env)
 	}
 }
 
 func buildPlan(ctx context.Context, c client.Client, cluster clusterTarget) plan {
-	base := namespaceLabel + "-" + randomSuffix()
-	p := plan{Cluster: cluster, Namespace: base + "-a", PeerNamespace: base + "-b"}
+	run := randomSuffix()
+	base := namespaceLabel + "-" + run
+	p := plan{Cluster: cluster, Run: run, Namespace: base + "-a", PeerNamespace: base + "-b"}
 	p.Controller, p.ControllerErr = detectController(ctx, c)
 
 	gk := schema.GroupKind{Group: ipamv1alpha1.GroupVersion.Group, Kind: "CIDRs"}
@@ -233,8 +238,11 @@ func buildPlan(ctx context.Context, c client.Client, cluster clusterTarget) plan
 		p.CRDErr = fmt.Errorf("%s CRD not installed: %v", gk, err)
 	}
 
-	annotationPrefix := p.Controller.flag("annotation-prefix", defaultAnnotationPrefix)
-	for _, tg := range targets(discover(ctx, c, p.Controller, annotationPrefix)) {
+	p.AnnotationPrefix = p.Controller.flag("annotation-prefix", defaultAnnotationPrefix)
+	if want := os.Getenv("IAC_ANNOTATION_PREFIX"); want != "" && p.ControllerErr == nil && want != p.AnnotationPrefix {
+		p.PrefixErr = fmt.Errorf("IAC_ANNOTATION_PREFIX is %s, but controller %s runs with --annotation-prefix %s", want, p.Controller.Location, p.AnnotationPrefix)
+	}
+	for _, tg := range targets(discover(ctx, c, p.Controller, p.AnnotationPrefix)) {
 		planned := plannedTarget{target: tg}
 		switch {
 		case tg.unavailable != "":
@@ -254,20 +262,22 @@ func buildPlan(ctx context.Context, c client.Client, cluster clusterTarget) plan
 	return p
 }
 
-func createNamespace(t *testing.T, ctx context.Context, c client.Client, name string) {
+// createNamespace creates a test namespace, labelled with the run, so that make functional-clean
+// IAC_RUN=<run> deletes only this run's namespaces, not those of a run in parallel.
+func createNamespace(t *testing.T, ctx context.Context, c client.Client, run, name string) {
 	t.Helper()
-	ns := &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{namespaceLabel: "true"}}}
+	ns := &v1.Namespace{ObjectMeta: metav1.ObjectMeta{Name: name, Labels: map[string]string{namespaceLabel: "true", runLabel: run}}}
 	if err := c.Create(ctx, ns); err != nil {
 		t.Fatalf("creating namespace %s: %v", name, err)
 	}
 	t.Logf("created namespace %s", name)
 	t.Cleanup(func() {
 		if os.Getenv("KEEP") != "" {
-			t.Logf("KEEP is set: namespace %s was kept; delete it with make functional-clean", name)
+			t.Logf("KEEP is set: namespace %s was kept; delete it with make functional-clean IAC_RUN=%s", name, run)
 			return
 		}
 		if err := c.Delete(context.Background(), ns); client.IgnoreNotFound(err) != nil {
-			t.Errorf("deleting namespace %s: %v (delete it with make functional-clean)", name, err)
+			t.Errorf("deleting namespace %s: %v (delete it with make functional-clean IAC_RUN=%s)", name, err, run)
 			return
 		}
 		t.Logf("deleted namespace %s", name)

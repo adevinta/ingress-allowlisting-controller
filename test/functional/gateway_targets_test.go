@@ -202,6 +202,7 @@ func istioGatewayTarget(d discovery) target {
 			}
 			return remoteIPBlocks(policy)
 		},
+		otherInstance: istioGatewayOtherInstance(),
 	}
 }
 
@@ -229,6 +230,7 @@ func istioHTTPRouteTarget(d discovery) target {
 		extraScenarios: func(t *testing.T, env scenarioEnv) {
 			crossNamespaceScenarios(t, env, d, istioCrossNamespace(d))
 		},
+		otherInstance: istioHTTPRouteOtherInstance(d),
 	}
 }
 
@@ -259,6 +261,7 @@ func traefikHTTPRouteTarget(d discovery) target {
 		extraScenarios: func(t *testing.T, env scenarioEnv) {
 			crossNamespaceScenarios(t, env, d, traefikCrossNamespace(d))
 		},
+		otherInstance: traefikHTTPRouteOtherInstance(),
 	}
 }
 
