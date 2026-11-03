@@ -122,6 +122,8 @@ this from the side of the instance under test, with a made-up other instance who
 - for Istio Gateway, Istio HTTPRoute and Traefik HTTPRoute: the AuthorizationPolicy or Middleware
   the controller would create for our object already exists, labelled as the other instance's.
   The controller must not change it, and must not delete it once our object loses its annotation.
+  For Traefik, the route also has a filter to that Middleware, as a team may have to its own
+  Middleware: the filter must stay.
 
 To check two real instances side by side, run the suite once against each, at the same time. Each
 run has its own namespaces, so the runs don't meet, and each controller must leave the other run's

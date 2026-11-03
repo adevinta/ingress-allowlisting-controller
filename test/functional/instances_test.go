@@ -35,6 +35,10 @@ type otherInstanceHooks struct {
 	taken func(ctx context.Context, c client.Client, ns, name string) (client.Object, error)
 	// empty returns an empty object of the kind the target's create makes (Gateway, HTTPRoute).
 	empty func() client.Object
+	// reference, when set, makes our object use the other instance's object, as its owner may on
+	// purpose (e.g. a route with a filter to a team's Middleware). referenced checks it still does.
+	reference  func(ctx context.Context, c client.Client, ns, name string) error
+	referenced func(ctx context.Context, c client.Client, ns, name string) error
 }
 
 // foreignLabels are the ownership labels another instance puts on what it creates.
@@ -95,7 +99,8 @@ func istioHTTPRouteOtherInstance(d discovery) *otherInstanceHooks {
 
 func traefikHTTPRouteOtherInstance() *otherInstanceHooks {
 	return &otherInstanceHooks{
-		// A route's Middleware is named after it. Nothing references this one, so it has no effect.
+		// A route's Middleware is named after it. Only the test route references this one, and the
+		// Gateway listens only for *.functional.invalid, so it has no effect.
 		taken: func(_ context.Context, _ client.Client, ns, name string) (client.Object, error) {
 			return &writers.TraefikMiddleware{
 				ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: ns, Labels: foreignLabels(writers.OwnerKindHTTPRoute, ns, name)},
@@ -103,6 +108,33 @@ func traefikHTTPRouteOtherInstance() *otherInstanceHooks {
 			}, nil
 		},
 		empty: func() client.Object { return &gatewayApiv1.HTTPRoute{} },
+		reference: func(ctx context.Context, c client.Client, ns, name string) error {
+			return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+				route := &gatewayApiv1.HTTPRoute{}
+				if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, route); err != nil {
+					return err
+				}
+				for i := range route.Spec.Rules {
+					route.Spec.Rules[i].Filters = append(route.Spec.Rules[i].Filters, gatewayApiv1.HTTPRouteFilter{
+						Type:         gatewayApiv1.HTTPRouteFilterExtensionRef,
+						ExtensionRef: &gatewayApiv1.LocalObjectReference{Group: "traefik.io", Kind: "Middleware", Name: gatewayApiv1.ObjectName(name)},
+					})
+				}
+				return c.Update(ctx, route)
+			})
+		},
+		referenced: func(ctx context.Context, c client.Client, ns, name string) error {
+			route := &gatewayApiv1.HTTPRoute{}
+			if err := c.Get(ctx, client.ObjectKey{Namespace: ns, Name: name}, route); err != nil {
+				return err
+			}
+			for i, rule := range route.Spec.Rules {
+				if !referencesMiddleware(rule.Filters, name) {
+					return fmt.Errorf("the filter of HTTPRoute %s/%s rule %d to another instance's Middleware %s was removed", ns, name, i, name)
+				}
+			}
+			return nil
+		},
 	}
 }
 
@@ -110,7 +142,7 @@ func traefikHTTPRouteOtherInstance() *otherInstanceHooks {
 //   - an object annotated only under another instance's prefix gets no allowlist from us;
 //   - for the kinds the controller creates: when the object it would create already exists and
 //     belongs to another instance, it is neither overwritten nor, once our object loses its
-//     annotation, deleted.
+//     annotation, deleted. A reference our object has to it on purpose stays.
 //
 // cidrsName is a CIDRs object in the test namespace, so a missing allowlist can only come from the
 // prefix.
@@ -134,6 +166,11 @@ func otherInstanceScenario(t *testing.T, env scenarioEnv, tg target, cidrsName s
 		if err := tg.create(ctx, c, ns, name, map[string]string{env.annotation: cidrsName}); err != nil {
 			t.Fatalf("creating %s: %v", tg.name, err)
 		}
+		if tg.otherInstance.reference != nil {
+			if err := tg.otherInstance.reference(ctx, c, ns, name); err != nil {
+				t.Fatalf("making %s/%s use another instance's %T: %v", ns, name, taken, err)
+			}
+		}
 	}
 
 	// untouched compares what a controller would change: the spec (generation), the labels and the
@@ -153,6 +190,9 @@ func otherInstanceScenario(t *testing.T, env scenarioEnv, tg target, cidrsName s
 			return fmt.Errorf("another instance's %T %s/%s: labels changed to %v", taken, ns, taken.GetName(), got.GetLabels())
 		case len(got.GetOwnerReferences()) != len(taken.GetOwnerReferences()):
 			return fmt.Errorf("another instance's %T %s/%s: owner references changed to %v", taken, ns, taken.GetName(), got.GetOwnerReferences())
+		}
+		if tg.otherInstance.referenced != nil {
+			return tg.otherInstance.referenced(ctx, c, ns, name)
 		}
 		return nil
 	}

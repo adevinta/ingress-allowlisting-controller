@@ -194,7 +194,8 @@ instance's, or one an admin or a tenant created. The controller only writes or d
 with its labels, for the same owner. Anything else under that name is left as it is: the object
 that needs it gets no allowlist, a Warning Event `AllowlistPolicyConflict` and a log warning, and
 the reconcile is not retried. Once the other resource is removed or renamed, the next reconcile of
-the object (a change to it or to its CIDRs) writes the allowlist. Gateway policies created before
+the object (a change to it or to its CIDRs) writes the allowlist. For the same reason, a route keeps
+its filter to a Middleware named like the route that isn't the controller's. Gateway policies created before
 the labels existed have none: they still count as the controller's when their Gateway is their
 controller owner, and get the labels on their next update.
 

@@ -245,3 +245,50 @@ func TestGatewayPolicyWithoutLabelsIsAdoptedByItsGateway(t *testing.T) {
 	require.NoError(t, w.Delete(ctx, gw))
 	getPolicy(t, c, "gw-ns", "my-gw") // still there
 }
+
+// TestTraefikKeepsFiltersToOthersMiddlewares verifies that a route without the allowlist
+// annotation keeps its filter to a Middleware named like the route that isn't ours, e.g. a team's
+// own rate limit: only the filter to our Middleware is removed, or one to a Middleware that is gone.
+func TestTraefikKeepsFiltersToOthersMiddlewares(t *testing.T) {
+	ctx := context.Background()
+	withFilter := func() *gatewayApiv1.HTTPRoute {
+		route := testTraefikRouteWithRules("my-route", "gw-ns", "/")
+		route.Spec.Rules[0].Filters = []gatewayApiv1.HTTPRouteFilter{traefikFilter("my-route")}
+		return route
+	}
+	filters := func(t *testing.T, c client.Client) []gatewayApiv1.HTTPRouteFilter {
+		t.Helper()
+		route := &gatewayApiv1.HTTPRoute{}
+		require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "gw-ns", Name: "my-route"}, route))
+		return route.Spec.Rules[0].Filters
+	}
+	middleware := func(labels map[string]string) *TraefikMiddleware {
+		return &TraefikMiddleware{ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "gw-ns", Labels: labels}}
+	}
+
+	for owner, labels := range map[string]map[string]string{
+		"another instance": othersLabels(OwnerKindHTTPRoute, "gw-ns", "my-route"),
+		"no labels":        nil,
+	} {
+		t.Run(owner, func(t *testing.T) {
+			c := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(withFilter(), middleware(labels)).Build()
+			require.NoError(t, newTraefikWriter(c).DeleteForRoute(ctx, testManagedBy, "gw-ns", "my-route"))
+			assert.Len(t, filters(t, c), 1, "the filter to their Middleware stays")
+			require.NoError(t, c.Get(ctx, client.ObjectKey{Namespace: "gw-ns", Name: "my-route"}, &TraefikMiddleware{}), "their Middleware stays")
+		})
+	}
+
+	t.Run("ours", func(t *testing.T) {
+		ours := middleware(nil)
+		setOwnerLabels(ours, resolvers.DefaultPrefix, testManagedBy, OwnerKindHTTPRoute, "gw-ns", "my-route")
+		c := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(withFilter(), ours).Build()
+		require.NoError(t, newTraefikWriter(c).DeleteForRoute(ctx, testManagedBy, "gw-ns", "my-route"))
+		assert.Empty(t, filters(t, c), "our filter is removed with our Middleware")
+	})
+
+	t.Run("gone", func(t *testing.T) {
+		c := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(withFilter()).Build()
+		require.NoError(t, newTraefikWriter(c).DeleteForRoute(ctx, testManagedBy, "gw-ns", "my-route"))
+		assert.Empty(t, filters(t, c), "a filter to a Middleware that is gone is removed")
+	})
+}

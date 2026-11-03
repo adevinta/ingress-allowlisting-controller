@@ -167,7 +167,7 @@ func (w *TraefikL7Writer) Delete(ctx context.Context, obj client.Object) error {
 }
 
 // DeleteForRoute deletes all Middlewares owned by the given route and removes the
-// extensionRef filter from the HTTPRoute's rules.
+// extensionRef filter from the HTTPRoute's rules, unless the Middleware it points to isn't ours.
 func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNamespace, routeName string) error {
 	list := &TraefikMiddlewareList{}
 	if err := w.client.List(ctx, list, ownedBy(w.annotationPrefix, managedBy, routeNamespace, routeName)...); err != nil {
@@ -180,6 +180,17 @@ func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNa
 		if err := deleteLogged(ctx, w.client, &list.Items[i], "Middleware", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
 			return err
 		}
+	}
+
+	// The filter points to the Middleware named after the route. If that one isn't ours, the
+	// filter is someone else's too (e.g. a team's own Middleware): it stays.
+	named := &TraefikMiddleware{}
+	err := w.client.Get(ctx, types.NamespacedName{Namespace: routeNamespace, Name: routeName}, named)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err == nil && !isOurs(named, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName, "") {
+		return nil
 	}
 
 	route := &gatewayApiv1.HTTPRoute{}
