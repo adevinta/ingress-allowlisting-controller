@@ -141,14 +141,14 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		policy := &istiosecurityv1.AuthorizationPolicy{}
 		policy.Name = apName
 		policy.Namespace = apNamespace
-		return client.IgnoreNotFound(w.client.Delete(ctx, policy))
+		return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": no CIDRs or no hostnames")
 	}
 
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: apNamespace},
 	}
 	rules := buildAuthorizationRules(ips, hosts, paths)
-	_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 		if !crossNamespace {
 			if err := ctrl.SetControllerReference(route, policy, scheme); err != nil {
 				return err
@@ -164,6 +164,9 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		}
 		return nil
 	})
+	if err == nil {
+		logChange(ctx, op, "AuthorizationPolicy", policy, "HTTPRoute "+route.Namespace+"/"+route.Name)
+	}
 	return err
 }
 
@@ -236,7 +239,7 @@ func (w *IstioL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeName
 		return err
 	}
 	for i := range list.Items {
-		if err := client.IgnoreNotFound(w.client.Delete(ctx, list.Items[i])); err != nil {
+		if err := deleteLogged(ctx, w.client, list.Items[i], "AuthorizationPolicy", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
 			return err
 		}
 	}

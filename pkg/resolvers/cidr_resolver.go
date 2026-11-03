@@ -114,7 +114,7 @@ func resolveName(ctx context.Context, namespace, name string, resolver cidrResol
 		}
 	}
 
-	log.DefaultLogger.WithContext(ctx).Infof("resolving allowlist name %s", name)
+	log.DefaultLogger.WithContext(ctx).Debugf("resolving allowlist name %s", name)
 	ips, err := resolver.ResolveCidrs(ctx, namespace, name)
 	if err != nil && client.IgnoreNotFound(err) == nil {
 		if cache != nil {

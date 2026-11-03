@@ -192,7 +192,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 		policy := &istiosecurityv1.AuthorizationPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: mergeKey, Namespace: gateway.Namespace},
 		}
-		_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+		op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 			// The merge key is user-chosen and doubles as the AP name, so it can point at any
 			// AP in the gateway namespace (e.g. an admin-authored DENY). Only the merged AP of
 			// this group may be taken over; ResourceVersion is set only when the AP exists.
@@ -210,6 +210,9 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 			}
 			return nil
 		})
+		if err == nil {
+			logChange(ctx, op, "AuthorizationPolicy", policy, "merge group "+mergeKey)
+		}
 		return err
 	})
 }
@@ -226,7 +229,7 @@ func (w *IstioL7Writer) DeleteMerged(ctx context.Context, namespace, mergeKey st
 	}
 	// The UID precondition makes sure we delete the object we just checked, not one recreated
 	// under the same name in between.
-	return client.IgnoreNotFound(w.client.Delete(ctx, policy, client.Preconditions{UID: &policy.UID}))
+	return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "merge group "+mergeKey+" has no routes left", client.Preconditions{UID: &policy.UID})
 }
 
 // isMergedPolicy reports whether the AP is the merged policy this writer created for mergeKey.
