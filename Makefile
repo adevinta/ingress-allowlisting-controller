@@ -82,16 +82,17 @@ docker-push:
 # Functional tests against a REAL cluster (the current kube context) — local only, never in CI.
 # Dry run by default: prints the target cluster and the plan, creates nothing. To create objects:
 #   make functional CONFIRM=<current-context-name>
-# See docs/functional-tests.md for IAC_CONTEXT, IAC_CONTROLLER, IAC_CONTROLLER_ARGS, IAC_TIMEOUT, KEEP.
-export CONFIRM KEEP IAC_CONTEXT IAC_CONTROLLER IAC_CONTROLLER_ARGS IAC_TIMEOUT
+# See docs/functional-tests.md for IAC_CONTEXT, IAC_CONTROLLER, IAC_CONTROLLER_ARGS, IAC_ANNOTATION_PREFIX, IAC_TIMEOUT, KEEP.
+export CONFIRM KEEP IAC_CONTEXT IAC_CONTROLLER IAC_CONTROLLER_ARGS IAC_ANNOTATION_PREFIX IAC_TIMEOUT
 functional:
 	go test -tags functional ./test/functional/ -run TestFunctional -v -count=1 -timeout 30m
 
-# Delete namespaces left behind by interrupted or KEEP=1 functional runs.
+# Delete namespaces left behind by interrupted or KEEP=1 functional runs: all runs, or only the
+# run IAC_RUN=<id> (the <id> of iac-functional-<id>-a), e.g. while another run is going on.
 functional-clean:
 	@ctx="$${IAC_CONTEXT:-$$(kubectl config current-context)}"; \
 	echo "context: $$ctx"; \
-	kubectl --context "$$ctx" delete namespace -l iac-functional=true --wait=false
+	kubectl --context "$$ctx" delete namespace -l "iac-functional=true$${IAC_RUN:+,iac-functional-run=$$IAC_RUN}" --wait=false
 
 # find or download controller-gen
 # download controller-gen if necessary

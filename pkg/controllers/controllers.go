@@ -56,7 +56,7 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy st
 	l4 := writers.L4WriterRegistry{}
 	l7 := writers.L7WriterRegistry{}
 	if isCRDInstalled(mapper, "security.istio.io", "v1", "AuthorizationPolicy") {
-		l4[writers.IstioControllerName] = writers.NewIstioL4Writer(c)
+		l4[writers.IstioControllerName] = writers.NewIstioL4Writer(c, managedBy, cidrResolver.AnnotationPrefix)
 		l7[writers.IstioControllerName] = writers.NewIstioL7Writer(c, managedBy, cidrResolver)
 	}
 	if isCRDInstalled(mapper, "traefik.io", "v1alpha1", "Middleware") {

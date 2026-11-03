@@ -21,10 +21,6 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
 
-// ErrPolicyNotManaged is returned when an AuthorizationPolicy with the target name already exists
-// but was not created by this controller for the same purpose, so it must not be overwritten.
-var ErrPolicyNotManaged = errors.New("existing policy is not managed by this controller")
-
 // mergedTuple is a single (cidr-set, host-set, paths) entry emitted per rule during ApplyMerged grouping.
 type mergedTuple struct {
 	cidrKey string   // sorted joined CIDRs — group key
@@ -200,7 +196,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 				return fmt.Errorf("%w: AuthorizationPolicy %s/%s is not the merged policy for merge key %q",
 					ErrPolicyNotManaged, policy.Namespace, policy.Name, mergeKey)
 			}
-			w.applyLabels(policy, "MERGED", mergeKey)
+			w.applyLabels(policy, OwnerKindMerged, mergedOwnerNamespace, mergeKey)
 			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 				Rules:  rules,
@@ -237,9 +233,9 @@ func (w *IstioL7Writer) DeleteMerged(ctx context.Context, namespace, mergeKey st
 // namespace "MERGED", owner name = the merge key (see applyLabels in ApplyMerged).
 func (w *IstioL7Writer) isMergedPolicy(policy *istiosecurityv1.AuthorizationPolicy, mergeKey string) bool {
 	labels := policy.GetLabels()
-	return labels["app.kubernetes.io/managed-by"] == w.managedBy &&
-		labels[w.annotationPrefix+"/owner-namespace"] == LabelSafe("MERGED") &&
-		labels[w.annotationPrefix+"/owner-name"] == LabelSafe(mergeKey)
+	return labels[managedByLabel] == w.managedBy &&
+		ownerKind(policy, w.annotationPrefix) == OwnerKindMerged &&
+		labels[ownerNameLabel(w.annotationPrefix)] == LabelSafe(mergeKey)
 }
 
 // mergeTosByPaths compacts `to` operations sharing the same path set into one, merging their host lists.

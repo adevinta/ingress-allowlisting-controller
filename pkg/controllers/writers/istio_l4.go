@@ -16,12 +16,15 @@ import (
 
 // IstioL4Writer creates/deletes Istio AuthorizationPolicies for Gateway-level (L4) allowlisting.
 type IstioL4Writer struct {
-	client client.Client
+	client           client.Client
+	managedBy        string
+	annotationPrefix string
 }
 
-// NewIstioL4Writer returns a new IstioL4Writer using the provided client.
-func NewIstioL4Writer(c client.Client) *IstioL4Writer {
-	return &IstioL4Writer{client: c}
+// NewIstioL4Writer returns a new IstioL4Writer. managedBy and annotationPrefix go into the
+// ownership labels of the policies it creates (see ownership.go).
+func NewIstioL4Writer(c client.Client, managedBy, annotationPrefix string) *IstioL4Writer {
+	return &IstioL4Writer{client: c, managedBy: managedBy, annotationPrefix: annotationPrefix}
 }
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
@@ -39,9 +42,14 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 		},
 	}
 	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+		// ResourceVersion is set only when the policy exists.
+		if policy.ResourceVersion != "" && !w.isOurs(policy, gateway) {
+			return notOurs("AuthorizationPolicy", policy, "Gateway "+gateway.Name)
+		}
 		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
 			return err
 		}
+		setOwnerLabels(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name)
 		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 			Rules: []*istioApiSecurityV1.Rule{
@@ -67,7 +75,7 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 	return err
 }
 
-// Delete removes the AuthorizationPolicy associated with the given Gateway.
+// Delete removes the AuthorizationPolicy of the given Gateway, if it is ours.
 func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gateway) error {
 	policy := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: metav1.ObjectMeta{
@@ -75,5 +83,11 @@ func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gatewa
 			Namespace: gateway.Namespace,
 		},
 	}
-	return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "Gateway "+gateway.Name)
+	ours := func(obj client.Object) bool { return w.isOurs(obj, gateway) }
+	return deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "Gateway "+gateway.Name)
+}
+
+// isOurs reports whether policy is the one this writer created for gateway (see isOurs).
+func (w *IstioL4Writer) isOurs(policy client.Object, gateway *gatewayApiv1.Gateway) bool {
+	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name, gateway.UID)
 }

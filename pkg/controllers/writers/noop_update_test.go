@@ -38,7 +38,7 @@ func TestIstioWritersDontUpdateUnchangedPolicies(t *testing.T) {
 	t.Run("Gateway (L4)", func(t *testing.T) {
 		gw := testL4Gateway("my-gateway", "mynamespace")
 		c, updates := countingAPUpdates(t, gw)
-		w := NewIstioL4Writer(c)
+		w := NewIstioL4Writer(c, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 		require.NoError(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}))
 		require.NoError(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}))

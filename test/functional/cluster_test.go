@@ -214,12 +214,17 @@ func normaliseOrigin(s string) string {
 // plan is what a run would do, printed in full before anything is created.
 type plan struct {
 	Cluster    clusterTarget
+	Run        string // id of the run, in the namespace names and label
 	Controller controllerInfo
 	// ControllerErr is set when no controller could be found; the run is then blocked.
 	ControllerErr error
 	// CRDErr is set when the CIDRs CRD is not installed; the run is then blocked.
-	CRDErr    error
-	Namespace string
+	CRDErr error
+	// AnnotationPrefix is the controller's --annotation-prefix. PrefixErr is set when it is not
+	// IAC_ANNOTATION_PREFIX; the run is then blocked.
+	AnnotationPrefix string
+	PrefixErr        error
+	Namespace        string
 	// PeerNamespace is the second namespace, for the cross-namespace scenarios.
 	PeerNamespace string
 	Targets       []plannedTarget
@@ -246,6 +251,9 @@ func (p plan) blockers() []string {
 	if p.CRDErr != nil {
 		b = append(b, p.CRDErr.Error())
 	}
+	if p.PrefixErr != nil {
+		b = append(b, p.PrefixErr.Error())
+	}
 	if p.ControllerErr == nil && !slices.ContainsFunc(p.Targets, func(t plannedTarget) bool { return t.Skip == "" }) {
 		b = append(b, "every scenario is skipped: enable at least one resource kind on the controller")
 	}
@@ -268,13 +276,13 @@ func (p plan) print(w io.Writer) {
 			state = "✘ no available replica"
 		}
 		fmt.Fprintf(w, "  %s  %s\n", p.Controller.Location, state)
-		fmt.Fprintf(w, "  annotation prefix: %s\n", p.Controller.flag("annotation-prefix", defaultAnnotationPrefix))
+		fmt.Fprintf(w, "  annotation prefix: %s\n", p.AnnotationPrefix)
 	}
 	if p.CRDErr != nil {
 		fmt.Fprintf(w, "  ✘ %v\n", p.CRDErr)
 	}
 
-	fmt.Fprintf(w, "\nWould create namespaces %s and %s (label %s=true), deleted at the end unless KEEP=1\n", p.Namespace, p.PeerNamespace, namespaceLabel)
+	fmt.Fprintf(w, "\nWould create namespaces %s and %s (labels %s=true, %s=%s), deleted at the end unless KEEP=1\n", p.Namespace, p.PeerNamespace, namespaceLabel, runLabel, p.Run)
 
 	fmt.Fprintf(w, "\nScenarios\n")
 	for _, t := range p.Targets {

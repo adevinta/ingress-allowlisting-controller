@@ -26,6 +26,8 @@ const (
 	// namespaceLabel marks every namespace the suite creates, so leftovers of interrupted runs can
 	// be found and deleted (make functional-clean).
 	namespaceLabel = "iac-functional"
+	// runLabel holds the run id, the <id> of iac-functional-<id>-a.
+	runLabel = "iac-functional-run"
 	// denyAll is what the controller writes when none of the referenced CIDRs exist
 	// (see getIpsFromAnnotation in pkg/resolvers/cidr_resolver.go).
 	denyAll = "127.0.0.2/32"

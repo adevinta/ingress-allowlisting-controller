@@ -2456,7 +2456,7 @@ func TestOwnedTypesFollowTheWriters(t *testing.T) {
 	ap, mw := &istiosecurityv1.AuthorizationPolicy{}, &writers.TraefikMiddleware{}
 
 	assert.Empty(t, l4OwnedTypes(writers.L4WriterRegistry{}), "no Istio: nothing to watch")
-	assert.Equal(t, []client.Object{ap}, l4OwnedTypes(writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil)}))
+	assert.Equal(t, []client.Object{ap}, l4OwnedTypes(writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil, "ingress-allowlisting-controller", "ipam.adevinta.com")}))
 
 	assert.Empty(t, l7OwnedTypes(writers.L7WriterRegistry{}))
 	assert.Equal(t, []client.Object{mw}, l7OwnedTypes(writers.L7WriterRegistry{

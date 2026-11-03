@@ -31,6 +31,9 @@ type target struct {
 	create func(ctx context.Context, c client.Client, ns, name string, annotations map[string]string) error
 	// observe returns the allowlist the controller wrote, or nil, nil if it has not written one yet.
 	observe func(ctx context.Context, c client.Client, ns, name string) ([]string, error)
+	// otherInstance, when set, is for the kinds the controller creates objects for (see
+	// otherInstanceScenario).
+	otherInstance *otherInstanceHooks
 }
 
 func targets(d discovery) []target {

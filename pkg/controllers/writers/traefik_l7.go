@@ -44,12 +44,7 @@ func (w *TraefikL7Writer) RequiredPermissions() []Permission {
 }
 
 func (w *TraefikL7Writer) applyLabels(middleware *TraefikMiddleware, ownerNamespace, ownerName string) {
-	if middleware.Labels == nil {
-		middleware.Labels = map[string]string{}
-	}
-	middleware.Labels["app.kubernetes.io/managed-by"] = w.managedBy
-	middleware.Labels[w.annotationPrefix+"/owner-namespace"] = LabelSafe(ownerNamespace)
-	middleware.Labels[w.annotationPrefix+"/owner-name"] = LabelSafe(ownerName)
+	setOwnerLabels(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, ownerNamespace, ownerName)
 }
 
 // Apply creates or updates a Traefik Middleware with an IPAllowList for the given HTTPRoute,
@@ -62,6 +57,11 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 		ObjectMeta: metav1.ObjectMeta{Name: route.Name, Namespace: route.Namespace},
 	}
 	op, err := ctrl.CreateOrUpdate(ctx, w.client, middleware, func() error {
+		// ResourceVersion is set only when the Middleware exists. One that isn't ours is left
+		// alone, and the route doesn't get a filter to it: it would use someone else's allowlist.
+		if middleware.ResourceVersion != "" && !isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name, "") {
+			return notOurs("Middleware", middleware, "HTTPRoute "+route.Namespace+"/"+route.Name)
+		}
 		if err := ctrl.SetControllerReference(route, middleware, scheme); err != nil {
 			return err
 		}
@@ -136,16 +136,14 @@ func hasTraefikFilter(filters []gatewayApiv1.HTTPRouteFilter, mwName string) boo
 // ListManaged returns all Traefik Middlewares managed by this controller.
 func (w *TraefikL7Writer) ListManaged(ctx context.Context, managedBy string) ([]client.Object, error) {
 	list := &TraefikMiddlewareList{}
-	if err := w.client.List(ctx, list, client.MatchingLabels{
-		"app.kubernetes.io/managed-by": managedBy,
-	}); err != nil {
+	if err := w.client.List(ctx, list, managedByUs(w.annotationPrefix, managedBy)...); err != nil {
 		return nil, err
 	}
-	result := make([]client.Object, len(list.Items))
+	var result []client.Object
 	for i := range list.Items {
-		result[i] = &list.Items[i]
+		result = append(result, &list.Items[i])
 	}
-	return result, nil
+	return keepKinds(result, w.annotationPrefix, OwnerKindHTTPRoute), nil
 }
 
 // IsOrphaned reports whether the given Middleware no longer has a valid owner HTTPRoute.
@@ -169,20 +167,30 @@ func (w *TraefikL7Writer) Delete(ctx context.Context, obj client.Object) error {
 }
 
 // DeleteForRoute deletes all Middlewares owned by the given route and removes the
-// extensionRef filter from the HTTPRoute's rules.
+// extensionRef filter from the HTTPRoute's rules, unless the Middleware it points to isn't ours.
 func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNamespace, routeName string) error {
 	list := &TraefikMiddlewareList{}
-	if err := w.client.List(ctx, list, client.MatchingLabels{
-		"app.kubernetes.io/managed-by":          managedBy,
-		w.annotationPrefix + "/owner-namespace": LabelSafe(routeNamespace),
-		w.annotationPrefix + "/owner-name":      LabelSafe(routeName),
-	}); err != nil {
+	if err := w.client.List(ctx, list, ownedBy(w.annotationPrefix, managedBy, routeNamespace, routeName)...); err != nil {
 		return err
 	}
 	for i := range list.Items {
+		if ownerKind(&list.Items[i], w.annotationPrefix) != OwnerKindHTTPRoute {
+			continue
+		}
 		if err := deleteLogged(ctx, w.client, &list.Items[i], "Middleware", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
 			return err
 		}
+	}
+
+	// The filter points to the Middleware named after the route. If that one isn't ours, the
+	// filter is someone else's too (e.g. a team's own Middleware): it stays.
+	named := &TraefikMiddleware{}
+	err := w.client.Get(ctx, types.NamespacedName{Namespace: routeNamespace, Name: routeName}, named)
+	if client.IgnoreNotFound(err) != nil {
+		return err
+	}
+	if err == nil && !isOurs(named, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName, "") {
+		return nil
 	}
 
 	route := &gatewayApiv1.HTTPRoute{}

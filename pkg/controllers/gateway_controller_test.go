@@ -46,7 +46,7 @@ func newGatewayReconciler(t *testing.T, k8sClient client.Client, scheme *runtime
 	t.Helper()
 	resolver := newTestCidrResolver(k8sClient)
 	l4Writers := writers.L4WriterRegistry{
-		writers.IstioControllerName: writers.NewIstioL4Writer(k8sClient),
+		writers.IstioControllerName: writers.NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com"),
 	}
 	return &GatewayAllowlistingReconciler{Client: k8sClient, CidrResolver: resolver, Scheme: scheme, L4Writers: l4Writers}
 }
