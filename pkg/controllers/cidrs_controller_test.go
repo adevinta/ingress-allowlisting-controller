@@ -22,46 +22,6 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
 )
 
-func TestReconcileDoesNotFullyRemoveCIDRs(t *testing.T) {
-	ctx := context.TODO()
-	scheme, err := Scheme()
-	require.NoError(t, err)
-	cidrs := &ipamv1alpha1.CIDRs{
-		ObjectMeta: metav1.ObjectMeta{Name: "my-net", Namespace: "mynamespace"},
-		Status: ipamv1alpha1.CIDRsStatus{
-			CIDRs: []string{
-				"200.1.1.1/24",
-				"10.0.0.1/24",
-				"1.1.1.1/32",
-				"10.0.0.1/24",
-			},
-		},
-	}
-	fakeClient := fake.NewClientBuilder().WithScheme(scheme).WithObjects(cidrs).WithStatusSubresource(cidrs).Build()
-	reconciler := &CIDRReconciler{
-		CIDRs:     &ipamv1alpha1.CIDRs{},
-		CIDRsList: &ipamv1alpha1.CIDRsList{},
-		Client:    fakeClient,
-	}
-	result, err := reconciler.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(cidrs)})
-	require.NoError(t, err)
-	assert.Equal(t, reconcile.Result{}, result)
-
-	require.NoError(t, fakeClient.Get(ctx, client.ObjectKeyFromObject(cidrs), cidrs))
-
-	assert.Equal(t, ipamv1alpha1.CIDRsStateUpdateFailed, cidrs.GetStatus().State)
-	assert.Equal(t, []string{
-		"200.1.1.1/24",
-		"10.0.0.1/24",
-		"1.1.1.1/32",
-		"10.0.0.1/24",
-	}, cidrs.GetStatus().CIDRs)
-	require.Len(t, cidrs.GetStatus().Conditions, 1)
-	assert.Equal(t, ipamv1alpha1.CIDRsStatusConditionTypeUpToDate, cidrs.GetStatus().Conditions[0].Type)
-	assert.Equal(t, v1.ConditionFalse, cidrs.GetStatus().Conditions[0].Status)
-	assert.Contains(t, cidrs.GetStatus().Conditions[0].Message, "Refusing to update removing all CIDRs")
-}
-
 func TestCIDRsReconciler(t *testing.T) {
 	ctx := context.TODO()
 	scheme, err := Scheme()

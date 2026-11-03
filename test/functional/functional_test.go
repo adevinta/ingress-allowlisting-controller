@@ -222,6 +222,15 @@ func runTargetScenarios(t *testing.T, env scenarioEnv, tg target) {
 		otherInstanceScenario(t, env, tg, inline)
 	})
 
+	t.Run("revoke-inline", func(t *testing.T) {
+		// Emptying spec.cidrs of an object without a source revokes access: deny-all, not the old
+		// list. Last of the shared scenarios: the ones above use this object.
+		if err := setInlineCIDRs(ctx, c, ns, inline, nil); err != nil {
+			t.Fatalf("emptying CIDRs: %v", err)
+		}
+		expectAllowlist(t, "emptied inline CIDRs to revoke access", observe(inline), exactly(denyAll))
+	})
+
 	if tg.extraScenarios != nil {
 		tg.extraScenarios(t, env)
 	}

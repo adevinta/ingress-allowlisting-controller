@@ -162,7 +162,7 @@ func getIpsFromAnnotation(ctx context.Context, annotationValue string, resolver 
 	}
 
 	if (len(allowNames) > 0) && len(allowedIps) == 0 {
-		allowedIps = []string{"127.0.0.2/32"}
+		allowedIps = []string{DenyAllCIDR}
 		log.Warnf("No valid CIDRsList object found for '%s'. Check object exists and annotation is comma-separated. %s %s configured to DenyAll", annotationValue, object.GetObjectKind().GroupVersionKind().Kind, object.GetName())
 	}
 	return allowedIps, nil
@@ -229,6 +229,11 @@ func eventReference(c client.Client, object client.Object) runtime.Object {
 		UID:        object.GetUID(),
 	}
 }
+
+// DenyAllCIDR stands for "nothing is allowed" where a list must not be empty: no client has this
+// loopback address. The destinations of an object whose CIDRs all resolve to nothing get it, and so
+// does the status of a CIDRs object without a source whose spec.cidrs has no valid entry.
+const DenyAllCIDR = "127.0.0.2/32"
 
 type CidrResolver struct {
 	Client           client.Client
