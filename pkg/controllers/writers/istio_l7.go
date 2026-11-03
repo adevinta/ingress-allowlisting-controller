@@ -56,14 +56,9 @@ func NewIstioL7Writer(c client.Client, managedBy string, cidrResolver resolvers.
 	}
 }
 
-// applyLabels sets standard managed-by and owner labels on the policy.
-func (w *IstioL7Writer) applyLabels(policy *istiosecurityv1.AuthorizationPolicy, ownerNamespace, ownerName string) {
-	if policy.Labels == nil {
-		policy.Labels = map[string]string{}
-	}
-	policy.Labels["app.kubernetes.io/managed-by"] = w.managedBy
-	policy.Labels[w.annotationPrefix+"/owner-namespace"] = LabelSafe(ownerNamespace)
-	policy.Labels[w.annotationPrefix+"/owner-name"] = LabelSafe(ownerName)
+// applyLabels sets the ownership labels on the policy (see ownership.go).
+func (w *IstioL7Writer) applyLabels(policy *istiosecurityv1.AuthorizationPolicy, kind, ownerNamespace, ownerName string) {
+	setOwnerLabels(policy, w.annotationPrefix, w.managedBy, kind, ownerNamespace, ownerName)
 }
 
 // policyName computes the AP name and namespace for a given route+gateway+paths.
@@ -154,7 +149,7 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 				return err
 			}
 		}
-		w.applyLabels(policy, route.Namespace, route.Name)
+		w.applyLabels(policy, OwnerKindHTTPRoute, route.Namespace, route.Name)
 		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 			Rules:  rules,
@@ -173,14 +168,13 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 // ListManaged returns all AuthorizationPolicies managed by this controller (identified by managedBy label).
 func (w *IstioL7Writer) ListManaged(ctx context.Context, managedBy string) ([]client.Object, error) {
 	list := &istiosecurityv1.AuthorizationPolicyList{}
-	if err := w.client.List(ctx, list, client.MatchingLabels{
-		"app.kubernetes.io/managed-by": managedBy,
-	}); err != nil {
+	if err := w.client.List(ctx, list, managedByUs(w.annotationPrefix, managedBy)...); err != nil {
 		return nil, err
 	}
-	result := make([]client.Object, len(list.Items))
-	for i, item := range list.Items {
-		result[i] = item
+	// The policies of routes and merge groups only: the Gateway policies are the L4 writer's.
+	var result []client.Object
+	for _, item := range keepKinds(list.Items, w.annotationPrefix, OwnerKindHTTPRoute, OwnerKindMerged) {
+		result = append(result, item)
 	}
 	return result, nil
 }
@@ -231,15 +225,13 @@ func (w *IstioL7Writer) Delete(ctx context.Context, obj client.Object) error {
 // DeleteForRoute deletes all APs owned by the given route, identified by owner labels.
 func (w *IstioL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNamespace, routeName string) error {
 	list := &istiosecurityv1.AuthorizationPolicyList{}
-	if err := w.client.List(ctx, list, client.MatchingLabels{
-		"app.kubernetes.io/managed-by":          managedBy,
-		w.annotationPrefix + "/owner-namespace": LabelSafe(routeNamespace),
-		w.annotationPrefix + "/owner-name":      LabelSafe(routeName),
-	}); err != nil {
+	if err := w.client.List(ctx, list, ownedBy(w.annotationPrefix, managedBy, routeNamespace, routeName)...); err != nil {
 		return err
 	}
-	for i := range list.Items {
-		if err := deleteLogged(ctx, w.client, list.Items[i], "AuthorizationPolicy", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
+	// The route's policies only: a Gateway with the same namespace and name has its own.
+	items := keepKinds(list.Items, w.annotationPrefix, OwnerKindHTTPRoute)
+	for i := range items {
+		if err := deleteLogged(ctx, w.client, items[i], "AuthorizationPolicy", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
 			return err
 		}
 	}

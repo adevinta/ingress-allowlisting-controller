@@ -216,17 +216,34 @@ func TestTraefikL7Writer_DeleteForRoute_RemovesFilters(t *testing.T) {
 }
 
 // TestTraefikL7Writer_ListManaged verifies only managed Middlewares are returned.
+// TestTraefikL7Writer_ListManaged verifies that only this instance's Middlewares are listed: the
+// managed-by label alone isn't enough, the owner labels under our annotation prefix decide.
 func TestTraefikL7Writer_ListManaged(t *testing.T) {
 	managed := &TraefikMiddleware{
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "managed", Namespace: "mynamespace",
-			Labels: map[string]string{"app.kubernetes.io/managed-by": "ingress-allowlisting-controller"},
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-namespace": "mynamespace",
+				"ipam.adevinta.com/owner-name":      "my-route",
+			},
+		},
+	}
+	otherInstance := &TraefikMiddleware{
+		ObjectMeta: metav1.ObjectMeta{
+			Name: "other-instance", Namespace: "mynamespace",
+			Labels: map[string]string{
+				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"other.example.com/owner-kind":      "HTTPRoute",
+				"other.example.com/owner-name":      "my-route",
+				"other.example.com/owner-namespace": "mynamespace",
+			},
 		},
 	}
 	unmanaged := &TraefikMiddleware{
 		ObjectMeta: metav1.ObjectMeta{Name: "unmanaged", Namespace: "mynamespace"},
 	}
-	k8sClient := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(managed, unmanaged).Build()
+	k8sClient := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(managed, otherInstance, unmanaged).Build()
 	w := newTraefikWriter(k8sClient)
 
 	objs, err := w.ListManaged(context.Background(), "ingress-allowlisting-controller")

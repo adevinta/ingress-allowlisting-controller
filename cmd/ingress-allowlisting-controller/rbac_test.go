@@ -25,7 +25,7 @@ var allFeatures = rbacFeatures{ingress: true, gateway: true, networkPolicy: true
 // allWriters is every writer, as registered when both Istio and Traefik are installed.
 func allWriters() (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 	resolver := resolvers.CidrResolver{AnnotationPrefix: resolvers.DefaultPrefix}
-	return writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil)},
+	return writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil, "ingress-allowlisting-controller", "ipam.adevinta.com")},
 		writers.L7WriterRegistry{
 			writers.IstioControllerName:   writers.NewIstioL7Writer(nil, "test", resolver),
 			writers.TraefikControllerName: writers.NewTraefikL7Writer(nil, "test", resolver),

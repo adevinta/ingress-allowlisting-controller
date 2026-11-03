@@ -37,7 +37,7 @@ func TestWritersLogOnlyRealChanges(t *testing.T) {
 	ctx := context.Background()
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	c := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(c)
+	w := NewIstioL4Writer(c, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	lines := infoLines(t, func() { require.NoError(t, w.Apply(ctx, istioL4Scheme, gw, []string{"10.0.0.0/8"})) })
 	require.Len(t, lines, 1)

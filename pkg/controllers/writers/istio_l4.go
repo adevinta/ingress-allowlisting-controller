@@ -16,12 +16,15 @@ import (
 
 // IstioL4Writer creates/deletes Istio AuthorizationPolicies for Gateway-level (L4) allowlisting.
 type IstioL4Writer struct {
-	client client.Client
+	client           client.Client
+	managedBy        string
+	annotationPrefix string
 }
 
-// NewIstioL4Writer returns a new IstioL4Writer using the provided client.
-func NewIstioL4Writer(c client.Client) *IstioL4Writer {
-	return &IstioL4Writer{client: c}
+// NewIstioL4Writer returns a new IstioL4Writer. managedBy and annotationPrefix go into the
+// ownership labels of the policies it creates (see ownership.go).
+func NewIstioL4Writer(c client.Client, managedBy, annotationPrefix string) *IstioL4Writer {
+	return &IstioL4Writer{client: c, managedBy: managedBy, annotationPrefix: annotationPrefix}
 }
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
@@ -42,6 +45,7 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
 			return err
 		}
+		setOwnerLabels(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name)
 		policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 			Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 			Rules: []*istioApiSecurityV1.Rule{

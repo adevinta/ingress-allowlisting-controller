@@ -33,7 +33,7 @@ func testL4Gateway(name, namespace string) *gatewayApiv1.Gateway {
 func TestIstioL4Writer_Apply_CreatesAP(t *testing.T) {
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(k8sClient)
+	w := NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	err := w.Apply(context.Background(), istioL4Scheme, gw, []string{"10.0.0.0/8"})
 	assert.NoError(t, err)
@@ -47,7 +47,7 @@ func TestIstioL4Writer_Apply_CreatesAP(t *testing.T) {
 func TestIstioL4Writer_Apply_SetsOwnerReference(t *testing.T) {
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(k8sClient)
+	w := NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	err := w.Apply(context.Background(), istioL4Scheme, gw, []string{"10.0.0.0/8"})
 	assert.NoError(t, err)
@@ -63,7 +63,7 @@ func TestIstioL4Writer_Apply_SetsOwnerReference(t *testing.T) {
 func TestIstioL4Writer_Apply_UpdatesExistingAP(t *testing.T) {
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(k8sClient)
+	w := NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	assert.NoError(t, w.Apply(context.Background(), istioL4Scheme, gw, []string{"10.0.0.0/8"}))
 	assert.NoError(t, w.Apply(context.Background(), istioL4Scheme, gw, []string{"192.168.0.0/16"}))
@@ -76,7 +76,7 @@ func TestIstioL4Writer_Apply_UpdatesExistingAP(t *testing.T) {
 func TestIstioL4Writer_Delete_RemovesAP(t *testing.T) {
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(k8sClient)
+	w := NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	assert.NoError(t, w.Apply(context.Background(), istioL4Scheme, gw, []string{"10.0.0.0/8"}))
 	assert.NoError(t, w.Delete(context.Background(), gw))
@@ -89,7 +89,7 @@ func TestIstioL4Writer_Delete_RemovesAP(t *testing.T) {
 func TestIstioL4Writer_Delete_ToleratesNotFound(t *testing.T) {
 	gw := testL4Gateway("my-gateway", "mynamespace")
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL4Scheme).WithObjects(gw).Build()
-	w := NewIstioL4Writer(k8sClient)
+	w := NewIstioL4Writer(k8sClient, "ingress-allowlisting-controller", "ipam.adevinta.com")
 
 	assert.NoError(t, w.Delete(context.Background(), gw))
 }

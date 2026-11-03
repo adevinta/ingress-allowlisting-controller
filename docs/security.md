@@ -176,14 +176,26 @@ Kubernetes does not support cross-namespace owner references, so cross-namespace
 `AuthorizationPolicy` resources cannot be garbage-collected automatically when their
 `HTTPRoute` is deleted.
 
-**Automatic cleanup on restart:** every time the controller starts it runs a one-time sweep
-over all resources it owns (identified by `app.kubernetes.io/managed-by=ingress-allowlisting-controller`).
-Any resource whose owner no longer exists is deleted. Restarting the controller is sufficient
-to clean up orphans.
+**Which resources are the controller's:** every AuthorizationPolicy and Traefik Middleware it
+creates carries these labels, `<prefix>` being `--annotation-prefix`:
 
-**Hard reset:**
+| Label | Value |
+|---|---|
+| `app.kubernetes.io/managed-by` | `ingress-allowlisting-controller` |
+| `<prefix>/owner-kind` | `Gateway`, `HTTPRoute` or `Merged` |
+| `<prefix>/owner-namespace`, `<prefix>/owner-name` | the owner (`MERGED` and the merge key for a merge group) |
+
+The labels under the prefix are what makes a resource the controller's, so two instances with
+different prefixes don't touch each other's resources. Policies created before `owner-kind`
+existed get it on their next update.
+
+**Automatic cleanup on restart:** every time the controller starts it runs a one-time sweep
+over the HTTPRoute resources it owns. Any resource whose owner no longer exists is deleted.
+Restarting the controller is sufficient to clean up orphans.
+
+**Hard reset** (here for the default prefix; only this instance's resources):
 ```bash
-kubectl delete authorizationpolicies -A -l app.kubernetes.io/managed-by=ingress-allowlisting-controller
+kubectl delete authorizationpolicies -A -l app.kubernetes.io/managed-by=ingress-allowlisting-controller,ipam.adevinta.com/owner-name
 kubectl rollout restart deployment/ingress-allowlisting-controller -n <namespace>
 ```
 

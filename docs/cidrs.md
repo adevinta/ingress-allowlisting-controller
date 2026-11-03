@@ -316,7 +316,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 
 | Flag | Default | Description |
 |---|---|---|
-| `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations. Change this to run two instances of the controller side-by-side without annotation conflicts. |
+| `--annotation-prefix` | `ipam.adevinta.com` | Prefix for all controller annotations, and for the ownership labels on the resources it creates. Change this to run two instances of the controller side by side: each acts only on its own annotations and its own resources. |
 | `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). Requires `--cidr-source-allowlist`; only Secrets and ConfigMaps matching `--secret-label-selector` can be read. While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. See [Headers from Secrets and ConfigMaps](#headers-from-secrets-and-configmaps-headersfrom). |
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
