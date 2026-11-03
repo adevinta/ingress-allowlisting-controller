@@ -8,6 +8,7 @@ import (
 	"k8s.io/apimachinery/pkg/types"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
+	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
@@ -60,7 +61,7 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 	middleware := &TraefikMiddleware{
 		ObjectMeta: metav1.ObjectMeta{Name: route.Name, Namespace: route.Namespace},
 	}
-	_, err := ctrl.CreateOrUpdate(ctx, w.client, middleware, func() error {
+	op, err := ctrl.CreateOrUpdate(ctx, w.client, middleware, func() error {
 		if err := ctrl.SetControllerReference(route, middleware, scheme); err != nil {
 			return err
 		}
@@ -73,6 +74,7 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 	if err != nil {
 		return err
 	}
+	logChange(ctx, op, "Middleware", middleware, "HTTPRoute "+route.Namespace+"/"+route.Name)
 	return w.ensureHTTPRouteFilters(ctx, route, route.Name)
 }
 
@@ -95,7 +97,11 @@ func (w *TraefikL7Writer) ensureHTTPRouteFilters(ctx context.Context, route *gat
 	if !changed {
 		return nil
 	}
-	return w.client.Patch(ctx, latest, patch)
+	if err := w.client.Patch(ctx, latest, patch); err != nil {
+		return err
+	}
+	logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", latest, "Middleware filter "+mwName+" added")
+	return nil
 }
 
 // traefikFilter is the filter that attaches the Middleware mwName to a route rule. Adding
@@ -174,7 +180,7 @@ func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNa
 		return err
 	}
 	for i := range list.Items {
-		if err := client.IgnoreNotFound(w.client.Delete(ctx, &list.Items[i])); err != nil {
+		if err := deleteLogged(ctx, w.client, &list.Items[i], "Middleware", "HTTPRoute "+routeNamespace+"/"+routeName+" no longer uses this writer"); err != nil {
 			return err
 		}
 	}
@@ -203,5 +209,9 @@ func (w *TraefikL7Writer) removeHTTPRouteFilters(ctx context.Context, route *gat
 	if !changed {
 		return nil
 	}
-	return w.client.Patch(ctx, route, patch)
+	if err := w.client.Patch(ctx, route, patch); err != nil {
+		return err
+	}
+	logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", route, "Middleware filter "+mwName+" removed")
+	return nil
 }

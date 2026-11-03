@@ -44,7 +44,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		resolvers.ForgetObject(req.Namespace, "Gateway", req.Name)
 		return ctrl.Result{}, nil
 	}
-	log.Infof("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
+	log.Debugf("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
 
 	// Resolve GatewayClass and writer first — needed for both apply and delete paths.
 	gwClass := &gatewayApiv1.GatewayClass{}
@@ -85,7 +85,7 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	if err := writer.Apply(ctx, r.Scheme, &gateway, allowedIps); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.Infof("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())
+	log.Debugf("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())
 
 	return ctrl.Result{}, nil
 }

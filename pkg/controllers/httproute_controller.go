@@ -82,7 +82,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 		return ctrl.Result{}, nil
 	}
-	log.Infof("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
+	log.Debugf("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
 
 	parentRefs := gateway.GatewayParentRefs(&httproute)
 
@@ -210,21 +210,21 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
 				return ctrl.Result{}, err
 			}
-			log.Infof("policy (host) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
+			log.Debugf("policy (host) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
 		default:
 			// granularity=rule (default): one policy per HTTPRoute rule.
 			for ruleIdx, paths := range rulePaths {
 				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, paths); err != nil {
 					return ctrl.Result{}, err
 				}
-				log.Infof("policy (rule) created/updated for HTTPRoute %s rule %d → gateway %s/%s", httproute.GetName(), ruleIdx, gateway.Namespace, gateway.Name)
+				log.Debugf("policy (rule) created/updated for HTTPRoute %s rule %d → gateway %s/%s", httproute.GetName(), ruleIdx, gateway.Namespace, gateway.Name)
 			}
 			// Fallback: HTTPRoute with no rules — single policy, no path restriction.
 			if len(rulePaths) == 0 {
 				if err := writer.Apply(ctx, r.Scheme, &httproute, gateway, allowedIps, hostnames, nil); err != nil {
 					return ctrl.Result{}, err
 				}
-				log.Infof("policy (rule/fallback) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
+				log.Debugf("policy (rule/fallback) created/updated for HTTPRoute %s → gateway %s/%s", httproute.GetName(), gateway.Namespace, gateway.Name)
 			}
 		}
 		invokedWriters[controllerName] = struct{}{}
@@ -237,7 +237,7 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
 				return ctrl.Result{}, err
 			}
-			log.Infof("deleted stale policies for writer %s — no matching parentRef for HTTPRoute %s", controllerName, httproute.GetName())
+			log.Debugf("deleted stale policies for writer %s — no matching parentRef for HTTPRoute %s", controllerName, httproute.GetName())
 		}
 	}
 
@@ -419,7 +419,7 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 			if err := mw.DeleteMerged(ctx, gatewayNS, mergeKey); err != nil {
 				return err
 			}
-			log.Infof("Deleted orphaned merged AP %q — no siblings remain in group", mergeKey)
+			log.Debugf("Deleted orphaned merged AP %q — no siblings remain in group", mergeKey)
 		}
 	}
 	return nil
@@ -476,14 +476,14 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 		if err := writer.DeleteMerged(ctx, gateway.Namespace, mergeKey); err != nil {
 			return err
 		}
-		log.Infof("Deleted merged AuthorizationPolicy for empty group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
+		log.Debugf("Deleted merged AuthorizationPolicy for empty group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
 		return nil
 	}
 
 	if err := writer.ApplyMerged(ctx, gateway, siblings, mergeKey); err != nil {
 		return err
 	}
-	log.Infof("Merged AuthorizationPolicy created/updated for merge group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
+	log.Debugf("Merged AuthorizationPolicy created/updated for merge group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)
 	return nil
 }
 

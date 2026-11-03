@@ -38,7 +38,7 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 			Namespace: gateway.Namespace,
 		},
 	}
-	_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
+	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
 			return err
 		}
@@ -61,6 +61,9 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 		}
 		return nil
 	})
+	if err == nil {
+		logChange(ctx, op, "AuthorizationPolicy", policy, "Gateway "+gateway.Name)
+	}
 	return err
 }
 
@@ -72,5 +75,5 @@ func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gatewa
 			Namespace: gateway.Namespace,
 		},
 	}
-	return client.IgnoreNotFound(w.client.Delete(ctx, policy))
+	return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "Gateway "+gateway.Name)
 }
