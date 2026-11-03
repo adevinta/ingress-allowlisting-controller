@@ -55,6 +55,7 @@ For every resource kind the controller has enabled (read from the controller's o
 | `missing-cidrs` | a reference to a CIDRs object that does not exist gives the deny-all `127.0.0.2/32` |
 | `isolation` | a reference to a CIDRs object that exists only in the **other** test namespace gives deny-all, never that namespace's CIDRs |
 | `other-instance` | another instance's things are left alone, watched for 30s each, see [Two instances](#two-instances) |
+| `revoke-inline` | emptying the inline CIDRs of the `inline` object revokes access: deny-all `127.0.0.2/32`, not the old list |
 
 Once per run, independent of the resource kinds, `conditions` checks the CIDRs object's
 `UpToDate` condition with a source that keeps failing:

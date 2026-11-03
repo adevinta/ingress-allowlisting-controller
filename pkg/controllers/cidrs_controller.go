@@ -37,6 +37,7 @@ import (
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
 // normalizeCIDR returns s as a CIDR: a CIDR as written (10.0.0.5/8 stays 10.0.0.5/8), a bare IP as
@@ -82,6 +83,16 @@ func normalizeInlineCIDRs(values []string) (cidrs, invalid []string) {
 		}
 	}
 	return cidrs, invalid
+}
+
+// fetchFailedMessage is the condition message of a failed fetch. The last good status is kept
+// whole, inline entries included, so it says that edits to spec.cidrs wait for the source too.
+func fetchFailedMessage(err error, hasInline bool) string {
+	message := fmt.Sprintf("Failed to get CIDRs from http source: %v", err)
+	if hasInline {
+		message += " (spec.cidrs changes apply once the source works again; keep inline entries in their own CIDRs object to change them independently)"
+	}
+	return message
 }
 
 // quoteFirst quotes the first max values, comma-separated, and says how many more there are.
@@ -138,12 +149,20 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		status.UpsertCondition(ipamv1alpha1.Condition{
 			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
 			Status:  v1.ConditionFalse,
-			Message: fmt.Sprintf("Failed to get CIDRs from http source: %v", fetchErr),
+			Message: fetchFailedMessage(fetchErr, len(specs.CIDRsSource.CIDRs) > 0),
 		})
 	} else {
 		// Like the condition, state says how this reconcile went: an earlier failure must not stick.
 		status.State = ipamv1alpha1.CIDRsStateReady
 		message := "All CIDRs are up to date"
+		if specs.CIDRsSource.Location.URI == "" && len(status.CIDRs) == 0 {
+			// No source and no valid inline entry: whoever wrote it means nothing is allowed. An
+			// empty status would be refused below as removing all CIDRs, and the old list would
+			// stay allowed, so the status says it with the deny-all address. Only the status: the
+			// spec stays as written, and the next reconcile rebuilds the status from it.
+			status.CIDRs = []string{resolvers.DenyAllCIDR}
+			message = "spec.cidrs has no valid entry and there is no source: nothing is allowed (" + resolvers.DenyAllCIDR + ")"
+		}
 		if dropped > 0 {
 			// A count, never the values: a misconfigured CEL expression stays visible without
 			// echoing the response.

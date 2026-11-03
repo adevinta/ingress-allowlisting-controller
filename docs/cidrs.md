@@ -344,8 +344,23 @@ Every key is optional; an unset key keeps the default. Things to know:
   list is kept. CIDRs are kept as written (`10.0.0.5/8` is not changed to `10.0.0.0/8`).
 - A bare IP address becomes a host route, `/32` for IPv4 and `/128` for IPv6, in both remote
   (YAML, JSON or CSV) and inline values. Valid inline CIDRs are kept as written.
-- If none of the named objects exist, the controller logs a warning and writes a deny-all
-  policy (empty source range) to fail safe.
+- If none of the named objects exist, the controller logs a warning and writes the deny-all
+  address `127.0.0.2/32` (no client has it) to fail safe.
+- **Revoking inline CIDRs:** emptying `spec.cidrs` of an object without a source (or leaving only
+  invalid entries in it) revokes access. The status gets `127.0.0.2/32`, the condition says
+  `spec.cidrs has no valid entry and there is no source: nothing is allowed (127.0.0.2/32)`, and the
+  destinations deny all. The address is written to the status only, never to the spec, so GitOps
+  sees no drift; once `spec.cidrs` has entries again, or a source is added, the status is just
+  those.
+- **A source returning nothing is not a revocation:** an empty or unusable response is treated
+  as a broken feed, and the last good list is kept (see
+  [Retrying a failed fetch](#retrying-a-failed-fetch)). Whether a feed is still worth following
+  is for the cluster admin to decide.
+- **Keep inline entries and a source in separate objects.** While the source of an object fails,
+  its whole last good status is kept, inline entries included, so changes to its `spec.cidrs`
+  (removals too) only apply once the source works again; the condition says so. With the inline
+  entries in their own CIDRs object, listed next to the source's in the annotation
+  (`office-feed,office-exceptions`), they can be changed at any time.
 
 ---
 
