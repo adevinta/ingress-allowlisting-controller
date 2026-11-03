@@ -10,7 +10,6 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/util/retry"
-	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
@@ -193,7 +192,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 		policy := &istiosecurityv1.AuthorizationPolicy{
 			ObjectMeta: metav1.ObjectMeta{Name: mergeKey, Namespace: gateway.Namespace},
 		}
-		_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+		_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 			// The merge key is user-chosen and doubles as the AP name, so it can point at any
 			// AP in the gateway namespace (e.g. an admin-authored DENY). Only the merged AP of
 			// this group may be taken over; ResourceVersion is set only when the AP exists.

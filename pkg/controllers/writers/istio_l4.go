@@ -38,7 +38,7 @@ func (w *IstioL4Writer) Apply(ctx context.Context, scheme *runtime.Scheme, gatew
 			Namespace: gateway.Namespace,
 		},
 	}
-	_, err := ctrl.CreateOrUpdate(ctx, w.client, policy, func() error {
+	_, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
 		if err := ctrl.SetControllerReference(gateway, policy, scheme); err != nil {
 			return err
 		}
