@@ -10,11 +10,16 @@ import (
 	"github.com/stretchr/testify/assert"
 	netv1 "k8s.io/api/networking/v1"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/client-go/util/workqueue"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
+	"sigs.k8s.io/controller-runtime/pkg/event"
+	"sigs.k8s.io/controller-runtime/pkg/reconcile"
+	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
 // failingListClient returns a fake client whose List always fails, like a cache that isn't synced.
@@ -60,6 +65,24 @@ func TestWatchMappersLogDroppedChanges(t *testing.T) {
 
 		assert.Empty(t, mapper(context.Background(), secret))
 		assert.Contains(t, logs.String(), "dropped change of header source team-a/token: listing *v1alpha1.CIDRsList")
+		assert.Contains(t, logs.String(), "cache not synced")
+	})
+
+	t.Run("HTTPRoute leaving a merge group to the group's members", func(t *testing.T) {
+		logs := captureLogs(t)
+		r := &HTTPRouteAllowlistingReconciler{Client: failingListClient(), CidrResolver: resolvers.CidrResolver{AnnotationPrefix: resolvers.DefaultPrefix}}
+		route := func(mergeKey string) *gatewayApiv1.HTTPRoute {
+			return &gatewayApiv1.HTTPRoute{ObjectMeta: v1.ObjectMeta{Name: "my-route", Namespace: "team-a",
+				Annotations: map[string]string{"ipam.adevinta.com/merge": mergeKey}}}
+		}
+		q := workqueue.NewTypedRateLimitingQueue(workqueue.DefaultTypedControllerRateLimiter[reconcile.Request]())
+		defer q.ShutDown()
+
+		r.mergeSiblingEnqueuer().Update(context.Background(), event.UpdateEvent{ObjectOld: route("my-group"), ObjectNew: route("other")}, q)
+
+		assert.Zero(t, q.Len())
+		assert.Contains(t, logs.String(), "dropped merge group change of HTTPRoute team-a/my-route: listing *v1.HTTPRouteList")
+		assert.Contains(t, logs.String(), `group \"my-group\"`)
 		assert.Contains(t, logs.String(), "cache not synced")
 	})
 }

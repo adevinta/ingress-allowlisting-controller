@@ -529,6 +529,10 @@ func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHa
 			// Route left merge group oldKey — enqueue all current members so they rebuild
 			routes := &gatewayApiv1.HTTPRouteList{}
 			if err := r.List(ctx, routes); err != nil {
+				// Only this requeue rebuilds the old group's merged policy, so until then it still
+				// allows the route that left.
+				log.DefaultLogger.WithContext(ctx).Errorf("dropped merge group change of HTTPRoute %s: listing %T failed, the merged AuthorizationPolicy of group %q keeps the route until a member of the group changes or the resync: %v",
+					client.ObjectKeyFromObject(e.ObjectNew), routes, oldKey, err)
 				return
 			}
 			for _, route := range routes.Items {
