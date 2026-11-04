@@ -3,6 +3,7 @@ package controllers
 import (
 	"context"
 	"errors"
+	"fmt"
 	"reflect"
 
 	netv1 "k8s.io/api/networking/v1"
@@ -55,9 +56,16 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 			return ctrl.Result{}, nil
 		}
-		if err == ErrMultipleRulesNotSupported {
-			log.Error(ErrMultipleRulesNotSupported)
-			return ctrl.Result{}, err
+		if errors.Is(err, ErrMultipleRulesNotSupported) {
+			// A retry can't fix it, only editing the NetworkPolicy can, and that reconciles it again.
+			// So no error (it would be retried forever and count as a controller error): a warning,
+			// and a Warning Event on the object for whoever owns it.
+			msg := fmt.Sprintf("has %d ingress and %d egress rules: the controller only manages a NetworkPolicy with at most one of each, left as it is. "+
+				"Split it into NetworkPolicies of one rule each: they add up, so together they allow the same",
+				len(networkpolicy.Spec.Ingress), len(networkpolicy.Spec.Egress))
+			log.Warnf("NetworkPolicy %s/%s %s", networkpolicy.Namespace, networkpolicy.Name, msg)
+			r.CidrResolver.WarningEvent(&networkpolicy, "MultipleRulesNotSupported", "UpdateNetworkPolicy", msg)
+			return ctrl.Result{}, nil
 		}
 		log.Error(err, "Error creating or updating networkpolicy")
 		return ctrl.Result{}, err
