@@ -78,3 +78,26 @@ type L4WriterRegistry map[string]L4PolicyWriter
 
 // L7WriterRegistry maps GatewayClass controllerName to an L7PolicyWriter.
 type L7WriterRegistry map[string]L7PolicyWriter
+
+// Warning is returned by a writer when it can't write the allowlist, or writes it without effect,
+// for a reason a person has to fix: a missing reference, an object shared with another allowlist, a
+// setting that overrides it. The controller records it as a Warning Event and a log warning, and
+// doesn't retry: a retry wouldn't change anything. The next reconcile of the object (a change to it
+// or its CIDRs) tries again.
+type Warning struct {
+	Reason  string // the Event reason, one of the Reason constants
+	Message string
+}
+
+func (w *Warning) Error() string { return w.Message }
+
+// The reasons of the Warning Events about allowlists that can't be written, or have no effect.
+const (
+	// ReasonAllowlistPolicyConflict: the object the allowlist goes into is someone else's, or shared
+	// with another allowlist.
+	ReasonAllowlistPolicyConflict = "AllowlistPolicyConflict"
+	// ReasonAllowlistTargetMissing: the object the allowlist goes into isn't referenced, or doesn't exist.
+	ReasonAllowlistTargetMissing = "AllowlistTargetMissing"
+	// ReasonAllowlistIneffective: the allowlist was written, but another setting makes it have no effect.
+	ReasonAllowlistIneffective = "AllowlistIneffective"
+)

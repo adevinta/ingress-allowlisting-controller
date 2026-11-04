@@ -1,6 +1,7 @@
 # Gateway API — Gateway & HTTPRoute
 
-**Requires:** [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/) + Istio or Traefik
+**Requires:** [Kubernetes Gateway API CRDs](https://gateway-api.sigs.k8s.io/) + Istio, Traefik or the
+AWS Load Balancer Controller
 
 The controller supports `Gateway` and `HTTPRoute` resources from the Kubernetes Gateway API.
 The output depends on which ingress controller is installed:
@@ -9,10 +10,11 @@ The output depends on which ingress controller is installed:
 |---|---|---|
 | Istio (`istio.io/gateway-controller`) | `AuthorizationPolicy` (L4) | `AuthorizationPolicy` (L7) |
 | Traefik (`traefik.io/gateway-controller`) | _(not applicable)_ | `Middleware` (IPAllowList) |
+| AWS Load Balancer Controller (`gateway.k8s.aws/alb`, `gateway.k8s.aws/nlb`) | `sourceRanges` of its `LoadBalancerConfiguration` (L4, security group) | _(not yet)_ |
 
 **Auto-detection:** the controller checks at startup which CRDs are present (`AuthorizationPolicy`,
-`Middleware`) and registers only the relevant writers. No flags are needed; both can be active
-simultaneously on a cluster that runs both Istio and Traefik.
+`Middleware`, `LoadBalancerConfiguration`) and registers only the relevant writers. No flags are
+needed beyond the ones below; all can be active on one cluster.
 
 Enable Gateway API support:
 ```yaml
@@ -36,7 +38,9 @@ Or directly: `--gateway-support-enabled --httproute-support-enabled`.
 Both accept a comma-separated list. Apply them to the `Gateway` or `HTTPRoute` object.
 
 Removing the annotation deletes the AuthorizationPolicy or Middleware the controller created for
-the object, so its allowlist is lifted.
+the object, so its allowlist is lifted. For an AWS Gateway the last `sourceRanges` stay: the
+controller only modifies that `LoadBalancerConfiguration`, and removing them would open the load
+balancer to everyone (see [below](#gateway--aws-load-balancer-controller-l4)).
 
 The Service the implementation creates for a Gateway inherits the Gateway's annotations (Istio),
 but `--service-support-enabled` leaves it alone: `loadBalancerSourceRanges` there would apply at the
@@ -94,6 +98,78 @@ The AP is owned by the Gateway and garbage-collected automatically when the Gate
 > **Do not mix Gateway-level and HTTPRoute-level allowlisting for Istio.** Istio evaluates
 > multiple ALLOW policies with OR logic — an HTTPRoute AP would bypass the Gateway AP entirely.
 > See [security considerations](security.md#gateway-vs-httproute-allowlisting--do-not-mix-istio).
+
+---
+
+## Gateway → AWS Load Balancer Controller (L4)
+
+For the Gateways of the [AWS Load Balancer Controller](https://kubernetes-sigs.github.io/aws-load-balancer-controller/latest/guide/gateway/gateway/)
+(GatewayClass controllers `gateway.k8s.aws/alb` and `gateway.k8s.aws/nlb`), the allowlist goes
+into the `sourceRanges` of the `LoadBalancerConfiguration` the Gateway references. The AWS
+controller turns them into the inbound rules of the load balancer's security group: one rule per
+CIDR and listener port, for an ALB and an NLB alike. Enable with `--gateway-support-enabled`; the
+writer is registered when the `LoadBalancerConfiguration` CRD (`gateway.k8s.aws/v1beta1`) is
+installed.
+
+```yaml
+apiVersion: gateway.k8s.aws/v1beta1
+kind: LoadBalancerConfiguration
+metadata:
+  name: my-gateway
+  namespace: my-app
+spec:
+  scheme: internet-facing
+  # sourceRanges: written by the controller
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: my-gateway
+  namespace: my-app
+  annotations:
+    ipam.adevinta.com/cluster-allowlist-group: office-ips
+spec:
+  gatewayClassName: aws-alb
+  infrastructure:
+    parametersRef:
+      group: gateway.k8s.aws
+      kind: LoadBalancerConfiguration
+      name: my-gateway
+  listeners:
+  - name: http
+    port: 80
+    protocol: HTTP
+```
+
+The controller then patches only `spec.sourceRanges` of `my-app/my-gateway`; every other setting
+stays as you wrote it. The `LoadBalancerConfiguration` is read on demand and never watched: a
+hand edit of `sourceRanges` is put back on the Gateway's next reconcile (a change to it or its
+CIDRs).
+
+**The Gateway must reference its own `LoadBalancerConfiguration`.** Like a Service's
+`loadBalancerSourceRanges`, the field belongs to an object you own; the controller never changes
+the Gateway itself (that would drift from Git). So:
+
+| Situation | What happens | Event on the Gateway |
+|---|---|---|
+| No `spec.infrastructure.parametersRef`, or it names no existing `LoadBalancerConfiguration` | nothing written | Warning `AllowlistTargetMissing` |
+| The `LoadBalancerConfiguration` is also used by another Gateway with another allowlist, or none | nothing written: it would set that Gateway's load balancer too | Warning `AllowlistPolicyConflict` |
+| `securityGroups` is set (on it, or on the GatewayClass's `LoadBalancerConfiguration` and that one wins) | written, but the AWS controller uses those security groups as they are and ignores `sourceRanges` | Warning `AllowlistIneffective` |
+| The GatewayClass's `LoadBalancerConfiguration` sets `sourceRanges` and wins the merge (its `mergingMode` is `prefer-gateway-class`, the default) | written, but the GatewayClass's apply | Warning `AllowlistIneffective` |
+| Annotation removed | the last `sourceRanges` stay: removing them would open the load balancer to `0.0.0.0/0` and `::/0` | — |
+
+None of these is retried: a person has to change the objects, and the next reconcile picks it up.
+Several Gateways can share one `LoadBalancerConfiguration` when they carry the same allowlist
+annotations.
+
+> **Security group rule quota.** The AWS controller creates one inbound rule per CIDR and listener
+> port (twice that with `enableICMP`), and AWS allows 60 inbound rules per security group by
+> default (IPv4 and IPv6 counted separately; the quota can be raised). A feed of 31 CIDRs on a
+> Gateway with ports 80 and 443 already needs 62. The controller doesn't check this; the AWS
+> controller reports it in the Gateway's status. Keep the CIDR lists of AWS Gateways short, or raise
+> the quota.
+
+There's no per-route (L7) allowlist for these Gateways yet.
 
 ---
 

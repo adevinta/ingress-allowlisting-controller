@@ -45,6 +45,13 @@ rules:
   - get
   - update
 - apiGroups:
+  - gateway.k8s.aws
+  resources:
+  - loadbalancerconfigurations
+  verbs:
+  - get
+  - patch
+- apiGroups:
   - gateway.networking.k8s.io
   resources:
   - gatewayclasses

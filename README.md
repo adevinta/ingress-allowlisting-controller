@@ -8,12 +8,13 @@ A Kubernetes controller that manages IP allowlisting for Ingress, Gateway API, a
 |---|---|---|
 | `kind: Ingress` | `metadata.annotation:`<br>`nginx.ingress.kubernetes.io/whitelist-source-range` | nginx Ingress Controller |
 | `kind: Gateway` | `kind: AuthorizationPolicy` (L4, gateway-scoped) | Gateway API + Istio |
+| `kind: Gateway` | `spec.sourceRanges` of its `LoadBalancerConfiguration` (L4, security group) | Gateway API + AWS Load Balancer Controller (ALB or NLB) |
 | `kind: HTTPRoute` | `kind: AuthorizationPolicy` (L7, per-route) | Gateway API + Istio |
 | `kind: HTTPRoute` | `kind: Middleware` (IPAllowList, per-route) | Gateway API + Traefik |
 | `kind: NetworkPolicy` | `spec.ingress[].from[].ipBlock`<br>AND/OR<br>`spec.egress[].to[].ipBlock` | CNI with NetworkPolicy support (e.g. Calico, AWS VPC CNI) |
 | `kind: Service` | `spec.loadBalancerSourceRanges` | `type: LoadBalancer` + a load balancer that honours source ranges |
 
-Istio and Traefik support is **auto-detected** at startup — no flags needed. The controller checks which CRDs are installed and registers only the relevant writers.
+Istio, Traefik and AWS Load Balancer Controller support is **auto-detected** at startup — no flags needed. The controller checks which CRDs are installed and registers only the relevant writers.
 
 ## Installation
 
@@ -60,7 +61,7 @@ helm upgrade --install ingress-allowlisting-controller ./ --namespace ingress-al
 ## Documentation
 
 - [Ingress](docs/ingress.md)
-- [Gateway API — Gateway & HTTPRoute (Istio + Traefik)](docs/gateway-api.md)
+- [Gateway API — Gateway & HTTPRoute (Istio, Traefik, AWS Load Balancer Controller)](docs/gateway-api.md)
 - [NetworkPolicy](docs/networkpolicy.md)
 - [Service (loadBalancerSourceRanges)](docs/service.md)
 - [CIDRs & ClusterCIDRs CRDs](docs/cidrs.md)
