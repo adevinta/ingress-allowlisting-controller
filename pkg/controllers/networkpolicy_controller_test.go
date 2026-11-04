@@ -523,6 +523,50 @@ func TestReconcileNetworkPolicyOverwriteExistingRulesWithPortsBadSpec(t *testing
 
 }
 
+// TestReconcileNetworkPolicyMultipleRulesNotRetried verifies that a NetworkPolicy with several
+// rules, which the controller doesn't manage, is reported with a Warning Event and left as it is,
+// without an error: a retry can't fix it, only editing the NetworkPolicy can.
+func TestReconcileNetworkPolicyMultipleRulesNotRetried(t *testing.T) {
+	localnetCidrs := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "localnet", Namespace: "mynamespace"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"192.168.0.0/16"}},
+	}
+	peer := netv1.NetworkPolicyPeer{IPBlock: &netv1.IPBlock{CIDR: "1.1.1.1/32"}}
+	networkPolicy := &netv1.NetworkPolicy{
+		ObjectMeta: v1.ObjectMeta{
+			Name:        "test-policy",
+			Namespace:   "mynamespace",
+			Annotations: map[string]string{"ipam.adevinta.com/allowlist-group": "localnet"},
+		},
+		Spec: netv1.NetworkPolicySpec{
+			PolicyTypes: []netv1.PolicyType{netv1.PolicyTypeIngress},
+			Ingress: []netv1.NetworkPolicyIngressRule{
+				{From: []netv1.NetworkPolicyPeer{peer}},
+				{From: []netv1.NetworkPolicyPeer{peer}},
+			},
+		},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(localnetCidrs, networkPolicy).Build()
+	resolver := newTestCidrResolver(k8sClient)
+	reconciler := &NetworkPolicyReconciler{Client: k8sClient, CidrResolver: resolver}
+
+	result, err := reconciler.Reconcile(context.Background(), ctrl.Request{NamespacedName: types.NamespacedName{Name: "test-policy", Namespace: "mynamespace"}})
+
+	assert.NoError(t, err, "a retry can't fix it: no error, so no requeue")
+	assert.Equal(t, ctrl.Result{}, result)
+
+	got := &netv1.NetworkPolicy{}
+	assert.NoError(t, k8sClient.Get(context.Background(), client.ObjectKeyFromObject(networkPolicy), got))
+	assert.Equal(t, networkPolicy.Spec, got.Spec, "the NetworkPolicy is left as it is")
+
+	events := recordedEvents(t, resolver)
+	if assert.Len(t, events, 1) {
+		assert.Contains(t, events[0], "Warning MultipleRulesNotSupported")
+		assert.Contains(t, events[0], "2 ingress and 0 egress rules")
+		assert.Contains(t, events[0], "Split it into NetworkPolicies of one rule each", "the Event says how to fix it")
+	}
+}
+
 func TestReconcileNetworkPolicyApiError(t *testing.T) {
 	k8sClient := &testfunc{WithWatch: fake.NewClientBuilder().WithScheme(extendedScheme).Build()}
 	k8sClient.getfunc = func(ctx context.Context, key client.ObjectKey, obj client.Object, opts ...client.GetOption) error {
