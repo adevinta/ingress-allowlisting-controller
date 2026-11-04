@@ -11,6 +11,13 @@ spec:
     matchLabels:
       app.kubernetes.io/name: "{{ .Release.Name }}"
   replicas: {{ .Values.replicaCount }}
+{{- if not .Values.leaderElection.enabled }}
+  # Without leader election a rolling update would run the old and the new pod at once, both
+  # reconciling. Recreate stops the old pod first: no reconcile for a few seconds, the allowlists
+  # already written stay in place. With leader election the lease does this and rollouts roll.
+  strategy:
+    type: Recreate
+{{- end }}
   template:
     metadata:
       labels:

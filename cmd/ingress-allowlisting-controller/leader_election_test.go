@@ -72,6 +72,8 @@ func TestChartHighAvailability(t *testing.T) {
 		assert.NotContains(t, out, "--enable-leader-election")
 		assert.NotContains(t, out, "kind: PodDisruptionBudget")
 		assert.NotContains(t, out, "-leader-election")
+		// Without leader election a rolling update would run the old and the new pod at once.
+		assert.Contains(t, out, "strategy:\n    type: Recreate")
 	})
 
 	t.Run("several replicas without leader election are refused", func(t *testing.T) {
@@ -86,6 +88,8 @@ func TestChartHighAvailability(t *testing.T) {
 		assert.Contains(t, out, `- "--enable-leader-election"`)
 		assert.Contains(t, out, "kind: Role\n")
 		assert.NotContains(t, out, "kind: PodDisruptionBudget", "with one replica a PDB would block node drains")
+		// The lease keeps the old and the new pod from reconciling at once: the default rolling update stays.
+		assert.NotContains(t, out, "type: Recreate")
 	})
 
 	t.Run("several replicas with leader election", func(t *testing.T) {
