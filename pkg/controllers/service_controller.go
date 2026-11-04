@@ -24,7 +24,7 @@ type ServiceReconciler struct {
 	CidrResolver resolvers.CidrResolver
 }
 
-// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups="",resources=services,verbs=get;list;watch;patch
 
 func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("service", req.NamespacedName)
@@ -72,8 +72,9 @@ func (r *ServiceReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	log.Infof("Service %s allowlist changed; updating loadBalancerSourceRanges...", service.GetName())
 
+	base := service.DeepCopy()
 	service = updatedService
-	if err := r.Client.Update(ctx, &service); err != nil {
+	if err := r.Client.Patch(ctx, &service, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 

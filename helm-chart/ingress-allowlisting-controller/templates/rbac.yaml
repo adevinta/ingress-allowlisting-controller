@@ -18,17 +18,17 @@ rules:
 {{- if .Values.ingress.enabled }}
 - apiGroups: ["networking.k8s.io"]
   resources: ["ingresses"]
-  verbs: ["list", "get", "update", "watch"]
+  verbs: ["list", "get", "patch", "watch"]
 {{- end }}
 {{- if .Values.networkpolicy.enabled }}
 - apiGroups: ["networking.k8s.io"]
   resources: ["networkpolicies"]
-  verbs: ["list", "get", "update", "watch"]
+  verbs: ["list", "get", "patch", "watch"]
 {{- end }}
 {{- if .Values.service.enabled }}
 - apiGroups: [""]
   resources: ["services"]
-  verbs: ["list", "get", "update", "watch"]
+  verbs: ["list", "get", "patch", "watch"]
 {{- end }}
 # Events for missing CIDRs objects (events.k8s.io/v1, written by an event recorder: no reads).
 - apiGroups: ["events.k8s.io"]

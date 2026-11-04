@@ -26,7 +26,7 @@ rules:
   verbs:
   - get
   - list
-  - update
+  - patch
   - watch
 - apiGroups:
   - ""
@@ -86,7 +86,7 @@ rules:
   verbs:
   - get
   - list
-  - update
+  - patch
   - watch
 - apiGroups:
   - security.istio.io

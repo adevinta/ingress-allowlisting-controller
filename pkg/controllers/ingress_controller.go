@@ -26,7 +26,7 @@ type IngressReconciler struct {
 	CidrResolver resolvers.CidrResolver
 }
 
-// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;update
+// +kubebuilder:rbac:groups=networking.k8s.io,resources=ingresses,verbs=get;list;watch;patch
 
 func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("ingress", req.NamespacedName)
@@ -51,6 +51,9 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 
 	const whitelistAnnotation = "nginx.ingress.kubernetes.io/whitelist-source-range"
 	originalWhitelist := netV1Ingress.Annotations[whitelistAnnotation]
+	// The patch base, copied before reconcileIngress: it changes the annotations map, which its
+	// copy of the Ingress shares with this one.
+	base := netV1Ingress.DeepCopy()
 
 	updatedIngress, err := r.reconcileIngress(ctx, netV1Ingress)
 	if err != nil {
@@ -68,7 +71,7 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 	log.Infof("Ingress %s allowlist changed; updating whitelist-source-range...", ingressMetadata.GetName())
 
 	netV1Ingress.Annotations = updatedIngress.Annotations
-	if err := r.Client.Update(ctx, &netV1Ingress); err != nil {
+	if err := r.Client.Patch(ctx, &netV1Ingress, client.MergeFrom(base)); err != nil {
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 

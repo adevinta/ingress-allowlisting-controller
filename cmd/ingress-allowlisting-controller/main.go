@@ -371,7 +371,7 @@ func requiredPermissions(f rbacFeatures, l4Writers writers.L4WriterRegistry, l7W
 	}
 	if f.ingress {
 		perms = append(perms, watched("networking.k8s.io", "ingresses")...)
-		perms = append(perms, writers.Permissions("networking.k8s.io", "ingresses", "update")...)
+		perms = append(perms, writers.Permissions("networking.k8s.io", "ingresses", "patch")...)
 	}
 	if f.gateway {
 		perms = append(perms, watched("gateway.networking.k8s.io", "gateways", "gatewayclasses")...)
@@ -395,11 +395,11 @@ func requiredPermissions(f rbacFeatures, l4Writers writers.L4WriterRegistry, l7W
 	}
 	if f.networkPolicy {
 		perms = append(perms, watched("networking.k8s.io", "networkpolicies")...)
-		perms = append(perms, writers.Permissions("networking.k8s.io", "networkpolicies", "update")...)
+		perms = append(perms, writers.Permissions("networking.k8s.io", "networkpolicies", "patch")...)
 	}
 	if f.service {
 		perms = append(perms, watched("", "services")...)
-		perms = append(perms, writers.Permissions("", "services", "update")...)
+		perms = append(perms, writers.Permissions("", "services", "patch")...)
 	}
 	return perms
 }
