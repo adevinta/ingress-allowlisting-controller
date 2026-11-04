@@ -10,7 +10,7 @@ The output depends on which ingress controller is installed:
 |---|---|---|
 | Istio (`istio.io/gateway-controller`) | `AuthorizationPolicy` (L4) | `AuthorizationPolicy` (L7) |
 | Traefik (`traefik.io/gateway-controller`) | _(not applicable)_ | `Middleware` (IPAllowList) |
-| AWS Load Balancer Controller (`gateway.k8s.aws/alb`, `gateway.k8s.aws/nlb`) | `sourceRanges` of its `LoadBalancerConfiguration` (L4, security group) | _(not yet)_ |
+| AWS Load Balancer Controller (`gateway.k8s.aws/alb`, `gateway.k8s.aws/nlb`) | `sourceRanges` of its `LoadBalancerConfiguration` (L4, security group) | _(not supported, see [why](#no-per-route-allowlist-on-aws-gateways))_ |
 
 **Auto-detection:** the controller checks at startup which CRDs are present (`AuthorizationPolicy`,
 `Middleware`, `LoadBalancerConfiguration`) and registers only the relevant writers. No flags are
@@ -169,7 +169,90 @@ annotations.
 > controller reports it in the Gateway's status. Keep the CIDR lists of AWS Gateways short, or raise
 > the quota.
 
-There's no per-route (L7) allowlist for these Gateways yet.
+### No per-route allowlist on AWS Gateways
+
+An annotation on an HTTPRoute attached to an AWS Gateway does nothing: no L7 writer is registered
+for `gateway.k8s.aws/alb`, so the route is skipped. The allowlist of an AWS Gateway covers its
+whole load balancer, every route on it.
+
+**Why not per route.** The only per-route source-IP option of the AWS Load Balancer Controller is a
+`ListenerRuleConfiguration` with a `source-ip` condition, referenced from a route rule. It doesn't
+fit an allowlist:
+
+- **At most 3–4 CIDRs per route rule, and that can't be raised.** An ALB listener rule holds 5
+  condition values in total ([quotas](https://docs.aws.amazon.com/elasticloadbalancing/latest/application/load-balancer-limits.html):
+  "Condition Values per Rule: 5", not adjustable), shared by the host, path and `source-ip`
+  values. A rule always has a path (`PathPrefix /` becomes `/*`), so it's 4 CIDRs for a route
+  without a hostname, 3 with one, fewer with more. A feed doesn't fit.
+- **A list that is too long fails silently.** AWS rejects the rule (`ValidationError: A rule can
+  only have '5' condition values and regex values`) and the ALB keeps the previous one: the new
+  CIDRs never apply, removed ones stay allowed. The ListenerRuleConfiguration (`Accepted`), the
+  HTTPRoute (`Accepted`) and the Gateway (`Programmed`) stay green; the error is only in the
+  Gateway's `FailedDeployModel` Warning Events and the AWS controller's log.
+- **It's a match condition, not a deny.** A client outside the list doesn't match the rule and
+  gets the listener's default 404, unless another route on the Gateway matches the same host and
+  path without the condition: then that route serves it.
+- **One `ListenerRuleConfiguration` per route rule.** A second one makes the rule invalid, so it
+  can't be added next to one a team already uses.
+
+Splitting a list over several rules (100 rules per ALB, adjustable) would mean duplicating the
+matches of the user's HTTPRoute, and uses up the rules shared by every route of the load balancer.
+
+**What to do instead: one Gateway per audience.** Routes that need different allowlists go on
+different Gateways, each with its own load balancer, security group and allowlist:
+
+```yaml
+# Open to everyone: no allowlist annotation
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata: {name: public-gw, namespace: team-a}
+spec:
+  gatewayClassName: aws-alb
+  infrastructure:
+    parametersRef: {group: gateway.k8s.aws, kind: LoadBalancerConfiguration, name: public-gw}
+  listeners: [{name: https, port: 443, protocol: HTTPS}]   # plus TLS settings
+---
+# Office only
+apiVersion: gateway.networking.k8s.io/v1
+kind: Gateway
+metadata:
+  name: office-gw
+  namespace: team-a
+  annotations:
+    ipam.adevinta.com/allowlist-group: office
+spec:
+  gatewayClassName: aws-alb
+  infrastructure:
+    parametersRef: {group: gateway.k8s.aws, kind: LoadBalancerConfiguration, name: office-gw}
+  listeners: [{name: https, port: 443, protocol: HTTPS}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: shop, namespace: team-a}
+spec:
+  parentRefs: [{name: public-gw}]
+  hostnames: [shop.example.com]
+  rules: [{backendRefs: [{name: shop, port: 80}]}]
+---
+apiVersion: gateway.networking.k8s.io/v1
+kind: HTTPRoute
+metadata: {name: admin, namespace: team-a}
+spec:
+  parentRefs: [{name: office-gw}]
+  hostnames: [admin.example.com]
+  rules: [{backendRefs: [{name: admin, port: 80}]}]
+```
+
+Each Gateway has its own `LoadBalancerConfiguration` (see above). `admin.example.com` then
+resolves to a load balancer whose security group only lets the office in: a client outside it
+can't even connect. This is a real deny and holds feeds, at the cost of one load balancer per
+audience (an hourly fee each, 50 ALBs per region by default) and DNS per hostname (e.g.
+external-dns). It suits a few audiences (public, office, partners), not one per route.
+
+**Many CIDRs per route** are only possible with [AWS WAF](https://docs.aws.amazon.com/waf/latest/developerguide/waf-chapter.html):
+a web ACL on the ALB (`wafV2` in the `LoadBalancerConfiguration`) with an IP set (up to 10,000
+CIDRs) and rules combining it with a host or path match. The web ACL and IP sets are AWS
+resources managed outside Kubernetes; this controller doesn't manage them.
 
 ---
 
