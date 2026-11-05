@@ -52,7 +52,7 @@ func TestCreatedObjectsCarryOwnerLabels(t *testing.T) {
 	}
 	assert.Equal(t, want("Gateway", "gw-ns", "my-gw"), getPolicy(t, c, "gw-ns", "my-gw").Labels, "Gateway policy")
 	assert.Equal(t, want("HTTPRoute", "gw-ns", "my-route"), getPolicy(t, c, "gw-ns", "my-gw-my-route").Labels, "route policy")
-	assert.Equal(t, want("Merged", "MERGED", "shared"), getPolicy(t, c, "gw-ns", "shared").Labels, "merged policy")
+	assert.Equal(t, want("Merged", "MERGED", "shared"), getPolicy(t, c, "gw-ns", MergedPolicyName(resolvers.DefaultPrefix, "my-gw", "shared")).Labels, "merged policy")
 
 	tc := fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(route.DeepCopy()).Build()
 	require.NoError(t, newTraefikWriter(tc).Apply(ctx, traefikScheme, route, gw, []string{"10.0.0.0/8"}, nil, nil))

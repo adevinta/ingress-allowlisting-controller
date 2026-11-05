@@ -259,7 +259,7 @@ func TestReconcileHTTPRouteMergeLeavesOutRefusedSiblings(t *testing.T) {
 	_, err := r.Reconcile(ctx, reconcile.Request{NamespacedName: client.ObjectKeyFromObject(refused)})
 	require.NoError(t, err)
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "app", Namespace: "infra"}, policy))
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: mergedName("shared", "app"), Namespace: "infra"}, policy))
 	var cidrs []string
 	for _, rule := range policy.Spec.Rules {
 		for _, from := range rule.From {

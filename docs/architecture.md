@@ -140,15 +140,49 @@ Pod-oriented controllers are architecturally equivalent to the existing `Network
 
 ### Convention
 
-All AP names follow a deterministic pattern derived from the objects involved. The gateway name is always the prefix — this prevents collisions when multiple gateways share the same namespace.
+All AP names follow a deterministic pattern derived from the objects involved
+(`pkg/controllers/writers/policy_names.go`).
 
 | Scenario | Pattern | Example |
 |---|---|---|
 | Same-namespace, no paths | `{gw}-{route}` | `my-gateway-my-route` |
 | Same-namespace, with paths | `{gw}-{route}-{fnv32hex}` | `my-gateway-my-route-3d2a1f8c` |
-| Cross-namespace, no paths | `{gw}-{routeNS}-{route}` | `my-gateway-app-ns-my-route` |
-| Cross-namespace, with paths | `{gw}-{routeNS}-{route}-{fnv32hex}` | `my-gateway-app-ns-my-route-3d2a1f8c` |
-| Merge mode | `{mergeKey}` | `chaos-monkey` |
+| Cross-namespace | `{routeNS}.{gw}.{route}.{hash8}` | `app-ns.my-gateway.my-route.61094ef9` |
+| Merge mode | `merge.{gw}.{mergeKey}.{hash8}` | `merge.my-gateway.chaos-monkey.36b154f3` |
+
+### Identity hash (cross-namespace and merge mode, since v0.3.0)
+
+The APs in the Gateway's namespace come from routes of every namespace and from merge keys people
+choose, so names built by joining parts collided: route `x` of namespace `team-a` and route `a-x`
+of namespace `team` both gave `{gw}-team-a-x`, and a merge key was the whole name, so two Gateways
+of one namespace using the same key shared one AP. These names now end with `hash8`, the first 8
+hex digits of a SHA-256 over what identifies the AP, the parts separated by `\0`:
+
+| AP | Hash input |
+|---|---|
+| Cross-namespace | annotation prefix, `route`, route namespace, Gateway, route, the rule's sorted paths |
+| Merge mode | annotation prefix, `merged`, Gateway, merge key |
+
+- **The kind** (`route` / `merged`): `merge` is a valid namespace name, so a route of namespace
+  `merge` has the shape of a merged AP. The kind keeps them apart.
+- **The annotation prefix**: two controller instances with different `--annotation-prefix` can use
+  the same merge key on a shared Gateway for different groups; each gets its own AP.
+- **The separators** keep `[/a, /b]` and `[/a/b]`, or Gateway `a.b` + route `c` and Gateway `a` +
+  route `b.c`, apart.
+- The hash is always there, also without paths. When a name would exceed 253 characters the
+  readable part is cut; `.{hash8}` stays whole.
+
+Same-namespace names are unchanged. Their path suffix has no separator, so two rules of one route
+with paths `[/a, /b]` and `[/a/b]` get the same AP name and overwrite each other (known, kept to
+avoid renaming every same-namespace AP).
+
+**Upgrading to v0.3.0 renames the cross-namespace and merged APs.** Nothing to do by hand: when a
+route or merge group is reconciled (all are, right after the controller starts), the AP is written
+under its new name first, then the controller's AP under the old name is deleted, so access has no
+gap. Until then the orphan checks count the old name as the route's, so the startup cleanup
+doesn't delete it early. An AP under the old name that isn't the controller's is left alone.
+Anything that refers to these APs by name (runbooks, dashboards, `kubectl get` scripts) must use
+the new names; select them by their labels instead (see [security.md](security.md)).
 
 ### Path-based collision protection
 
@@ -159,7 +193,7 @@ suffix = hex8(fnv32a(sorted_paths))
 ```
 
 - Sorting makes the name order-independent — reordering matches in an HTTPRoute rule does not rename the AP
-- The hash covers the full set, so two rules with different paths always get different names
+- The hash covers the full set, so reordering doesn't rename the AP. It writes the paths without a separator, so `[/a, /b]` and `[/a/b]` get the same name (see above)
 - FNV-32a output is hex digits only (`[0-9a-f]`) — always a valid Kubernetes name segment
 - The human-readable part comes from the HTTPRoute name itself, not the path
 

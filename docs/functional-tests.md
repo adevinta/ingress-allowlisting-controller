@@ -77,7 +77,8 @@ attached to a Gateway in `-b`.
 
 | Scenario | Gateway in `-b` | Expectation |
 |---|---|---|
-| `cross-namespace` | `allowedRoutes: All` | the route's allowlist is written: for **Traefik** a Middleware in `-a`, the route's namespace (`extensionRef` cannot cross namespaces), nothing in `-b`; for **Istio** an AuthorizationPolicy in `-b`, the Gateway's namespace, labelled with the route as owner, nothing in `-a` |
+| `cross-namespace` | `allowedRoutes: All` | the route's allowlist is written: for **Traefik** a Middleware in `-a`, the route's namespace (`extensionRef` cannot cross namespaces), nothing in `-b`; for **Istio** an AuthorizationPolicy in `-b`, the Gateway's namespace, labelled with the route as owner and named `{routeNS}.{gw}.{route}.{hash8}`, nothing in `-a` |
+| `merge` (Istio only) | `allowedRoutes: All` | two HTTPRoutes, one in `-a` and one in `-b`, with the same `<prefix>/merge` key, share one AuthorizationPolicy in `-b` named `merge.{gw}.{key}.{hash8}`, with both routes' hosts and CIDRs; neither gets a policy of its own (watched for 30s) |
 | `allowedroutes-same` | `allowedRoutes: Same` | the Gateway does not accept the route, so **nothing** is written for it, watched for 30s (NEW_IDEAS item 1). For Istio a policy would otherwise still apply to the Gateway by host, i.e. to other tenants' hosts |
 
 Resource kinds covered so far:
@@ -109,7 +110,7 @@ Each must become `UpToDate`, with a non-empty status holding only valid CIDRs. F
 time, so the `remote` scenario compares against the statuses at the time of the check rather than
 fixed values.
 
-Out of scope for now: `ClusterCIDRs`, `headersFrom`, and Istio merge mode.
+Out of scope for now: `ClusterCIDRs` and `headersFrom`.
 
 ## Two instances
 

@@ -259,6 +259,8 @@ func TestPolicyNameHashSuffix(t *testing.T) {
 	route := &gatewayApiv1.HTTPRoute{}
 	route.Name = "r"
 	route.Namespace = "ns"
+	w := newIstioL7Writer(nil)
+	policyName := w.policyName
 
 	// Single path: hash suffix, no human-readable path in name.
 	nameSingle, _, _ := policyName(route, gw, []string{"/api"})

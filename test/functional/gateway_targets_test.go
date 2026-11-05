@@ -20,6 +20,7 @@ import (
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/writers"
+	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
 
 // discovery is what the cluster offers beyond core Kubernetes, found before the plan is printed.
@@ -229,6 +230,7 @@ func istioHTTPRouteTarget(d discovery) target {
 		},
 		extraScenarios: func(t *testing.T, env scenarioEnv) {
 			crossNamespaceScenarios(t, env, d, istioCrossNamespace(d))
+			t.Run("merge", func(t *testing.T) { mergeScenario(t, env, d) })
 		},
 		otherInstance: istioHTTPRouteOtherInstance(d),
 	}
@@ -278,6 +280,9 @@ type crossNamespaceKind struct {
 	observe func(ctx context.Context, c client.Client, routeNS, gatewayNS, name string) ([]string, error)
 	// stray returns a description of anything written where it must not be, "" if nothing.
 	stray func(ctx context.Context, c client.Client, routeNS, gatewayNS, name string) (string, error)
+	// named, when set, checks the name of what was written for the route routeNS/name on the
+	// Gateway gatewayNS/gateway.
+	named func(ctx context.Context, c client.Client, routeNS, gatewayNS, gateway, name string) error
 }
 
 // crossNamespaceScenarios attaches routes in the main namespace to Gateways in the peer namespace:
@@ -312,11 +317,16 @@ func crossNamespaceScenarios(t *testing.T, env scenarioEnv, d discovery, k cross
 	}
 
 	t.Run("cross-namespace", func(t *testing.T) {
-		name := k.prefix + "-xns"
-		attach(t, k.prefix+"-shared-all", name, gatewayApiv1.NamespacesFromAll)
+		name, gwName := k.prefix+"-xns", k.prefix+"-shared-all"
+		attach(t, gwName, name, gatewayApiv1.NamespacesFromAll)
 		expectAllowlist(t, "allowlist for route "+ns+"/"+name+" on a Gateway in "+peer,
 			func() ([]string, error) { return k.observe(ctx, c, ns, peer, name) }, exactly("203.0.113.0/24"))
 		noStray(t, name)
+		if k.named != nil {
+			if err := k.named(ctx, c, ns, peer, gwName, name); err != nil {
+				t.Fatal(err)
+			}
+		}
 	})
 
 	t.Run("allowedroutes-same", func(t *testing.T) {
@@ -377,7 +387,30 @@ func istioCrossNamespace(d discovery) crossNamespaceKind {
 			}
 			return "", nil
 		},
+		// {routeNS}.{gw}.{route}.{hash8}, see writers.CrossNamespacePolicyName.
+		named: func(ctx context.Context, c client.Client, routeNS, gatewayNS, gateway, name string) error {
+			list := &istiosecurityv1.AuthorizationPolicyList{}
+			if err := c.List(ctx, list, client.InNamespace(gatewayNS), ownerLabels(d, routeNS, name)); err != nil {
+				return err
+			}
+			route := newHTTPRoute(d, routeNS, name, gateway, nil)
+			paths := istioWriter(d).TranslatePaths(route.Spec.Rules[0].Matches)
+			want := writers.CrossNamespacePolicyName(d.annotationPrefix, routeNS, gateway, name, paths)
+			if len(list.Items) != 1 || list.Items[0].Name != want {
+				var got []string
+				for _, p := range list.Items {
+					got = append(got, p.Name)
+				}
+				return fmt.Errorf("want one AuthorizationPolicy %s/%s for HTTPRoute %s/%s, got %v", gatewayNS, want, routeNS, name, got)
+			}
+			return nil
+		},
 	}
+}
+
+// istioWriter translates HTTPRoute paths like the controller's Istio writer.
+func istioWriter(d discovery) *writers.IstioL7Writer {
+	return writers.NewIstioL7Writer(nil, "", resolvers.CidrResolver{AnnotationPrefix: d.annotationPrefix})
 }
 
 // observeIstioPolicy returns the allowlist of the one AuthorizationPolicy in policyNS owned by the

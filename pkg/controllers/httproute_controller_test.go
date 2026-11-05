@@ -271,16 +271,16 @@ func TestReconcileHTTPRouteCrossNamespace(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "test", Namespace: "mynamespace"}})
 	assert.NoError(t, err)
 
-	// Policy should be in gateway-namespace with name = {gateway}-{route.Namespace}-{route.Name}
+	// Policy should be in gateway-namespace with name = {route.Namespace}.{gateway}.{route.Name}.{hash8}
 	generatedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gateway-namespace"}, generatedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "gateway-namespace"}, generatedPolicy)
 	assert.NoError(t, err, "AuthorizationPolicy should be created in cross-namespace")
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, generatedPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 	assert.Equal(t, "my-gateway", generatedPolicy.Spec.TargetRefs[0].Name)
 
 	// Should NOT be in the httproute's namespace
 	notExpectedPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "mynamespace"}, notExpectedPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "mynamespace"}, notExpectedPolicy)
 	assert.True(t, apierrors.IsNotFound(err), "AuthorizationPolicy should NOT be in the HTTPRoute namespace")
 }
 
@@ -712,7 +712,7 @@ func TestReconcileHTTPRouteMultipleGatewaysCrossNamespace(t *testing.T) {
 
 	// Second (cross-namespace): AP name = "external-gateway-mynamespace-test" in gateway-namespace
 	crossNsPolicy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "external-gateway-mynamespace-test", Namespace: "gateway-namespace"}, crossNsPolicy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("mynamespace", "external-gateway", "test"), Namespace: "gateway-namespace"}, crossNsPolicy)
 	assert.NoError(t, err)
 	assert.Equal(t, "external-gateway", crossNsPolicy.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"10.0.0.0/8"}, crossNsPolicy.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
@@ -784,7 +784,7 @@ func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
 	assert.NoError(t, err, "invalid merge key must not requeue — user must fix the annotation")
 
 	ap := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, ap),
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: crossName("ns", "my-gw", "my-route"), Namespace: "gw-ns"}, ap),
 		"the route gets its own policy, as without a merge key")
 	assert.Equal(t, []string{"1.2.3.4/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
@@ -800,7 +800,7 @@ func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
 	require.NoError(t, k8sClient.Update(ctx, cidr))
 	_, err = reconciler.Reconcile(ctx, req)
 	require.NoError(t, err)
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, ap))
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: crossName("ns", "my-gw", "my-route"), Namespace: "gw-ns"}, ap))
 	assert.Equal(t, []string{"5.6.7.8/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 
 	apList := &istiosecurityv1.AuthorizationPolicyList{}
@@ -897,7 +897,7 @@ func TestReconcileHTTPRouteJoiningMergeGroupDeletesPerRoutePolicies(t *testing.T
 	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, &istiosecurityv1.AuthorizationPolicy{})
 	assert.True(t, apierrors.IsNotFound(err), "the per-route policy is deleted once the route is in the merged one")
 	merged := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "ns"}, merged))
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gw", "my-group"), Namespace: "ns"}, merged))
 	assert.Equal(t, []string{"1.2.3.4/32"}, merged.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
 }
 
@@ -905,7 +905,7 @@ func TestReconcileHTTPRouteJoiningMergeGroupDeletesPerRoutePolicies(t *testing.T
 // can't be written (a policy with that name exists and isn't ours), the route keeps its per-route
 // policies: deleting them would leave it with no policy at all.
 func TestReconcileHTTPRouteMergeRefusedKeepsPerRoutePolicies(t *testing.T) {
-	foreign := &istiosecurityv1.AuthorizationPolicy{ObjectMeta: v1.ObjectMeta{Name: "my-group", Namespace: "ns"}}
+	foreign := &istiosecurityv1.AuthorizationPolicy{ObjectMeta: v1.ObjectMeta{Name: mergedName("my-gw", "my-group"), Namespace: "ns"}}
 	k8sClient, reconciler, req := sameNamespaceMergeSetup(t, foreign)
 
 	setMergeKey(t, k8sClient, reconciler, req, "my-group")
@@ -972,8 +972,8 @@ func TestReconcileHTTPRouteMerge(t *testing.T) {
 
 	// AP name = merge key (first gateway, no suffix)
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
-	assert.NoError(t, err, "merged policy should be created with name = merge key")
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, policy)
+	assert.NoError(t, err, "merged policy should be created")
 
 	// Two-level grouping: routes with different CIDR sets each get their own Rule.
 	var allIPs, allHosts []string
@@ -1068,7 +1068,7 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 		return hosts
 	}
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, []string{
 		"chaos-monkey.public.ns-staging00.example.com",
@@ -1094,7 +1094,7 @@ func TestReconcileHTTPRouteMergeStaleHostAfterKeyChange(t *testing.T) {
 	assert.NoError(t, err)
 
 	// chaos-monkey AP must now only contain route00's hostname
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	allHosts := allPolicyHosts(policy)
 	assert.NotContains(t, allHosts,
@@ -1138,7 +1138,7 @@ func TestReconcileHTTPRouteMergeLastSiblingLeaves(t *testing.T) {
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
 	require.NoError(t, err)
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, policy))
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gw", "my-group"), Namespace: "gw-ns"}, policy))
 
 	// Route leaves the merge group.
 	route.Annotations["ipam.adevinta.com/merge"] = ""
@@ -1147,7 +1147,7 @@ func TestReconcileHTTPRouteMergeLastSiblingLeaves(t *testing.T) {
 	// Second reconcile — cache now shows no siblings → confirmed via APIReader → AP deleted.
 	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
 	require.NoError(t, err)
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gw", "my-group"), Namespace: "gw-ns"}, policy)
 	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted when last sibling leaves the group")
 }
 
@@ -1190,7 +1190,7 @@ func TestReconcileHTTPRouteMergeDeduplicatesIPs(t *testing.T) {
 	assert.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t, sharedCIDR, policy.Spec.Rules[0].From[0].Source.RemoteIpBlocks, "duplicate IPs should not appear twice")
 }
@@ -1243,7 +1243,7 @@ func TestReconcileHTTPRouteMergeDifferentKeyNotMerged(t *testing.T) {
 	assert.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, policy)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, policy)
 	assert.NoError(t, err)
 	assert.ElementsMatch(t,
 		[]string{"chaos-monkey.public.ns-staging00.example.com"},
@@ -1282,10 +1282,10 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 	}})
 	assert.NoError(t, err)
 
-	// Normal cross-namespace naming: {gateway}-{routeNS}-{routeName}
+	// Normal cross-namespace naming: {routeNS}.{gateway}.{routeName}.{hash8}
 	policy := &istiosecurityv1.AuthorizationPolicy{}
 	err = k8sClient.Get(context.Background(), client.ObjectKey{
-		Name:      "cross-namespace-public-ns-staging00-chaos-monkey.public.ns-staging00.example.com",
+		Name:      crossName("ns-staging00", "cross-namespace-public", "chaos-monkey.public.ns-staging00.example.com"),
 		Namespace: "ns-infra",
 	}, policy)
 	assert.NoError(t, err)
@@ -1293,7 +1293,7 @@ func TestReconcileHTTPRouteMergeWithoutMergeAnnotationIsIndependent(t *testing.T
 
 	// No merged policy under the service name
 	merged := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "chaos-monkey", Namespace: "ns-infra"}, merged)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("cross-namespace-public", "chaos-monkey"), Namespace: "ns-infra"}, merged)
 	assert.True(t, apierrors.IsNotFound(err), "no merged policy should be created without merge annotation")
 }
 
@@ -1347,8 +1347,8 @@ func TestReconcileHTTPRouteMergeSameNamespace(t *testing.T) {
 
 	// Merged AP lives in the same namespace as the gateway (= route namespace here).
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "myapp", Namespace: "my-ns"}, policy)
-	assert.NoError(t, err, "same-namespace merge must create AP named by merge key")
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gateway", "myapp"), Namespace: "my-ns"}, policy)
+	assert.NoError(t, err, "same-namespace merge must create the merged AP")
 
 	var allHosts []string
 	for _, rule := range policy.Spec.Rules {
@@ -1470,7 +1470,7 @@ func TestReconcileHTTPRouteOwnerReference(t *testing.T) {
 		assert.NoError(t, err)
 
 		policy := &istiosecurityv1.AuthorizationPolicy{}
-		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gateway-namespace"}, policy)
+		err = k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "gateway-namespace"}, policy)
 		assert.NoError(t, err)
 		assert.Empty(t, policy.OwnerReferences, "cross-namespace AP cannot have owner reference")
 	})
@@ -1577,7 +1577,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 		}
 		staleAP := &istiosecurityv1.AuthorizationPolicy{
 			ObjectMeta: v1.ObjectMeta{
-				Name: "my-gw-ns-my-route", Namespace: "gw-ns",
+				Name: crossName("ns", "my-gw", "my-route"), Namespace: "gw-ns",
 				Labels: map[string]string{
 					"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
 					"ipam.adevinta.com/owner-namespace": "ns",
@@ -1593,7 +1593,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 
 		reconciler.runStartupCleanup(context.Background())
 
-		err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+		err := k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("ns", "my-gw", "my-route"), Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
 		assert.True(t, apierrors.IsNotFound(err), "cross-namespace AP must be deleted when owning route lost its allowlist annotation")
 	})
 }
@@ -1686,7 +1686,7 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 	// Old AP from before merge was added — owner is the HTTPRoute (still exists!)
 	oldAP := &istiosecurityv1.AuthorizationPolicy{
 		ObjectMeta: v1.ObjectMeta{
-			Name: "my-gateway-mynamespace-test", Namespace: "gw-ns",
+			Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "gw-ns",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
@@ -1708,12 +1708,12 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 
 	// Old cross-namespace AP should be deleted — route now uses merge mode
 	stale := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gateway-mynamespace-test", Namespace: "gw-ns"}, stale)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "gw-ns"}, stale)
 	assert.True(t, apierrors.IsNotFound(err), "old non-merge AP should be deleted after merge annotation added")
 
 	// New merged AP should exist
 	merged := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "myapp", Namespace: "gw-ns"}, merged)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gateway", "myapp"), Namespace: "gw-ns"}, merged)
 	assert.NoError(t, err, "merged AP should exist")
 }
 
@@ -2329,7 +2329,7 @@ func TestReconcileHTTPRouteMergeWithNonMergeWriter(t *testing.T) {
 
 	// Istio: merged AP must be created in the gateway's namespace with name = merge key.
 	ap := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, ap)
+	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("istio-gw", "my-group"), Namespace: "gw-ns"}, ap)
 	assert.NoError(t, err, "merged Istio AuthorizationPolicy must be created")
 	assert.Equal(t, "istio-gw", ap.Spec.TargetRefs[0].Name)
 	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
@@ -2391,7 +2391,7 @@ func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-app", Namespace: "gw-ns"}, policy))
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gw", "shared-app"), Namespace: "gw-ns"}, policy))
 	var allIPs []string
 	for _, rule := range policy.Spec.Rules {
 		for _, from := range rule.From {
@@ -2408,7 +2408,7 @@ func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
 	_, err = reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "svc-a", Namespace: "ns-a"}})
 	require.NoError(t, err)
 
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-app", Namespace: "gw-ns"}, policy))
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("my-gw", "shared-app"), Namespace: "gw-ns"}, policy))
 	allIPs = nil
 	for _, rule := range policy.Spec.Rules {
 		for _, from := range rule.From {
@@ -2635,7 +2635,7 @@ func twoGatewaysSetup(t *testing.T, gwB *gatewayApiv1.Gateway, objs ...client.Ob
 func requireMergedPolicyOfGwA(t *testing.T, k8sClient client.Client) {
 	t.Helper()
 	ap := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, ap), "gw-a's merged policy exists")
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("gw-a", "my-group"), Namespace: "gw-ns"}, ap), "gw-a's merged policy exists")
 	assert.Equal(t, "gw-a", ap.Spec.TargetRefs[0].Name)
 	assert.Equal(t, []string{"a.example.com"}, ap.Spec.Rules[0].To[0].Operation.Hosts)
 }
@@ -2669,20 +2669,19 @@ func TestReconcileHTTPRouteKeepsMergedPolicyOfOtherGateway(t *testing.T) {
 }
 
 // TestReconcileHTTPRouteMergeKeyOnTwoGateways verifies that the same merge key on another Gateway
-// of the namespace (so the same policy name) can't take over the merged policy: a Warning Event on
-// the route instead, and gw-a's policy unchanged.
+// of the namespace gives that Gateway its own merged policy (the Gateway is part of the name),
+// without a conflict, and leaves gw-a's policy unchanged.
 func TestReconcileHTTPRouteMergeKeyOnTwoGateways(t *testing.T) {
 	k8sClient, reconciler := twoGatewaysSetup(t, newTestGateway("gw-b", "gw-ns", "istio"), routeOnGwB("other-route", "my-group"))
 
 	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "other-route", Namespace: "ns"}})
-	require.NoError(t, err, "a conflict isn't retried")
+	require.NoError(t, err)
 
 	requireMergedPolicyOfGwA(t, k8sClient)
-	events := recordedEvents(t, reconciler.CidrResolver)
-	if assert.Len(t, events, 1) {
-		assert.Contains(t, events[0], "Warning AllowlistPolicyConflict")
-		assert.Contains(t, events[0], "gw-a")
-	}
+	gwB := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergedName("gw-b", "my-group"), Namespace: "gw-ns"}, gwB), "gw-b's own merged policy")
+	assert.Equal(t, "gw-b", gwB.Spec.TargetRefs[0].Name)
+	assert.Empty(t, recordedEvents(t, reconciler.CidrResolver), "no conflict")
 }
 
 // TestReconcileHTTPRouteMergeGroupEmptyOnOtherGateway verifies that a merge group with no member
