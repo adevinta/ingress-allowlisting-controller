@@ -89,6 +89,11 @@ type HeadersFrom struct {
 	SecretRef ObjectRef `json:"secretRef,omitempty" yaml:"secretRef,omitempty"`
 	// +kubebuilder:validation:Optional
 	ConfigMapRef ObjectRef `json:"configMapRef,omitempty" yaml:"configMapRef,omitempty"`
+	// Keys, when set, are the only keys of the Secret or ConfigMap sent as headers (the key is the
+	// header name). A key that isn't there fails the fetch. Without it, every key is sent.
+	// +kubebuilder:validation:Optional
+	// +listType=set
+	Keys []string `json:"keys,omitempty" yaml:"keys,omitempty"`
 }
 
 type ObjectRef struct {

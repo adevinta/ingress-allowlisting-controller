@@ -641,29 +641,54 @@ func (r *CIDRReconciler) getObjectFromRef(ctx context.Context, namespace string,
 	return r.Get(ctx, client.ObjectKeyFromObject(dest), dest)
 }
 
-// updateClientHeaders adds every key of the referenced Secrets and ConfigMaps as a header. Values
-// are trimmed: one stored with kubectl --from-file usually ends in a newline, and Go refuses to send
-// a header value containing one, so the whole fetch would fail.
+// updateClientHeaders adds the keys of the referenced Secrets and ConfigMaps as headers: every key,
+// or only an entry's keys when it lists them, so a Secret holding other credentials too sends only
+// what the source needs. A listed key found in none of the entry's objects fails the fetch, rather
+// than fetching without it; the error names the key and the objects, never a value. Values are
+// trimmed: one stored with kubectl --from-file usually ends in a newline, and Go refuses to send a
+// header value containing one, so the whole fetch would fail.
 func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace string, headers http.Header, headersRef []ipamv1alpha1.HeadersFrom) error {
 	for _, source := range headersRef {
+		var data []map[string]string
+		var objects []string
 		if source.ConfigMapRef.Name != "" {
 			cm := &v1.ConfigMap{}
-			err := r.getObjectFromRef(ctx, namespace, source.ConfigMapRef, cm)
-			if err != nil {
+			if err := r.getObjectFromRef(ctx, namespace, source.ConfigMapRef, cm); err != nil {
 				return err
 			}
-			for k, v := range cm.Data {
-				headers.Add(k, strings.TrimSpace(v))
-			}
+			data = append(data, cm.Data)
+			objects = append(objects, "ConfigMap "+cm.Namespace+"/"+cm.Name)
 		}
 		if source.SecretRef.Name != "" {
 			secret := &v1.Secret{}
-			err := r.getObjectFromRef(ctx, namespace, source.SecretRef, secret)
-			if err != nil {
+			if err := r.getObjectFromRef(ctx, namespace, source.SecretRef, secret); err != nil {
 				return err
 			}
+			values := make(map[string]string, len(secret.Data))
 			for k, v := range secret.Data {
-				headers.Add(k, strings.TrimSpace(string(v)))
+				values[k] = string(v)
+			}
+			data = append(data, values)
+			objects = append(objects, "Secret "+secret.Namespace+"/"+secret.Name)
+		}
+		if len(source.Keys) == 0 {
+			for _, values := range data {
+				for k, v := range values {
+					headers.Add(k, strings.TrimSpace(v))
+				}
+			}
+			continue
+		}
+		for _, key := range source.Keys {
+			found := false
+			for _, values := range data {
+				if v, ok := values[key]; ok {
+					headers.Add(key, strings.TrimSpace(v))
+					found = true
+				}
+			}
+			if !found {
+				return fmt.Errorf("headersFrom: key %q not found in %s", key, strings.Join(objects, " or "))
 			}
 		}
 	}

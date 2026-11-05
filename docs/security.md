@@ -256,7 +256,8 @@ any Secret the controller can read to a host of their choosing. The controller t
   or another tenant's namespace;
 - **drops the headers on a redirect to another origin**, which Go doesn't do for custom headers.
 
-Label only the Secrets meant as headers, and keep them in namespaces whose writers you trust with
+Label only the Secrets meant as headers, or list the header keys in `headersFrom[].keys` so the
+other keys of a shared Secret are not sent. Keep them in namespaces whose writers you trust with
 them: anyone who can create a `CIDRs` object in a namespace can send its labelled Secrets to an
 allowlisted origin.
 

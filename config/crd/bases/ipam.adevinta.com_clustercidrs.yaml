@@ -78,6 +78,14 @@ spec:
                           - name
                           - namespace
                           type: object
+                        keys:
+                          description: |-
+                            Keys, when set, are the only keys of the Secret or ConfigMap sent as headers (the key is the
+                            header name). A key that isn't there fails the fetch. Without it, every key is sent.
+                          items:
+                            type: string
+                          type: array
+                          x-kubernetes-list-type: set
                         secretRef:
                           properties:
                             name:

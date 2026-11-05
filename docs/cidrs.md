@@ -53,10 +53,11 @@ spec:
     uri: https://ip-ranges.amazonaws.com/ip-ranges.json
     cel: 'data.prefixes.filter(p, p.service == "EC2" && has(p.ip_prefix)).map(p, p.ip_prefix)'
     headersFrom:
-      secretRef:
+    - secretRef:
         name: aws-auth-headers
         namespace: my-app
-      configMapRef:
+      keys: [Authorization]        # optional: only these keys are sent
+    - configMapRef:
         name: aws-extra-headers
         namespace: my-app
 ```
@@ -65,11 +66,19 @@ spec:
 - `cel` — a [CEL](https://github.com/google/cel-spec) expression that transforms the HTTP
   response body into a `[]string` of CIDRs
 - `requeueAfter` — how often to re-fetch (e.g. `30m`, `1h`)
-- `headersFrom.secretRef` — all keys in the Secret are sent as HTTP request headers
-- `headersFrom.configMapRef` — all keys in the ConfigMap are sent as HTTP request headers
+- `headersFrom` — a list; each entry references a `secretRef` and/or a `configMapRef` whose keys
+  are sent as HTTP request headers (the key is the header name, the value the header value)
+- `headersFrom[].keys` — optional: only these keys of the entry's Secret or ConfigMap are sent.
+  Without it **every key** is sent. A listed key found in none of the entry's objects fails the
+  fetch (the `UpToDate` condition names the key, never a value)
 
   Values are trimmed, so a value created with `kubectl create secret --from-file` (which usually
-  ends in a newline) works. Every key is sent, so reference a Secret that holds only the headers.
+  ends in a newline) works. Without `keys`, reference a Secret that holds only the headers: a
+  Secret that also holds other credentials would send them all to the source.
+
+  > **Update the CRDs before using `keys`.** With an older CRD the API server drops the unknown
+  > field when the object is written, and every key is sent again. The chart ships the CRDs in
+  > `crds/`: Argo CD applies them, `helm upgrade` does not (apply `config/crd/bases` yourself).
 
 ### Headers from Secrets and ConfigMaps (`headersFrom`)
 
