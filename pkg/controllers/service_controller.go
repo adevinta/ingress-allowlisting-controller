@@ -85,7 +85,7 @@ func (r *ServiceReconciler) reconcileService(ctx context.Context, service corev1
 
 	// loadBalancerSourceRanges is only valid for type=LoadBalancer Services; the API
 	// server rejects it on any other type. Skip other types before resolving CIDRs, so a
-	// non-LoadBalancer Service never emits a not-found Event or sets the cidrsNotFound
+	// non-LoadBalancer Service never emits a not-found Event or sets the missing-CIDRs
 	// metric for something we don't manage. Logged at debug: the Service watch has no
 	// annotation filter, so every non-LoadBalancer Service in the cluster reaches this and
 	// it would be noise at a higher level.

@@ -38,19 +38,22 @@ Resources with a missing group (an alert):
 ingress_allowlisting_controller_missing_cidrs > 0
 ```
 
-## `namespace_ingress_IpAllowlistingGroup_missing` (deprecated)
+## `namespace_ingress_IpAllowlistingGroup_missing` (removed in v0.3.0)
 
-**Deprecated, removed in v0.3.0.** Use `ingress_allowlisting_controller_missing_cidrs` instead.
+**Removed in v0.3.0**, deprecated since v0.2. Use `ingress_allowlisting_controller_missing_cidrs`
+instead. The old metric had one series per allowlisted resource **and per group** (label
+`cidrs_name`, and the kind in `object`): `1` if the group was missing, empty or could not be
+resolved, `0` if found. Its group names came from annotation values, so it was capped at 10 groups
+per resource; the new metric counts them all in one series per resource, and the
+`AllowlistGroupNotFound` Events name the missing ones.
 
-The old metric has one series per allowlisted resource **and per group** (label `cidrs_name`, and
-the kind in `object`): `1` if the group is missing, empty or could not be resolved, `0` if found.
-It records at most 10 groups per resource, missing ones first, so an annotation listing many
-names can't create many series.
-
-Moving queries over:
+Moving queries over (dashboards, alerts):
 
 | Old | New |
 |---|---|
+| `count(namespace_ingress_IpAllowlistingGroup_missing)` (group references) | `count(ingress_allowlisting_controller_missing_cidrs)` (resources) |
+| `namespace_ingress_IpAllowlistingGroup_missing > 0` (missing groups) | `ingress_allowlisting_controller_missing_cidrs > 0` (resources with missing groups, the value is how many) |
+| `sum(namespace_ingress_IpAllowlistingGroup_missing)` | `sum(ingress_allowlisting_controller_missing_cidrs)` |
 | `count(sum(namespace_ingress_IpAllowlistingGroup_missing) by (namespace, object, name))` | `count(ingress_allowlisting_controller_missing_cidrs)` |
 | `count(sum(namespace_ingress_IpAllowlistingGroup_missing) by (namespace, object, name) > 0)` | `count(ingress_allowlisting_controller_missing_cidrs > 0)` |
 

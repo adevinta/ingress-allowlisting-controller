@@ -21,7 +21,7 @@ func missingGroupSeries(t *testing.T, namespace string) int {
 	require.NoError(t, err)
 	n := 0
 	for _, f := range families {
-		if f.GetName() != "namespace_ingress_IpAllowlistingGroup_missing" {
+		if f.GetName() != "ingress_allowlisting_controller_missing_cidrs" {
 			continue
 		}
 		for _, m := range f.GetMetric() {

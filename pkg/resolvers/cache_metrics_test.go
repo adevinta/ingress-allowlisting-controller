@@ -28,16 +28,16 @@ func init() {
 	}
 }
 
-// TestGetCidrsFromObjectWithCache_MetricsEmittedOnCacheHit verifies that cidrsNotFound is set
+// TestGetCidrsFromObjectWithCache_MetricsEmittedOnCacheHit verifies that missingCIDRs is set
 // for every object even when its CIDR lookup is a cache hit.
 //
 // Regression: the previous cache in ApplyMerged returned cached IPs directly for subsequent
-// siblings, skipping getIpsFromAnnotation entirely. This left those routes' cidrsNotFound gauges
+// siblings, skipping getIpsFromAnnotation entirely. This left those routes' missing-group gauges
 // stale — a missing CIDR on sibling B would show as healthy (gauge = 0) while sibling A
 // correctly showed unhealthy (gauge = 1).
 func TestGetCidrsFromObjectWithCache_MetricsEmittedOnCacheHit(t *testing.T) {
-	cidrsNotFound.Reset()
-	t.Cleanup(func() { cidrsNotFound.Reset() })
+	missingCIDRs.Reset()
+	t.Cleanup(func() { missingCIDRs.Reset() })
 
 	// No ClusterCIDRs object created — "missing-vpn" is intentionally absent.
 	c := fake.NewClientBuilder().WithScheme(cacheMetricsTestScheme).Build()
@@ -53,17 +53,13 @@ func TestGetCidrsFromObjectWithCache_MetricsEmittedOnCacheHit(t *testing.T) {
 	_, err = resolver.GetCidrsFromObjectWithCache(context.Background(), objB, cache)
 	require.NoError(t, err)
 
-	// Both objects must have cidrsNotFound = 1.0 (CIDR missing).
+	// Both objects must have missingCIDRs = 1.0 (one group missing).
 	// If the cache skips getIpsFromAnnotation for hits, objB's gauge stays at 0.0 —
 	// a silent false-healthy reading.
-	// The object label is the kind from the scheme, also for objects without TypeMeta.
-	gaugeA := testutil.ToFloat64(cidrsNotFound.With(prometheus.Labels{
-		"namespace": "ns-a", "object": "Ingress", "name": "svc-a", "cidrs_name": "missing-vpn",
-	}))
-	gaugeB := testutil.ToFloat64(cidrsNotFound.With(prometheus.Labels{
-		"namespace": "ns-b", "object": "Ingress", "name": "svc-b", "cidrs_name": "missing-vpn",
-	}))
+	// The kind label is the kind from the scheme, also for objects without TypeMeta.
+	gaugeA := testutil.ToFloat64(missingCIDRs.With(prometheus.Labels{"namespace": "ns-a", "kind": "Ingress", "name": "svc-a"}))
+	gaugeB := testutil.ToFloat64(missingCIDRs.With(prometheus.Labels{"namespace": "ns-b", "kind": "Ingress", "name": "svc-b"}))
 
-	assert.Equal(t, 1.0, gaugeA, "svc-a: cidrsNotFound must be 1 (CIDR is missing)")
-	assert.Equal(t, 1.0, gaugeB, "svc-b: cidrsNotFound must be 1 even though its lookup was a cache hit — if 0, the cache skipped the metric update")
+	assert.Equal(t, 1.0, gaugeA, "svc-a: one group missing")
+	assert.Equal(t, 1.0, gaugeB, "svc-b: one group missing, even though its lookup was a cache hit — if 0, the cache skipped the metric update")
 }

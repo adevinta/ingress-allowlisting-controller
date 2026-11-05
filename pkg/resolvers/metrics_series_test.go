@@ -12,11 +12,11 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 )
 
-// missingSeries returns cidrs_name -> value of the cidrsNotFound series in namespace.
+// missingSeries returns name -> value of the missingCIDRs series in namespace.
 func missingSeries(t *testing.T, namespace string) map[string]float64 {
 	t.Helper()
 	reg := prometheus.NewRegistry()
-	require.NoError(t, reg.Register(cidrsNotFound))
+	require.NoError(t, reg.Register(missingCIDRs))
 	families, err := reg.Gather()
 	require.NoError(t, err)
 	series := map[string]float64{}
@@ -27,7 +27,7 @@ func missingSeries(t *testing.T, namespace string) map[string]float64 {
 				labels[l.GetName()] = l.GetValue()
 			}
 			if labels["namespace"] == namespace {
-				series[labels["cidrs_name"]] = m.GetGauge().GetValue()
+				series[labels["name"]] = m.GetGauge().GetValue()
 			}
 		}
 	}
@@ -36,7 +36,7 @@ func missingSeries(t *testing.T, namespace string) map[string]float64 {
 
 func ingressWithGroups(namespace, groups string) *netv1.Ingress {
 	ing := &netv1.Ingress{
-		// The kind is set on objects read from the cache; it becomes the "object" label.
+		// The kind is set on objects read from the cache; it becomes the "kind" label.
 		TypeMeta:   metav1.TypeMeta{Kind: "Ingress", APIVersion: "networking.k8s.io/v1"},
 		ObjectMeta: metav1.ObjectMeta{Name: "web", Namespace: namespace},
 	}
@@ -46,8 +46,8 @@ func ingressWithGroups(namespace, groups string) *netv1.Ingress {
 	return ing
 }
 
-// TestMissingSeriesFollowAnnotation verifies that the cidrsNotFound series of an object are rebuilt
-// from its current annotation, so a removed group or annotation doesn't leave a stale series.
+// TestMissingSeriesFollowAnnotation verifies that the series of an object follows its current
+// annotation: a removed group lowers the count, a removed annotation removes the series.
 func TestMissingSeriesFollowAnnotation(t *testing.T) {
 	const ns = "metrics-follow-annotation"
 	resolver := CidrResolver{Client: fake.NewClientBuilder().WithScheme(cacheMetricsTestScheme).Build(), AnnotationPrefix: DefaultPrefix}
@@ -55,11 +55,11 @@ func TestMissingSeriesFollowAnnotation(t *testing.T) {
 
 	_, err := resolver.GetCidrsFromObject(ctx, ingressWithGroups(ns, "a,b"))
 	require.NoError(t, err)
-	assert.Equal(t, map[string]float64{"a": 1, "b": 1}, missingSeries(t, ns))
+	assert.Equal(t, map[string]float64{"web": 2}, missingSeries(t, ns))
 
 	_, err = resolver.GetCidrsFromObject(ctx, ingressWithGroups(ns, "a"))
 	require.NoError(t, err)
-	assert.Equal(t, map[string]float64{"a": 1}, missingSeries(t, ns), "a group removed from the annotation loses its series")
+	assert.Equal(t, map[string]float64{"web": 1}, missingSeries(t, ns), "a group removed from the annotation isn't counted")
 
 	_, _ = resolver.GetCidrsFromObject(ctx, ingressWithGroups(ns, "")) // ErrAnnotationNotFound
 	assert.Empty(t, missingSeries(t, ns), "removing the annotation removes the series")
@@ -79,5 +79,5 @@ func TestForgetObject(t *testing.T) {
 
 	ForgetObject(ns, "Ingress", "web")
 
-	assert.Equal(t, map[string]float64{"c": 1}, missingSeries(t, ns))
+	assert.Equal(t, map[string]float64{"api": 1}, missingSeries(t, ns))
 }
