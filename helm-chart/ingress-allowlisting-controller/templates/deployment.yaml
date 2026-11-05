@@ -6,6 +6,9 @@ metadata:
   labels:
     chart: "{{ .Chart.Name }}"
     app.kubernetes.io/name: "{{ .Release.Name }}"
+{{- with .Values.labels }}
+{{ toYaml . | indent 4 }}
+{{- end }}
 spec:
   selector:
     matchLabels:
@@ -22,6 +25,9 @@ spec:
     metadata:
       labels:
         app.kubernetes.io/name: "{{ .Release.Name }}"
+{{- with .Values.labels }}
+{{ toYaml . | indent 8 }}
+{{- end }}
     spec:
 {{- with .Values.tolerations }}
       tolerations:
