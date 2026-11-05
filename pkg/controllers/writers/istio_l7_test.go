@@ -171,6 +171,34 @@ func TestIsOrphaned_GranularityHost(t *testing.T) {
 		"path-suffixed AP must be orphaned when route uses granularity=host")
 }
 
+// TestIsOrphaned_MergeKey verifies that a route's own policy is orphaned once the route is in a
+// merge group, but not when its merge key is invalid: the controller ignores that key and keeps the
+// route on its own policy, so the startup cleanup must not delete it (no policy would be left).
+func TestIsOrphaned_MergeKey(t *testing.T) {
+	w := newIstioL7Writer(fake.NewClientBuilder().WithScheme(istioL7Scheme).Build())
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	ap.Name = "gw-my-route"
+	ap.Namespace = "ns"
+	ap.Labels = map[string]string{
+		"ipam.adevinta.com/owner-namespace": "ns",
+		"ipam.adevinta.com/owner-name":      "my-route",
+	}
+	route := func(mergeKey string) gatewayApiv1.HTTPRoute {
+		return gatewayApiv1.HTTPRoute{
+			ObjectMeta: metav1.ObjectMeta{Name: "my-route", Namespace: "ns",
+				Annotations: map[string]string{"ipam.adevinta.com/merge": mergeKey}},
+			Spec: gatewayApiv1.HTTPRouteSpec{
+				Hostnames:       []gatewayApiv1.Hostname{"example.com"},
+				CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{{Name: "gw"}}},
+			},
+		}
+	}
+
+	assert.False(t, w.IsOrphaned(ap, []gatewayApiv1.HTTPRoute{route("")}), "no merge key: the route's own policy")
+	assert.True(t, w.IsOrphaned(ap, []gatewayApiv1.HTTPRoute{route("my-group")}), "valid merge key: the merged policy replaces it")
+	assert.False(t, w.IsOrphaned(ap, []gatewayApiv1.HTTPRoute{route("INVALID_KEY!")}), "invalid merge key: ignored, the route keeps its own policy")
+}
+
 // TestIsOrphaned_PathPrefixRoute verifies that orphan detection correctly resolves the AP name
 // for a PathPrefix route (which expands to two paths and gets a hash-suffixed name).
 func TestIsOrphaned_PathPrefixRoute(t *testing.T) {

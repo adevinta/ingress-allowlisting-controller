@@ -212,8 +212,9 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 		if LabelSafe(r.Namespace) != ownerNS || LabelSafe(r.Name) != ownerName {
 			continue
 		}
-		// Route exists — check if it's in merge mode now
-		if r.Annotations[mergeAnnotation] != "" {
+		// Route exists. In merge mode the merged policy replaces its own. An invalid merge key is
+		// ignored (the route keeps its own policies), so it doesn't count.
+		if inMergeMode(r, mergeAnnotation) {
 			return true
 		}
 		// Check if the route still produces this AP (exact or path-suffixed)
