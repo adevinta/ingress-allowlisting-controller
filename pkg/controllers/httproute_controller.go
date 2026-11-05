@@ -410,7 +410,10 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 				continue
 			}
 			mergeKey := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
-			if mergeKey == "" || obj.GetNamespace() != gatewayNS {
+			// Only the merged policies of this Gateway: another Gateway of the namespace can have a
+			// merge group with members there and none here. Skipped before the sibling checks, which
+			// read the API directly.
+			if mergeKey == "" || !mw.ServesGateway(obj, gateway) {
 				continue
 			}
 			// Check cache: any sibling still in this group?
@@ -444,7 +447,7 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 			if hasSibling {
 				continue
 			}
-			if err := mw.DeleteMerged(ctx, gatewayNS, mergeKey); err != nil {
+			if err := mw.DeleteMerged(ctx, gateway, mergeKey); err != nil {
 				return err
 			}
 			log.Debugf("Deleted orphaned merged AP %q — no siblings remain in group", mergeKey)
@@ -501,7 +504,7 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 				return nil // cache was stale — sibling still exists, skip deletion
 			}
 		}
-		if err := writer.DeleteMerged(ctx, gateway.Namespace, mergeKey); err != nil {
+		if err := writer.DeleteMerged(ctx, gateway, mergeKey); err != nil {
 			return err
 		}
 		log.Debugf("Deleted merged AuthorizationPolicy for empty group %q → gateway %s/%s", mergeKey, gateway.Namespace, gateway.Name)

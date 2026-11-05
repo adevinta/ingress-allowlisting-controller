@@ -528,12 +528,12 @@ func TestDeleteMerged_DeletesOwnMergedPolicy(t *testing.T) {
 	w := newIstioL7Writer(k8sClient)
 
 	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route}, "shared-service"))
-	require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", "shared-service"))
+	require.NoError(t, w.DeleteMerged(context.Background(), gw, "shared-service"))
 
 	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
 	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted, got %v", err)
 
-	require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", "shared-service"), "deleting a missing AP is a no-op")
+	require.NoError(t, w.DeleteMerged(context.Background(), gw, "shared-service"), "deleting a missing AP is a no-op")
 }
 
 // TestDeleteMerged_KeepsForeignPolicy verifies that emptying a merge group whose key names a
@@ -546,13 +546,44 @@ func TestDeleteMerged_KeepsForeignPolicy(t *testing.T) {
 				WithObjects(existing.DeepCopy()).Build()
 			w := newIstioL7Writer(k8sClient)
 
-			require.NoError(t, w.DeleteMerged(context.Background(), "gw-ns", mergeKey))
+			require.NoError(t, w.DeleteMerged(context.Background(), testGateway("my-gw", "gw-ns"), mergeKey))
 
 			policy := &istiosecurityv1.AuthorizationPolicy{}
 			require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergeKey, Namespace: "gw-ns"}, policy), "foreign AP must not be deleted")
 			assert.Equal(t, existing.Spec.Action, policy.Spec.Action)
 		})
 	}
+}
+
+// TestMergedPolicy_BelongsToOneGateway verifies that a merged AP serves the Gateway it was written
+// for: the same merge key on another Gateway of the namespace (same AP name) can't take it over,
+// and emptying the group there doesn't delete it.
+func TestMergedPolicy_BelongsToOneGateway(t *testing.T) {
+	ctx := context.Background()
+	cidrs := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
+	routeA := testRoute("svc-a", "ns-a", "svc-a.example.com")
+	routeA.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	routeB := testRoute("svc-b", "ns-a", "svc-b.example.com")
+	routeB.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
+	gwA, gwB := testGateway("gw-a", "gw-ns"), testGateway("gw-b", "gw-ns")
+	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(cidrs, routeA, routeB, gwA, gwB).Build()
+	w := newIstioL7Writer(k8sClient)
+	require.NoError(t, w.ApplyMerged(ctx, gwA, []*gatewayApiv1.HTTPRoute{routeA}, "shared"))
+
+	err := w.ApplyMerged(ctx, gwB, []*gatewayApiv1.HTTPRoute{routeB}, "shared")
+	assert.ErrorIs(t, err, ErrPolicyNotManaged, "gw-b can't take over gw-a's merged AP")
+	assert.ErrorContains(t, err, "gw-a")
+
+	require.NoError(t, w.DeleteMerged(ctx, gwB, "shared"))
+
+	policy := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "shared", Namespace: "gw-ns"}, policy), "gw-b doesn't delete gw-a's merged AP")
+	assert.Equal(t, "gw-a", policy.Spec.TargetRefs[0].Name)
+	assert.Equal(t, []string{"svc-a.example.com"}, allPolicyHosts(policy))
+
+	require.NoError(t, w.DeleteMerged(ctx, gwA, "shared"))
+	err = k8sClient.Get(ctx, client.ObjectKey{Name: "shared", Namespace: "gw-ns"}, policy)
+	assert.True(t, apierrors.IsNotFound(err), "gw-a still deletes its own, got %v", err)
 }
 
 // TestApplyMerged_SkipsSiblingWithoutHostnames verifies that a sibling without hostnames is left

@@ -133,7 +133,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 		// Only hostless siblings were left: an AP from before they were refused may still hold
 		// their catch-all rule, so remove it rather than keep it.
 		if skippedNoHostnames {
-			return w.DeleteMerged(ctx, gateway.Namespace, mergeKey)
+			return w.DeleteMerged(ctx, gateway, mergeKey)
 		}
 		return nil
 	}
@@ -217,6 +217,12 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 				return fmt.Errorf("%w: AuthorizationPolicy %s/%s is not the merged policy for merge key %q",
 					ErrPolicyNotManaged, policy.Namespace, policy.Name, mergeKey)
 			}
+			// The same key on another Gateway of the namespace gives the same name: taking the
+			// policy over would point it away from the Gateway it serves.
+			if policy.ResourceVersion != "" && !servesGateway(policy, gateway) {
+				return fmt.Errorf("%w: merged AuthorizationPolicy %s/%s already serves Gateway %s, use another merge key for Gateway %s",
+					ErrPolicyNotManaged, policy.Namespace, policy.Name, targetGateways(policy), gateway.Name)
+			}
 			w.applyLabels(policy, OwnerKindMerged, mergedOwnerNamespace, mergeKey)
 			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
@@ -234,19 +240,49 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 	})
 }
 
-// DeleteMerged removes the merged AuthorizationPolicy for the given merge key.
-// An AP with that name that is not the merged policy of this group is left untouched.
-func (w *IstioL7Writer) DeleteMerged(ctx context.Context, namespace, mergeKey string) error {
+// DeleteMerged removes the merged AuthorizationPolicy of the gateway for the given merge key.
+// An AP with that name that is not the merged policy of this group, or serves another Gateway, is
+// left untouched.
+func (w *IstioL7Writer) DeleteMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, mergeKey string) error {
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	if err := w.client.Get(ctx, types.NamespacedName{Namespace: namespace, Name: mergeKey}, policy); err != nil {
+	if err := w.client.Get(ctx, types.NamespacedName{Namespace: gateway.Namespace, Name: mergeKey}, policy); err != nil {
 		return client.IgnoreNotFound(err)
 	}
-	if !w.isMergedPolicy(policy, mergeKey) {
+	if !w.isMergedPolicy(policy, mergeKey) || !servesGateway(policy, gateway) {
 		return nil
 	}
 	// The UID precondition makes sure we delete the object we just checked, not one recreated
 	// under the same name in between.
 	return deleteLogged(ctx, w.client, policy, "AuthorizationPolicy", "merge group "+mergeKey+" has no routes left", client.Preconditions{UID: &policy.UID})
+}
+
+// ServesGateway reports whether obj, a merged AuthorizationPolicy, is the one of gateway. A merged
+// policy is named after its merge key in the Gateway's namespace, so Gateways of one namespace
+// using the same key share the name: only its targetRefs say which Gateway it serves.
+func (w *IstioL7Writer) ServesGateway(obj client.Object, gateway *gatewayApiv1.Gateway) bool {
+	policy, ok := obj.(*istiosecurityv1.AuthorizationPolicy)
+	return ok && servesGateway(policy, gateway)
+}
+
+func servesGateway(policy *istiosecurityv1.AuthorizationPolicy, gateway *gatewayApiv1.Gateway) bool {
+	if policy.Namespace != gateway.Namespace {
+		return false
+	}
+	for _, ref := range policy.Spec.TargetRefs {
+		if ref.GetGroup() == gatewayApiv1.GroupName && ref.GetKind() == "Gateway" && ref.GetName() == gateway.Name {
+			return true
+		}
+	}
+	return false
+}
+
+// targetGateways names the Gateways policy targets, for messages.
+func targetGateways(policy *istiosecurityv1.AuthorizationPolicy) string {
+	var names []string
+	for _, ref := range policy.Spec.TargetRefs {
+		names = append(names, ref.GetName())
+	}
+	return strings.Join(names, ",")
 }
 
 // isMergedPolicy reports whether the AP is the merged policy this writer created for mergeKey.
