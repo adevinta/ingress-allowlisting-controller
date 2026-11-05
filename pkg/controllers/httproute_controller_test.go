@@ -22,6 +22,7 @@ import (
 	"github.com/stretchr/testify/require"
 	v1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	"sigs.k8s.io/controller-runtime/pkg/reconcile"
@@ -731,6 +732,7 @@ func TestValidateMergeKey(t *testing.T) {
 	}
 	for _, key := range valid {
 		assert.NoError(t, writers.ValidateMergeKey(key), "expected %q to be valid", key)
+		assert.Empty(t, validation.IsDNS1123Subdomain(writers.MergedPolicyName("ipam.adevinta.com", "gw", key)), "%q gives a valid policy name", key)
 	}
 
 	invalid := []string{
@@ -742,6 +744,11 @@ func TestValidateMergeKey(t *testing.T) {
 		"myapp-",                 // trailing hyphen
 		"my app",                 // space
 		strings.Repeat("a", 254), // too long
+		// Each '.'-separated part must start and end with a letter or digit: these made invalid
+		// policy names, refused by the API server instead of reported as an invalid key.
+		"a..b",
+		"a-.b",
+		"a.-b",
 	}
 	for _, key := range invalid {
 		assert.Error(t, writers.ValidateMergeKey(key), "expected %q to be invalid", key)
