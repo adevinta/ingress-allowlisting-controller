@@ -105,9 +105,9 @@ func TestRouteAllowedByParentRef(t *testing.T) {
 			gw := newTestGatewayWithListeners("gw", "infra", "istio", tc.listeners...)
 			route := allowlistedRoute("app", tc.routeNS, tc.ref)
 
-			got, err := r.routeAllowedByParentRef(context.Background(), route, tc.ref, gw)
+			_, refusal, err := r.routeHostnamesOnParentRef(context.Background(), route, tc.ref, gw)
 			require.NoError(t, err)
-			assert.Equal(t, tc.want, got)
+			assert.Equal(t, tc.want, refusal == "", refusal)
 		})
 	}
 
@@ -116,7 +116,7 @@ func TestRouteAllowedByParentRef(t *testing.T) {
 		gw := newTestGatewayWithListeners("gw", "infra", "istio", httpListener("http", gatewayApiv1.NamespacesFromSelector, sharedAccess))
 		ref := parentRef("gw", "infra")
 
-		_, err := r.routeAllowedByParentRef(context.Background(), allowlistedRoute("app", "missing", ref), ref, gw)
+		_, _, err := r.routeHostnamesOnParentRef(context.Background(), allowlistedRoute("app", "missing", ref), ref, gw)
 		assert.Error(t, err)
 	})
 }

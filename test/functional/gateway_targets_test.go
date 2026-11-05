@@ -231,6 +231,7 @@ func istioHTTPRouteTarget(d discovery) target {
 		extraScenarios: func(t *testing.T, env scenarioEnv) {
 			crossNamespaceScenarios(t, env, d, istioCrossNamespace(d))
 			t.Run("merge", func(t *testing.T) { mergeScenario(t, env, d) })
+			t.Run("listener-hostnames", func(t *testing.T) { listenerHostnamesScenario(t, env, d) })
 		},
 		otherInstance: istioHTTPRouteOtherInstance(d),
 	}

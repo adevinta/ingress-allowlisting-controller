@@ -155,10 +155,21 @@ merged AP. Things to know:
 - The check runs when the route reconciles: on a change to the route or its CIDRs, or the
   periodic resync. Changing a Gateway's `allowedRoutes` or a namespace's labels doesn't trigger
   it, so a revoked route keeps its policy until then (plus up to 10 minutes for labels).
-- Listener hostnames are not checked. On a Gateway whose listeners set `hostname`, a route's AP
-  still gets all the route's hostnames.
-- Routes the Gateway accepts can still claim the same hostnames as each other. Gateway API leaves
-  hostname ownership to the implementation.
+- **An AP gets only the hostnames the Gateway routes for the route** (since v0.3.0): the route's
+  hostnames that match the hostnames of the listeners accepting it (`allowedRoutes`, and the
+  parentRef's `sectionName` / `port`), as Gateway API defines it. A listener without `hostname`
+  matches all of them; a route wildcard on a more specific listener gives the listener's hostname.
+  A route whose hostnames all fall outside its listeners isn't attached, so it gets no AP there,
+  like a refused route. Before, an AP got every hostname of the route: on a shared Gateway with a
+  listener per tenant (`*.team-a.example.com`, `*.team-b.example.com`), team-a could list
+  `shop.team-b.example.com` on its route and allow its own CIDRs there, since Istio ORs ALLOW
+  policies by host. A Gateway's listener hostnames are checked when the route reconciles, like
+  `allowedRoutes`: changing them takes effect on the route's next reconcile.
+- Routes on the **same** listener can still claim the same hostnames as each other, e.g. on a
+  listener without `hostname` shared by tenants. Gateway API leaves hostname ownership to the
+  implementation; give each tenant its own listener with a `hostname` (and `allowedRoutes` for its
+  namespace), or protect the hostnames with a DENY policy (see
+  [security.md](security.md#protecting-a-cross-namespace-gateway-with-a-deny-policy-istio)).
 
 ### Granularity
 

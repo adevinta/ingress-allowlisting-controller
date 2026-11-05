@@ -79,6 +79,7 @@ attached to a Gateway in `-b`.
 |---|---|---|
 | `cross-namespace` | `allowedRoutes: All` | the route's allowlist is written: for **Traefik** a Middleware in `-a`, the route's namespace (`extensionRef` cannot cross namespaces), nothing in `-b`; for **Istio** an AuthorizationPolicy in `-b`, the Gateway's namespace, labelled with the route as owner and named `{routeNS}.{gw}.{route}.{hash8}`, nothing in `-a` |
 | `merge` (Istio only) | `allowedRoutes: All` | two HTTPRoutes, one in `-a` and one in `-b`, with the same `<prefix>/merge` key, share one AuthorizationPolicy in `-b` named `merge.{gw}.{key}.{hash8}`, with both routes' hosts and CIDRs; neither gets a policy of its own (watched for 30s) |
+| `listener-hostnames` (Istio only) | (the target's own parent Gateway, `*.functional.invalid`) | a route with one hostname inside the listener's and one outside (`*.other.invalid`) gets an AP with only the inside one |
 | `allowedroutes-same` | `allowedRoutes: Same` | the Gateway does not accept the route, so **nothing** is written for it, watched for 30s (NEW_IDEAS item 1). For Istio a policy would otherwise still apply to the Gateway by host, i.e. to other tenants' hosts |
 
 Resource kinds covered so far:

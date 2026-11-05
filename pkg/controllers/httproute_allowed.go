@@ -2,6 +2,8 @@ package controllers
 
 import (
 	"context"
+	"slices"
+	"strings"
 	"sync"
 	"time"
 
@@ -60,13 +62,20 @@ func (r *HTTPRouteAllowlistingReconciler) namespaceLabels() *namespaceLabelCache
 	return r.nsLabels
 }
 
-// routeAllowedByParentRef reports whether the Gateway accepts the route through this parentRef,
-// following the Gateway API attachment rules on the listeners the parentRef targets
-// (sectionName, port): allowedRoutes.kinds and allowedRoutes.namespaces. Listener hostnames are
-// not checked. A route the Gateway doesn't accept serves no traffic there, but an Istio
-// AuthorizationPolicy written for it would still apply to the Gateway by host, so no policy may be
-// written for it.
-func (r *HTTPRouteAllowlistingReconciler) routeAllowedByParentRef(ctx context.Context, route *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, gw *gatewayApiv1.Gateway) (bool, error) {
+// routeHostnamesOnParentRef returns the route's hostnames the Gateway routes for it through this
+// parentRef, following the Gateway API attachment rules on the listeners the parentRef targets
+// (sectionName, port): allowedRoutes.kinds, allowedRoutes.namespaces, and the listeners'
+// hostnames. reason is "" when the route is attached, else why it isn't.
+//
+// A route the Gateway doesn't accept serves no traffic there, and the hostnames a listener doesn't
+// match are ignored for routing. But an Istio AuthorizationPolicy targets the whole Gateway by host,
+// so one written for those hostnames would allow its CIDRs on other routes' hosts, e.g. another
+// tenant's on another listener. So the policy gets only the hostnames returned here.
+//
+// A route without hostnames is attached with none: it gets no policy (see Apply), as it would
+// cover every host of the listener.
+func (r *HTTPRouteAllowlistingReconciler) routeHostnamesOnParentRef(ctx context.Context, route *gatewayApiv1.HTTPRoute, ref gatewayApiv1.ParentReference, gw *gatewayApiv1.Gateway) (hostnames []string, reason string, err error) {
+	var listeners []gatewayApiv1.Listener
 	for _, l := range gw.Spec.Listeners {
 		if ref.SectionName != nil && l.Name != *ref.SectionName {
 			continue
@@ -79,18 +88,25 @@ func (r *HTTPRouteAllowlistingReconciler) routeAllowedByParentRef(ctx context.Co
 		}
 		ok, err := r.listenerAllowsNamespace(ctx, l, route.Namespace, gw.Namespace)
 		if err != nil {
-			return false, err
+			return nil, "", err
 		}
 		if ok {
-			return true, nil
+			listeners = append(listeners, l)
 		}
 	}
-	return false, nil
+	if len(listeners) == 0 {
+		return nil, "it is not allowed by the listeners (allowedRoutes)", nil
+	}
+	hostnames = attachedHostnames(route.Spec.Hostnames, listeners)
+	if len(route.Spec.Hostnames) > 0 && len(hostnames) == 0 {
+		return nil, "none of its hostnames matches the hostnames of the listeners that allow it", nil
+	}
+	return hostnames, "", nil
 }
 
-// routeAllowedByGateway reports whether the Gateway accepts the route through any of the route's
-// parentRefs that point to it.
-func (r *HTTPRouteAllowlistingReconciler) routeAllowedByGateway(ctx context.Context, route *gatewayApiv1.HTTPRoute, gw *gatewayApiv1.Gateway) (bool, error) {
+// routeHostnamesOnGateway is routeHostnamesOnParentRef over all of the route's parentRefs to gw:
+// the union of their hostnames, attached if any of them is.
+func (r *HTTPRouteAllowlistingReconciler) routeHostnamesOnGateway(ctx context.Context, route *gatewayApiv1.HTTPRoute, gw *gatewayApiv1.Gateway) (hostnames []string, attached bool, err error) {
 	for _, ref := range gateway.GatewayParentRefs(route) {
 		refNS := route.Namespace
 		if ref.Namespace != nil {
@@ -99,12 +115,61 @@ func (r *HTTPRouteAllowlistingReconciler) routeAllowedByGateway(ctx context.Cont
 		if string(ref.Name) != gw.Name || refNS != gw.Namespace {
 			continue
 		}
-		ok, err := r.routeAllowedByParentRef(ctx, route, ref, gw)
-		if err != nil || ok {
-			return ok, err
+		hosts, reason, err := r.routeHostnamesOnParentRef(ctx, route, ref, gw)
+		if err != nil {
+			return nil, false, err
+		}
+		if reason == "" {
+			attached = true
+			hostnames = append(hostnames, hosts...)
 		}
 	}
-	return false, nil
+	slices.Sort(hostnames)
+	return slices.Compact(hostnames), attached, nil
+}
+
+// attachedHostnames returns the route hostnames the listeners match, as Gateway API defines it
+// (HTTPRouteSpec.Hostnames): a listener without hostname matches all of them; otherwise each
+// route hostname intersecting the listener's gives the more specific of the two. Sorted, unique.
+func attachedHostnames(routeHostnames []gatewayApiv1.Hostname, listeners []gatewayApiv1.Listener) []string {
+	var out []string
+	for _, l := range listeners {
+		for _, h := range routeHostnames {
+			if l.Hostname == nil || *l.Hostname == "" {
+				out = append(out, string(h))
+				continue
+			}
+			if match, ok := intersectHostnames(string(*l.Hostname), string(h)); ok {
+				out = append(out, match)
+			}
+		}
+	}
+	slices.Sort(out)
+	return slices.Compact(out)
+}
+
+// intersectHostnames returns the hostname matched by both a listener hostname and a route
+// hostname, either of which may be a wildcard (*.suffix, a suffix match of one or more labels):
+// the more specific one.
+func intersectHostnames(listener, route string) (string, bool) {
+	lWild, rWild := strings.HasPrefix(listener, "*."), strings.HasPrefix(route, "*.")
+	switch {
+	case !lWild && !rWild:
+		return route, listener == route
+	case lWild && !rWild:
+		return route, strings.HasSuffix(route, listener[1:])
+	case !lWild && rWild:
+		return listener, strings.HasSuffix(listener, route[1:])
+	default:
+		lSuffix, rSuffix := listener[1:], route[1:]
+		switch {
+		case lSuffix == rSuffix || strings.HasSuffix(rSuffix, lSuffix):
+			return route, true
+		case strings.HasSuffix(lSuffix, rSuffix):
+			return listener, true
+		}
+		return "", false
+	}
 }
 
 // listenerAllowsHTTPRoute applies allowedRoutes.kinds; without kinds, a listener accepts the

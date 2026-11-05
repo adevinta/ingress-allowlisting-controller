@@ -93,3 +93,33 @@ func policyCIDRsAndHosts(policy *istiosecurityv1.AuthorizationPolicy) (cidrs, ho
 	slices.Sort(hosts)
 	return slices.Compact(cidrs), slices.Compact(hosts)
 }
+
+// listenerHostnamesScenario checks that a route's AuthorizationPolicy gets only the hostnames its
+// listeners match: the test Gateways listen on *.functional.invalid, so a second hostname outside it
+// is left out. An Istio policy targets the whole Gateway by host: with that hostname it would allow
+// the route's CIDRs on another route's host.
+func listenerHostnamesScenario(t *testing.T, env scenarioEnv, d discovery) {
+	ctx, c, ns := env.ctx, env.c, env.ns
+	const name = "istio-listener-hostnames"
+	spec := ipamv1alpha1.CIDRsSpec{CIDRsSource: ipamv1alpha1.CIDRsSource{CIDRs: []string{"203.0.113.0/24"}}}
+	if err := createCIDRs(ctx, c, ns, name, spec); err != nil {
+		t.Fatalf("creating CIDRs: %v", err)
+	}
+	route := newHTTPRoute(d, ns, name, parentGateway(istioHTTPRouteName), map[string]string{env.annotation: name})
+	route.Spec.Hostnames = append(route.Spec.Hostnames, gatewayApiv1.Hostname(name+".other.invalid"))
+	if err := c.Create(ctx, route); err != nil {
+		t.Fatalf("creating HTTPRoute: %v", err)
+	}
+	want := []string{name + ".functional.invalid"}
+	eventually(t, "AuthorizationPolicy of "+ns+"/"+name+" with only the hostnames its listener matches", func() (bool, string) {
+		list := &istiosecurityv1.AuthorizationPolicyList{}
+		if err := c.List(ctx, list, client.InNamespace(ns), ownerLabels(d, ns, name)); err != nil {
+			return false, err.Error()
+		}
+		if len(list.Items) != 1 {
+			return false, fmt.Sprintf("%d AuthorizationPolicies, want 1", len(list.Items))
+		}
+		_, hosts := policyCIDRsAndHosts(list.Items[0])
+		return slices.Equal(hosts, want), fmt.Sprintf("hosts %v, want %v", hosts, want)
+	})
+}
