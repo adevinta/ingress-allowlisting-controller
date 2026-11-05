@@ -5,7 +5,7 @@ metadata:
   labels:
     app.kubernetes.io/name: "{{ .Release.Name }}"
     {{- with .Values.podMonitor.additionalLabels }}
-    {{ toYaml . | indent 4 }}
+    {{- toYaml . | nindent 4 }}
     {{- end }}
   name: {{ .Release.Name }}
   namespace: {{ .Release.Namespace }}
