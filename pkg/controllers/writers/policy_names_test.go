@@ -201,3 +201,17 @@ func TestTwoInstancesShareAMergeKey(t *testing.T) {
 	assert.Equal(t, []string{"svc-a.example.com"}, allPolicyHosts(getPolicy(t, c, "gw-ns", MergedPolicyName("a.example.com", "shared-gw", "shop"))))
 	assert.Equal(t, []string{"svc-b.example.com"}, allPolicyHosts(getPolicy(t, c, "gw-ns", MergedPolicyName("b.example.com", "shared-gw", "shop"))))
 }
+
+// TestSameNamespacePathHash verifies the path hash of same-namespace names: the paths are joined
+// with \0, so [/api /v1] and [/api/v1] no longer share a name, while a single path hashes as
+// before (the names of single-path rules don't change), and the legacy cross-namespace names that
+// the v0.3.0 migration looks for keep the old hash.
+func TestSameNamespacePathHash(t *testing.T) {
+	assert.Equal(t, "gw-shop-0b81c40a", sameNamespacePolicyName("gw", "shop", []string{"/api"}), "Exact /api: unchanged")
+	assert.Equal(t, "gw-shop-a5d26b9c", sameNamespacePolicyName("gw", "shop", []string{"/*"}), "PathPrefix /: unchanged")
+	assert.Equal(t, "gw-shop", sameNamespacePolicyName("gw", "shop", nil), "no paths: unchanged")
+	assert.NotEqual(t, "gw-shop-64eaeb4c", sameNamespacePolicyName("gw", "shop", []string{"/api", "/api/*"}), "several paths: renamed")
+	assert.NotEqual(t, sameNamespacePolicyName("gw", "shop", []string{"/api", "/v1"}), sameNamespacePolicyName("gw", "shop", []string{"/api/v1"}))
+	assert.Equal(t, sameNamespacePolicyName("gw", "shop", []string{"/v1", "/api"}), sameNamespacePolicyName("gw", "shop", []string{"/api", "/v1", "/api"}), "order and duplicates don't matter")
+	assert.Equal(t, "gw-ns-shop-b581032e", legacyCrossNamespacePolicyName("ns", "gw", "shop", []string{"/api", "/v1"}), "legacy names keep the old hash")
+}
