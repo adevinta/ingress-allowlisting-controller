@@ -82,6 +82,10 @@ service:
 podMonitor:
   additionalLabels: {}
 
+# Extra labels for the Deployment and its pods, e.g. a team or cost label. Do not set
+# app.kubernetes.io/name: the selector uses it.
+labels: {}
+
 nodeSelector: {}
 
 affinity: {}
