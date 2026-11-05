@@ -172,9 +172,7 @@ hex digits of a SHA-256 over what identifies the AP, the parts separated by `\0`
 - The hash is always there, also without paths. When a name would exceed 253 characters the
   readable part is cut; `.{hash8}` stays whole.
 
-Same-namespace names are unchanged. Their path suffix has no separator, so two rules of one route
-with paths `[/a, /b]` and `[/a/b]` get the same AP name and overwrite each other (known, kept to
-avoid renaming every same-namespace AP).
+Same-namespace names keep their format, `{gw}-{route}-{fnv32hex}` (see below).
 
 **Upgrading to v0.3.0 renames the cross-namespace and merged APs.** Nothing to do by hand: when a
 route or merge group is reconciled (all are, right after the controller starts), the AP is written
@@ -189,11 +187,16 @@ the new names; select them by their labels instead (see [security.md](security.m
 When a rule has paths, a FNV-32a hash of the **full sorted path set** is appended:
 
 ```
-suffix = hex8(fnv32a(sorted_paths))
+suffix = hex8(fnv32a(join(sorted_paths, "\0")))
 ```
 
 - Sorting makes the name order-independent — reordering matches in an HTTPRoute rule does not rename the AP
-- The hash covers the full set, so reordering doesn't rename the AP. It writes the paths without a separator, so `[/a, /b]` and `[/a/b]` get the same name (see above)
+- The paths are joined with `\0`, so two rules with `[/a, /b]` and `[/a/b]` get different names. Before
+  (up to v0.3.0) they were written back to back: both rules got one name and overwrote each other's
+  AP on every reconcile, allowing only the last rule's paths. A single path is hashed as before, so
+  a rule with one path (`Exact /x`, `PathPrefix /`) keeps its name; a rule with several
+  (`PathPrefix /x` gives `/x` and `/x/*`) gets a new one, and the route's stale cleanup deletes the
+  old one after the new one is written
 - FNV-32a output is hex digits only (`[0-9a-f]`) — always a valid Kubernetes name segment
 - The human-readable part comes from the HTTPRoute name itself, not the path
 

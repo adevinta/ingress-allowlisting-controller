@@ -68,7 +68,7 @@ func sameNamespacePolicyName(gw, route string, paths []string) string {
 // CrossNamespacePolicyName: Apply deletes it once the new one is written. Remove with the
 // migration (see policyTarget.legacyName).
 func legacyCrossNamespacePolicyName(routeNS, gw, route string, paths []string) string {
-	return truncateName(gw + "-" + routeNS + "-" + route + policyNameSuffix(paths))
+	return truncateName(gw + "-" + routeNS + "-" + route + legacyPolicyNameSuffix(paths))
 }
 
 // truncateName ensures a Kubernetes resource name stays within the 253-char limit.
@@ -85,9 +85,24 @@ func truncateName(name string) string {
 }
 
 // policyNameSuffix is the -{fnv32(paths)} of a same-namespace policy name, "" without paths. The
-// paths are written without a separator, so ["/a","/b"] and ["/a/b"] give the same suffix (see
-// TODO): kept, since changing it renames every same-namespace policy.
+// sorted paths are joined with \0, so the rules ["/a","/b"] and ["/a/b"] get different names;
+// before, the paths were written back to back and both got the same name, so the two rules
+// overwrote each other's policy on every reconcile. A single path is hashed as before, so a rule
+// with one path (Exact /x, PathPrefix /) keeps its name. A rule with several (PathPrefix /x gives
+// /x and /x/*) gets a new name; the route's stale cleanup deletes the old one after the new one is
+// written.
 func policyNameSuffix(paths []string) string {
+	if len(paths) == 0 {
+		return ""
+	}
+	h := fnv.New32a()
+	_, _ = h.Write([]byte(strings.Join(util.DedupSorted(paths), "\x00")))
+	return fmt.Sprintf("-%08x", h.Sum32())
+}
+
+// legacyPolicyNameSuffix is policyNameSuffix before the \0 separator, for
+// legacyCrossNamespacePolicyName only: the cross-namespace names it rebuilds were written with it.
+func legacyPolicyNameSuffix(paths []string) string {
 	if len(paths) == 0 {
 		return ""
 	}
