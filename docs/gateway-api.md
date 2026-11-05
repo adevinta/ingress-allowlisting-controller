@@ -178,6 +178,13 @@ with the same key and the same target gateway are merged into a single AP.
 Routes with the same sorted CIDR set share one `from` block; routes with different CIDR sets
 each get their own `rule` (security isolation preserved).
 
+The key is the name of the merged AP, so it must be a valid Kubernetes name (lowercase letters,
+digits, `-` and `.`). An invalid key is ignored, with an `InvalidMergeKey` Warning Event on the
+HTTPRoute: the route keeps its own APs, as without a key, until the key is fixed. When a route
+joins a merge group, its own APs are deleted once the merged AP is written. If the merged AP
+can't be written (an AP with that name exists and isn't the controller's, see the
+`AllowlistPolicyConflict` Event), the route keeps its own APs.
+
 ```yaml
 # ns-staging00
 metadata:

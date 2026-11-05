@@ -730,7 +730,7 @@ func TestValidateMergeKey(t *testing.T) {
 		strings.Repeat("a", 253),
 	}
 	for _, key := range valid {
-		assert.NoError(t, validateMergeKey(key), "expected %q to be valid", key)
+		assert.NoError(t, writers.ValidateMergeKey(key), "expected %q to be valid", key)
 	}
 
 	invalid := []string{
@@ -744,13 +744,16 @@ func TestValidateMergeKey(t *testing.T) {
 		strings.Repeat("a", 254), // too long
 	}
 	for _, key := range invalid {
-		assert.Error(t, validateMergeKey(key), "expected %q to be invalid", key)
+		assert.Error(t, writers.ValidateMergeKey(key), "expected %q to be invalid", key)
 	}
 }
 
+// TestReconcileHTTPRouteMergeInvalidKey verifies that an invalid merge key is ignored, with a
+// Warning Event: the route keeps its own policies, and they keep following its CIDRs, so a
+// revocation still applies. Stopping instead would freeze them with the old CIDRs, or, for a new
+// route, leave it with no policy at all.
 func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
-	// A route with an invalid merge key must stop reconciling without error (no requeue)
-	// and must not create any AP — the user must fix the annotation first.
+	ctx := context.Background()
 	cidr := &ipamv1alpha1.CIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
 		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
@@ -775,13 +778,144 @@ func TestReconcileHTTPRouteMergeInvalidKey(t *testing.T) {
 	gw := newTestGateway("my-gw", "gw-ns", "istio")
 	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(cidr, route, gwClass, gw).Build()
 	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}}
 
-	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	_, err := reconciler.Reconcile(ctx, req)
 	assert.NoError(t, err, "invalid merge key must not requeue — user must fix the annotation")
 
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, ap),
+		"the route gets its own policy, as without a merge key")
+	assert.Equal(t, []string{"1.2.3.4/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+
+	events := recordedEvents(t, reconciler.CidrResolver)
+	if assert.Len(t, events, 1) {
+		assert.Contains(t, events[0], "Warning InvalidMergeKey")
+		assert.Contains(t, events[0], `"INVALID_KEY!"`)
+	}
+
+	// The CIDRs change: the policy follows, the old CIDR is no longer allowed.
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKeyFromObject(cidr), cidr))
+	cidr.Status.CIDRs = []string{"5.6.7.8/32"}
+	require.NoError(t, k8sClient.Update(ctx, cidr))
+	_, err = reconciler.Reconcile(ctx, req)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "my-gw-ns-my-route", Namespace: "gw-ns"}, ap))
+	assert.Equal(t, []string{"5.6.7.8/32"}, ap.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+
 	apList := &istiosecurityv1.AuthorizationPolicyList{}
-	require.NoError(t, k8sClient.List(context.Background(), apList))
-	assert.Empty(t, apList.Items, "no AP must be created for an invalid merge key")
+	require.NoError(t, k8sClient.List(ctx, apList))
+	assert.Len(t, apList.Items, 1, "no merged policy for an invalid merge key")
+}
+
+// TestReconcileHTTPRouteMergeInvalidKeyTraefik verifies that an invalid merge key doesn't stop the
+// Traefik writer, which ignores merge keys anyway.
+func TestReconcileHTTPRouteMergeInvalidKeyTraefik(t *testing.T) {
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Name: "my-route", Namespace: "ns", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "allowlist",
+			"ipam.adevinta.com/merge":           "INVALID_KEY!",
+		}},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{parentRef("traefik-gw", "")}},
+			Hostnames:       []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	traefikGwClass := &gatewayApiv1.GatewayClass{
+		ObjectMeta: v1.ObjectMeta{Name: "traefik"},
+		Spec:       gatewayApiv1.GatewayClassSpec{ControllerName: gatewayApiv1.GatewayController(writers.TraefikControllerName)},
+	}
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).
+		WithObjects(cidr, route, traefikGwClass, newTestGateway("traefik-gw", "ns", "traefik")).Build()
+	resolver := newTestCidrResolver(k8sClient)
+	reconciler := &HTTPRouteAllowlistingReconciler{
+		Client: k8sClient, APIReader: k8sClient, CidrResolver: resolver, Scheme: extendedScheme,
+		L7Writers: writers.L7WriterRegistry{
+			writers.TraefikControllerName: writers.NewTraefikL7Writer(k8sClient, "ingress-allowlisting-controller", resolver),
+		},
+	}
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	mw := &writers.TraefikMiddleware{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "ns"}, mw))
+	assert.Equal(t, []string{"1.2.3.4/32"}, mw.Spec.IPAllowList.SourceRange)
+}
+
+// sameNamespaceMergeSetup is a route with its own (per-route) policy on gateway ns/my-gw: the state
+// of a route before it joins a merge group.
+func sameNamespaceMergeSetup(t *testing.T, objs ...client.Object) (client.Client, *HTTPRouteAllowlistingReconciler, reconcile.Request) {
+	t.Helper()
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	route := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Name: "my-route", Namespace: "ns", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "allowlist",
+		}},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{parentRef("my-gw", "")}},
+			Hostnames:       []gatewayApiv1.Hostname{"example.com"},
+		},
+	}
+	objs = append(objs, cidr, route, newIstioGatewayClass("istio"), newTestGateway("my-gw", "ns", "istio"))
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(objs...).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+	req := reconcile.Request{NamespacedName: client.ObjectKey{Name: "my-route", Namespace: "ns"}}
+
+	_, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, &istiosecurityv1.AuthorizationPolicy{}))
+	return k8sClient, reconciler, req
+}
+
+// setMergeKey sets the merge annotation of ns/my-route and reconciles it.
+func setMergeKey(t *testing.T, k8sClient client.Client, reconciler *HTTPRouteAllowlistingReconciler, req reconcile.Request, key string) {
+	t.Helper()
+	route := &gatewayApiv1.HTTPRoute{}
+	require.NoError(t, k8sClient.Get(context.Background(), req.NamespacedName, route))
+	route.Annotations["ipam.adevinta.com/merge"] = key
+	require.NoError(t, k8sClient.Update(context.Background(), route))
+	_, err := reconciler.Reconcile(context.Background(), req)
+	require.NoError(t, err)
+}
+
+// TestReconcileHTTPRouteJoiningMergeGroupDeletesPerRoutePolicies verifies that a route joining a
+// merge group loses its per-route policies at once, not at the next restart. They would stay
+// frozen next to the merged one, and keep allowing CIDRs removed from the route since.
+func TestReconcileHTTPRouteJoiningMergeGroupDeletesPerRoutePolicies(t *testing.T) {
+	k8sClient, reconciler, req := sameNamespaceMergeSetup(t)
+
+	setMergeKey(t, k8sClient, reconciler, req, "my-group")
+
+	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, &istiosecurityv1.AuthorizationPolicy{})
+	assert.True(t, apierrors.IsNotFound(err), "the per-route policy is deleted once the route is in the merged one")
+	merged := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "ns"}, merged))
+	assert.Equal(t, []string{"1.2.3.4/32"}, merged.Spec.Rules[0].From[0].Source.RemoteIpBlocks)
+}
+
+// TestReconcileHTTPRouteMergeRefusedKeepsPerRoutePolicies verifies that when the merged policy
+// can't be written (a policy with that name exists and isn't ours), the route keeps its per-route
+// policies: deleting them would leave it with no policy at all.
+func TestReconcileHTTPRouteMergeRefusedKeepsPerRoutePolicies(t *testing.T) {
+	foreign := &istiosecurityv1.AuthorizationPolicy{ObjectMeta: v1.ObjectMeta{Name: "my-group", Namespace: "ns"}}
+	k8sClient, reconciler, req := sameNamespaceMergeSetup(t, foreign)
+
+	setMergeKey(t, k8sClient, reconciler, req, "my-group")
+
+	assert.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-gw-my-route", Namespace: "ns"}, &istiosecurityv1.AuthorizationPolicy{}),
+		"the per-route policy stays while the merged one is refused")
+	events := recordedEvents(t, reconciler.CidrResolver)
+	if assert.Len(t, events, 1) {
+		assert.Contains(t, events[0], "Warning AllowlistPolicyConflict")
+	}
 }
 
 func TestReconcileHTTPRouteMerge(t *testing.T) {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"regexp"
 	"strings"
 
 	log "github.com/adevinta/go-log-toolkit"
@@ -20,6 +21,26 @@ import (
 	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
+
+// validMergeKey matches a valid Kubernetes resource name: lowercase alphanumeric, '-' and '.',
+// starting and ending with an alphanumeric, at most 253 chars. The merge key is the merged policy's
+// name.
+var validMergeKey = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-\.]{0,251}[a-z0-9])?$`)
+
+// ValidateMergeKey returns an error if key can't be a merge key. The reconcile and the startup
+// cleanup must agree on it: a route with an invalid key is handled as one without a key.
+func ValidateMergeKey(key string) error {
+	if !validMergeKey.MatchString(key) {
+		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: must match [a-z0-9][a-z0-9-.]*[a-z0-9] and be ≤253 chars", key)
+	}
+	return nil
+}
+
+// inMergeMode reports whether route is in a merge group: it has a valid merge key.
+func inMergeMode(route *gatewayApiv1.HTTPRoute, mergeAnnotation string) bool {
+	key := route.Annotations[mergeAnnotation]
+	return key != "" && ValidateMergeKey(key) == nil
+}
 
 // mergedTuple is a single (cidr-set, host-set, paths) entry emitted per rule during ApplyMerged grouping.
 type mergedTuple struct {

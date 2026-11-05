@@ -5,7 +5,6 @@ import (
 	"errors"
 	"fmt"
 	"reflect"
-	"regexp"
 	"slices"
 	"sync"
 
@@ -88,11 +87,17 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 
 	mergeKey := httproute.Annotations[r.mergeAnnotation()]
 	if mergeKey != "" {
-		if err := validateMergeKey(mergeKey); err != nil {
-			log.Errorf("HTTPRoute %s/%s has invalid merge key: %v", httproute.Namespace, httproute.GetName(), err)
-			return ctrl.Result{}, nil
+		if err := writers.ValidateMergeKey(mergeKey); err != nil {
+			// Ignored: the route is handled as one without a merge key, so its own policies keep
+			// following its CIDRs. Stopping here would freeze them with the old CIDRs, or leave a new
+			// route with no policy at all. The startup cleanup ignores the key too (IsOrphaned).
+			msg := fmt.Sprintf("%v: ignored, the route gets its own policies until it is fixed", err)
+			log.Warnf("HTTPRoute %s/%s: %s", httproute.Namespace, httproute.Name, msg)
+			r.CidrResolver.WarningEvent(&httproute, "InvalidMergeKey", "ReadMergeKey", msg)
+			mergeKey = ""
 		}
-	} else {
+	}
+	if mergeKey == "" {
 		// Route is not in merge mode — clean up any stale merged APs where this route was the last member.
 		if err := r.cleanupOrphanedMergedAPs(ctx, &httproute, parentRefs); err != nil {
 			return ctrl.Result{}, err
@@ -124,6 +129,9 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 	invokedWriters := map[string]struct{}{}
 	// refusedRefs are the parentRefs whose Gateway doesn't accept the route.
 	var refusedRefs []gatewayApiv1.ParentReference
+	// mergeRefused are the mergeable writers whose merged policy couldn't be written (one with that
+	// name isn't ours): the route keeps its own policies there, see below.
+	mergeRefused := map[string]bool{}
 
 	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
@@ -169,7 +177,11 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		if mw, ok := writer.(writers.MergeableL7PolicyWriter); ok && mergeKey != "" {
 			// Even when this route isn't allowed: the merged AP is rewritten without it.
 			invokedWriters[controllerName] = struct{}{}
-			if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey)); err != nil {
+			err := r.reconcileMergedGateway(ctx, &httproute, gateway, mw, mergeKey)
+			if errors.Is(err, writers.ErrPolicyNotManaged) {
+				mergeRefused[controllerName] = true
+			}
+			if err := notManaged(ctx, r.CidrResolver, "HTTPRoute", &httproute, err); err != nil {
 				return ctrl.Result{}, err
 			}
 			continue
@@ -228,6 +240,22 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			}
 		}
 		invokedWriters[controllerName] = struct{}{}
+	}
+
+	// A route in a merge group is in the merged policies now: its own policies, from before it
+	// joined, go. They would otherwise stay until the next restart, frozen with the CIDRs it had
+	// then, and keep allowing them next to the merged policy. Only once the merged policies are
+	// written: where one was refused, the route's own policies are all it has.
+	if mergeKey != "" {
+		for controllerName := range invokedWriters {
+			writer := r.L7Writers[controllerName]
+			if _, ok := writer.(writers.MergeableL7PolicyWriter); !ok || mergeRefused[controllerName] {
+				continue
+			}
+			if err := writer.DeleteForRoute(ctx, r.managedByValue(), httproute.Namespace, httproute.Name); err != nil {
+				return ctrl.Result{}, err
+			}
+		}
 	}
 
 	// Delete all policies for writers that had no matching parentRef this reconcile.
@@ -530,18 +558,6 @@ func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, ga
 		}
 	}
 	return false
-}
-
-// validK8sName matches a valid Kubernetes resource name: lowercase alphanumeric and hyphens,
-// must start and end with alphanumeric, max 253 chars.
-var validK8sName = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-\.]{0,251}[a-z0-9])?$`)
-
-// validateMergeKey returns an error if key is not a valid Kubernetes resource name.
-func validateMergeKey(key string) error {
-	if !validK8sName.MatchString(key) {
-		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: must match [a-z0-9][a-z0-9-.]*[a-z0-9] and be ≤253 chars", key)
-	}
-	return nil
 }
 
 // translatePaths delegates path translation to the writer if it implements PathTranslator,
