@@ -185,6 +185,11 @@ joins a merge group, its own APs are deleted once the merged AP is written. If t
 can't be written (an AP with that name exists and isn't the controller's, see the
 `AllowlistPolicyConflict` Event), the route keeps its own APs.
 
+The merged AP lives in the Gateway's namespace, so a key can serve only one Gateway there. If two
+Gateways of the same namespace use the same key, the first one to write the merged AP keeps it;
+routes of the other get an `AllowlistPolicyConflict` Event naming the Gateway it serves, and keep
+their own APs. Use another key for the other Gateway.
+
 ```yaml
 # ns-staging00
 metadata:

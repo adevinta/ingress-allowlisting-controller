@@ -2601,3 +2601,99 @@ func TestOwnedTypesFollowTheWriters(t *testing.T) {
 		writers.TraefikControllerName: writers.NewTraefikL7Writer(nil, "m", resolvers.CidrResolver{}),
 	}))
 }
+
+// twoGatewaysSetup has gateways gw-a and gw-b in namespace gw-ns, and a merge group "my-group" on
+// gw-a with one route (ns/merged-route), already reconciled. objs are added to the cluster.
+func twoGatewaysSetup(t *testing.T, gwB *gatewayApiv1.Gateway, objs ...client.Object) (client.Client, *HTTPRouteAllowlistingReconciler) {
+	t.Helper()
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	cidr := &ipamv1alpha1.CIDRs{
+		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns"},
+		Status:     ipamv1alpha1.CIDRsStatus{CIDRs: []string{"1.2.3.4/32"}},
+	}
+	merged := &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Name: "merged-route", Namespace: "ns", Annotations: map[string]string{
+			"ipam.adevinta.com/allowlist-group": "allowlist",
+			"ipam.adevinta.com/merge":           "my-group",
+		}},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{{Name: "gw-a", Namespace: &gwNS}}},
+			Hostnames:       []gatewayApiv1.Hostname{"a.example.com"},
+		},
+	}
+	objs = append(objs, cidr, merged, newIstioGatewayClass("istio"), newTestGateway("gw-a", "gw-ns", "istio"), gwB)
+	k8sClient := fake.NewClientBuilder().WithScheme(extendedScheme).WithObjects(objs...).Build()
+	reconciler := newHTTPRouteReconciler(t, k8sClient, extendedScheme)
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "merged-route", Namespace: "ns"}})
+	require.NoError(t, err)
+	requireMergedPolicyOfGwA(t, k8sClient)
+	return k8sClient, reconciler
+}
+
+// requireMergedPolicyOfGwA checks that gw-ns/my-group is still gw-a's merged policy, unchanged.
+func requireMergedPolicyOfGwA(t *testing.T, k8sClient client.Client) {
+	t.Helper()
+	ap := &istiosecurityv1.AuthorizationPolicy{}
+	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-group", Namespace: "gw-ns"}, ap), "gw-a's merged policy exists")
+	assert.Equal(t, "gw-a", ap.Spec.TargetRefs[0].Name)
+	assert.Equal(t, []string{"a.example.com"}, ap.Spec.Rules[0].To[0].Operation.Hosts)
+}
+
+// routeOnGwB is an allowlisted route ns/<name> on gw-b, with the given merge key ("" for none).
+func routeOnGwB(name, mergeKey string) *gatewayApiv1.HTTPRoute {
+	gwNS := gatewayApiv1.Namespace("gw-ns")
+	annotations := map[string]string{"ipam.adevinta.com/allowlist-group": "allowlist"}
+	if mergeKey != "" {
+		annotations["ipam.adevinta.com/merge"] = mergeKey
+	}
+	return &gatewayApiv1.HTTPRoute{
+		ObjectMeta: v1.ObjectMeta{Name: name, Namespace: "ns", Annotations: annotations},
+		Spec: gatewayApiv1.HTTPRouteSpec{
+			CommonRouteSpec: gatewayApiv1.CommonRouteSpec{ParentRefs: []gatewayApiv1.ParentReference{{Name: "gw-b", Namespace: &gwNS}}},
+			Hostnames:       []gatewayApiv1.Hostname{"b.example.com"},
+		},
+	}
+}
+
+// TestReconcileHTTPRouteKeepsMergedPolicyOfOtherGateway verifies that reconciling a route of gw-b
+// that isn't in a merge group doesn't delete gw-a's merged policy in the same namespace: gw-b has
+// no member of the group, gw-a has.
+func TestReconcileHTTPRouteKeepsMergedPolicyOfOtherGateway(t *testing.T) {
+	k8sClient, reconciler := twoGatewaysSetup(t, newTestGateway("gw-b", "gw-ns", "istio"), routeOnGwB("plain-route", ""))
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "plain-route", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	requireMergedPolicyOfGwA(t, k8sClient)
+}
+
+// TestReconcileHTTPRouteMergeKeyOnTwoGateways verifies that the same merge key on another Gateway
+// of the namespace (so the same policy name) can't take over the merged policy: a Warning Event on
+// the route instead, and gw-a's policy unchanged.
+func TestReconcileHTTPRouteMergeKeyOnTwoGateways(t *testing.T) {
+	k8sClient, reconciler := twoGatewaysSetup(t, newTestGateway("gw-b", "gw-ns", "istio"), routeOnGwB("other-route", "my-group"))
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "other-route", Namespace: "ns"}})
+	require.NoError(t, err, "a conflict isn't retried")
+
+	requireMergedPolicyOfGwA(t, k8sClient)
+	events := recordedEvents(t, reconciler.CidrResolver)
+	if assert.Len(t, events, 1) {
+		assert.Contains(t, events[0], "Warning AllowlistPolicyConflict")
+		assert.Contains(t, events[0], "gw-a")
+	}
+}
+
+// TestReconcileHTTPRouteMergeGroupEmptyOnOtherGateway verifies that a merge group with no member
+// gw-b accepts doesn't delete gw-a's merged policy of the same key.
+func TestReconcileHTTPRouteMergeGroupEmptyOnOtherGateway(t *testing.T) {
+	// gw-b only accepts routes from its own namespace, so the route of ns isn't a member there.
+	gwB := newTestGatewayWithListeners("gw-b", "gw-ns", "istio", httpListener("http", gatewayApiv1.NamespacesFromSame, nil))
+	k8sClient, reconciler := twoGatewaysSetup(t, gwB, routeOnGwB("other-route", "my-group"))
+
+	_, err := reconciler.Reconcile(context.Background(), reconcile.Request{NamespacedName: client.ObjectKey{Name: "other-route", Namespace: "ns"}})
+	require.NoError(t, err)
+
+	requireMergedPolicyOfGwA(t, k8sClient)
+}
