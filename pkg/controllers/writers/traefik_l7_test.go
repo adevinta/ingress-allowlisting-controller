@@ -5,11 +5,13 @@ import (
 	"testing"
 
 	"github.com/stretchr/testify/assert"
+	"github.com/stretchr/testify/require"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	clientgoscheme "k8s.io/client-go/kubernetes/scheme"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
+	"sigs.k8s.io/controller-runtime/pkg/client/interceptor"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
@@ -213,6 +215,71 @@ func TestTraefikL7Writer_DeleteForRoute_RemovesFilters(t *testing.T) {
 	after := &gatewayApiv1.HTTPRoute{}
 	assert.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-route", Namespace: "mynamespace"}, after))
 	assert.False(t, hasTraefikFilter(after.Spec.Rules[0].Filters, "my-route"), "extensionRef filter must be removed")
+}
+
+// concurrentEdit is a fake client where, once armed, someone else adds a rule to the HTTPRoute
+// right before our first patch of it reaches the API server: the edit that patch must not undo.
+type concurrentEdit struct {
+	client.Client
+	armed   bool
+	patches int // patches of the HTTPRoute sent while armed
+}
+
+func newConcurrentEdit(t *testing.T, objs ...client.Object) *concurrentEdit {
+	t.Helper()
+	ce := &concurrentEdit{}
+	ce.Client = fake.NewClientBuilder().WithScheme(traefikScheme).WithObjects(objs...).WithInterceptorFuncs(interceptor.Funcs{
+		Patch: func(ctx context.Context, c client.WithWatch, obj client.Object, patch client.Patch, opts ...client.PatchOption) error {
+			if _, isRoute := obj.(*gatewayApiv1.HTTPRoute); ce.armed && isRoute {
+				ce.patches++
+				if ce.patches == 1 {
+					current := &gatewayApiv1.HTTPRoute{}
+					require.NoError(t, c.Get(ctx, client.ObjectKeyFromObject(obj), current))
+					name := gatewayApiv1.SectionName("added-meanwhile")
+					current.Spec.Rules = append(current.Spec.Rules, gatewayApiv1.HTTPRouteRule{Name: &name})
+					require.NoError(t, c.Update(ctx, current))
+				}
+			}
+			return c.Patch(ctx, obj, patch, opts...)
+		},
+	}).Build()
+	return ce
+}
+
+// TestTraefikL7Writer_Apply_KeepsConcurrentRouteEdit verifies that adding the filter doesn't undo
+// a change made to the route between our read and our patch: the patch replaces spec.rules whole,
+// so without a resourceVersion it would write the old rules back.
+func TestTraefikL7Writer_Apply_KeepsConcurrentRouteEdit(t *testing.T) {
+	route := testTraefikRouteWithRules("my-route", "mynamespace", "/api")
+	ce := newConcurrentEdit(t, route)
+	ce.armed = true
+
+	require.NoError(t, newTraefikWriter(ce).Apply(context.Background(), traefikScheme, route, testTraefikGateway("gw", "mynamespace"), []string{"10.0.0.0/8"}, nil, nil))
+
+	got := &gatewayApiv1.HTTPRoute{}
+	require.NoError(t, ce.Get(context.Background(), client.ObjectKeyFromObject(route), got))
+	require.Len(t, got.Spec.Rules, 2, "the rule added meanwhile is kept")
+	assert.True(t, hasTraefikFilter(got.Spec.Rules[0].Filters, "my-route"))
+	assert.True(t, hasTraefikFilter(got.Spec.Rules[1].Filters, "my-route"), "the rule added meanwhile gets the filter too")
+	assert.Equal(t, 2, ce.patches, "the first patch is refused (conflict) and retried on the new route")
+}
+
+// TestTraefikL7Writer_DeleteForRoute_KeepsConcurrentRouteEdit is the same for removing the filter.
+func TestTraefikL7Writer_DeleteForRoute_KeepsConcurrentRouteEdit(t *testing.T) {
+	route := testTraefikRouteWithRules("my-route", "mynamespace", "/api")
+	ce := newConcurrentEdit(t, route)
+	w := newTraefikWriter(ce)
+	require.NoError(t, w.Apply(context.Background(), traefikScheme, route, testTraefikGateway("gw", "mynamespace"), []string{"10.0.0.0/8"}, nil, nil))
+	ce.armed = true
+
+	require.NoError(t, w.DeleteForRoute(context.Background(), "ingress-allowlisting-controller", "mynamespace", "my-route"))
+
+	got := &gatewayApiv1.HTTPRoute{}
+	require.NoError(t, ce.Get(context.Background(), client.ObjectKeyFromObject(route), got))
+	require.Len(t, got.Spec.Rules, 2, "the rule added meanwhile is kept")
+	assert.False(t, hasTraefikFilter(got.Spec.Rules[0].Filters, "my-route"))
+	assert.False(t, hasTraefikFilter(got.Spec.Rules[1].Filters, "my-route"))
+	assert.Equal(t, 2, ce.patches, "the first patch is refused (conflict) and retried on the new route")
 }
 
 // TestTraefikL7Writer_ListManaged verifies only managed Middlewares are returned.

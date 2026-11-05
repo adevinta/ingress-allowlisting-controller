@@ -6,6 +6,7 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
+	"k8s.io/client-go/util/retry"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/controller/controllerutil"
@@ -75,33 +76,46 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 		return err
 	}
 	logChange(ctx, op, "Middleware", middleware, "HTTPRoute "+route.Namespace+"/"+route.Name)
-	return w.ensureHTTPRouteFilters(ctx, route, route.Name)
+	return w.ensureHTTPRouteFilters(ctx, client.ObjectKeyFromObject(route), route.Name)
+}
+
+// patchRouteRules reads the HTTPRoute, lets change edit its rules, and patches it if change
+// reports a change. The patch replaces spec.rules as a whole, so it carries the resourceVersion:
+// if the route changed since the read, the API server refuses it, and it is done again on the new
+// route instead of writing the old rules back over the other change. A route that is gone is no
+// error.
+func (w *TraefikL7Writer) patchRouteRules(ctx context.Context, key client.ObjectKey, change func(*gatewayApiv1.HTTPRoute) bool, what string) error {
+	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
+		route := &gatewayApiv1.HTTPRoute{}
+		if err := w.client.Get(ctx, key, route); err != nil {
+			return client.IgnoreNotFound(err)
+		}
+		patch := client.MergeFromWithOptions(route.DeepCopy(), client.MergeFromWithOptimisticLock{})
+		if !change(route) {
+			return nil
+		}
+		if err := w.client.Patch(ctx, route, patch); err != nil {
+			return err
+		}
+		logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", route, what)
+		return nil
+	})
 }
 
 // ensureHTTPRouteFilters adds an extensionRef filter pointing to mwName to any HTTPRoute rule
 // that doesn't already have one. It is idempotent.
-func (w *TraefikL7Writer) ensureHTTPRouteFilters(ctx context.Context, route *gatewayApiv1.HTTPRoute, mwName string) error {
-	latest := &gatewayApiv1.HTTPRoute{}
-	if err := w.client.Get(ctx, client.ObjectKeyFromObject(route), latest); err != nil {
-		return err
-	}
-	patch := client.MergeFrom(latest.DeepCopy())
+func (w *TraefikL7Writer) ensureHTTPRouteFilters(ctx context.Context, key client.ObjectKey, mwName string) error {
 	filter := traefikFilter(mwName)
-	changed := false
-	for i := range latest.Spec.Rules {
-		if !hasTraefikFilter(latest.Spec.Rules[i].Filters, mwName) {
-			latest.Spec.Rules[i].Filters = append(latest.Spec.Rules[i].Filters, filter)
-			changed = true
+	return w.patchRouteRules(ctx, key, func(route *gatewayApiv1.HTTPRoute) bool {
+		changed := false
+		for i := range route.Spec.Rules {
+			if !hasTraefikFilter(route.Spec.Rules[i].Filters, mwName) {
+				route.Spec.Rules[i].Filters = append(route.Spec.Rules[i].Filters, filter)
+				changed = true
+			}
 		}
-	}
-	if !changed {
-		return nil
-	}
-	if err := w.client.Patch(ctx, latest, patch); err != nil {
-		return err
-	}
-	logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", latest, "Middleware filter "+mwName+" added")
-	return nil
+		return changed
+	}, "Middleware filter "+mwName+" added")
 }
 
 // traefikFilter is the filter that attaches the Middleware mwName to a route rule. Adding
@@ -193,33 +207,24 @@ func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNa
 		return nil
 	}
 
-	route := &gatewayApiv1.HTTPRoute{}
-	if err := w.client.Get(ctx, types.NamespacedName{Namespace: routeNamespace, Name: routeName}, route); err != nil {
-		return client.IgnoreNotFound(err)
-	}
-	return w.removeHTTPRouteFilters(ctx, route, routeName)
+	return w.removeHTTPRouteFilters(ctx, types.NamespacedName{Namespace: routeNamespace, Name: routeName}, routeName)
 }
 
-func (w *TraefikL7Writer) removeHTTPRouteFilters(ctx context.Context, route *gatewayApiv1.HTTPRoute, mwName string) error {
-	patch := client.MergeFrom(route.DeepCopy())
-	changed := false
-	for i := range route.Spec.Rules {
-		kept := route.Spec.Rules[i].Filters[:0]
-		for _, f := range route.Spec.Rules[i].Filters {
-			if isTraefikFilter(f, mwName) {
-				changed = true
-				continue
+// removeHTTPRouteFilters removes the extensionRef filter pointing to mwName from every rule.
+func (w *TraefikL7Writer) removeHTTPRouteFilters(ctx context.Context, key client.ObjectKey, mwName string) error {
+	return w.patchRouteRules(ctx, key, func(route *gatewayApiv1.HTTPRoute) bool {
+		changed := false
+		for i := range route.Spec.Rules {
+			kept := route.Spec.Rules[i].Filters[:0]
+			for _, f := range route.Spec.Rules[i].Filters {
+				if isTraefikFilter(f, mwName) {
+					changed = true
+					continue
+				}
+				kept = append(kept, f)
 			}
-			kept = append(kept, f)
+			route.Spec.Rules[i].Filters = kept
 		}
-		route.Spec.Rules[i].Filters = kept
-	}
-	if !changed {
-		return nil
-	}
-	if err := w.client.Patch(ctx, route, patch); err != nil {
-		return err
-	}
-	logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", route, "Middleware filter "+mwName+" removed")
-	return nil
+		return changed
+	}, "Middleware filter "+mwName+" removed")
 }
