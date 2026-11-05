@@ -4,11 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"regexp"
 	"strings"
 
 	log "github.com/adevinta/go-log-toolkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/util/validation"
 	"k8s.io/client-go/util/retry"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
@@ -21,16 +21,15 @@ import (
 	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 )
 
-// validMergeKey matches a valid Kubernetes resource name: lowercase alphanumeric, '-' and '.',
-// starting and ending with an alphanumeric, at most 253 chars. The merge key is part of the merged
-// policy's name (see MergedPolicyName), and was the whole name before v0.3.0.
-var validMergeKey = regexp.MustCompile(`^[a-z0-9]([a-z0-9\-\.]{0,251}[a-z0-9])?$`)
-
 // ValidateMergeKey returns an error if key can't be a merge key. The reconcile and the startup
 // cleanup must agree on it: a route with an invalid key is handled as one without a key.
+//
+// The key is part of the merged policy's name (see MergedPolicyName), so it must be a valid
+// Kubernetes resource name (RFC 1123 subdomain): every '.'-separated part starts and ends with a
+// letter or digit, so "a..b" or "a-.b" are refused here rather than by the API server.
 func ValidateMergeKey(key string) error {
-	if !validMergeKey.MatchString(key) {
-		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: must match [a-z0-9][a-z0-9-.]*[a-z0-9] and be ≤253 chars", key)
+	if errs := validation.IsDNS1123Subdomain(key); len(errs) > 0 {
+		return fmt.Errorf("merge key %q is not a valid Kubernetes resource name: %s", key, strings.Join(errs, "; "))
 	}
 	return nil
 }

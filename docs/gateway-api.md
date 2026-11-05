@@ -192,7 +192,8 @@ each get their own `rule` (security isolation preserved).
 
 The merged AP is named `merge.{gateway.Name}.{key}.{hash8}` (see
 [AP naming](architecture.md#authorizationpolicy-naming)), so the key must be a valid Kubernetes
-name (lowercase letters, digits, `-` and `.`). An invalid key is ignored, with an `InvalidMergeKey` Warning Event on the
+name: lowercase letters, digits, `-` and `.`, and each `.`-separated part starts and ends with a
+letter or digit (`a.b` is valid, `a..b` and `a-.b` are not). An invalid key is ignored, with an `InvalidMergeKey` Warning Event on the
 HTTPRoute: the route keeps its own APs, as without a key, until the key is fixed. When a route
 joins a merge group, its own APs are deleted once the merged AP is written. If the merged AP
 can't be written (an AP with that name exists and isn't the controller's, see the
