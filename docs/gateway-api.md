@@ -121,7 +121,8 @@ spec:
 named `{gateway.Name}-{httproute.Name}`, with an ownerReference for automatic cleanup.
 
 **Cross-namespace** (parentRef has a different `namespace`): AP created in the gateway's
-namespace, named `{gateway.Name}-{httproute.Namespace}-{httproute.Name}`. No ownerReference
+namespace, named `{httproute.Namespace}.{gateway.Name}.{httproute.Name}.{hash8}` (see
+[AP naming](architecture.md#authorizationpolicy-naming)). No ownerReference
 (Kubernetes does not support cross-namespace owner refs). Orphaned APs are cleaned up at
 controller startup.
 
@@ -154,10 +155,21 @@ merged AP. Things to know:
 - The check runs when the route reconciles: on a change to the route or its CIDRs, or the
   periodic resync. Changing a Gateway's `allowedRoutes` or a namespace's labels doesn't trigger
   it, so a revoked route keeps its policy until then (plus up to 10 minutes for labels).
-- Listener hostnames are not checked. On a Gateway whose listeners set `hostname`, a route's AP
-  still gets all the route's hostnames.
-- Routes the Gateway accepts can still claim the same hostnames as each other. Gateway API leaves
-  hostname ownership to the implementation.
+- **An AP gets only the hostnames the Gateway routes for the route** (since v0.3.0): the route's
+  hostnames that match the hostnames of the listeners accepting it (`allowedRoutes`, and the
+  parentRef's `sectionName` / `port`), as Gateway API defines it. A listener without `hostname`
+  matches all of them; a route wildcard on a more specific listener gives the listener's hostname.
+  A route whose hostnames all fall outside its listeners isn't attached, so it gets no AP there,
+  like a refused route. Before, an AP got every hostname of the route: on a shared Gateway with a
+  listener per tenant (`*.team-a.example.com`, `*.team-b.example.com`), team-a could list
+  `shop.team-b.example.com` on its route and allow its own CIDRs there, since Istio ORs ALLOW
+  policies by host. A Gateway's listener hostnames are checked when the route reconciles, like
+  `allowedRoutes`: changing them takes effect on the route's next reconcile.
+- Routes on the **same** listener can still claim the same hostnames as each other, e.g. on a
+  listener without `hostname` shared by tenants. Gateway API leaves hostname ownership to the
+  implementation; give each tenant its own listener with a `hostname` (and `allowedRoutes` for its
+  namespace), or protect the hostnames with a DENY policy (see
+  [security.md](security.md#protecting-a-cross-namespace-gateway-with-a-deny-policy-istio)).
 
 ### Granularity
 
@@ -178,17 +190,21 @@ with the same key and the same target gateway are merged into a single AP.
 Routes with the same sorted CIDR set share one `from` block; routes with different CIDR sets
 each get their own `rule` (security isolation preserved).
 
-The key is the name of the merged AP, so it must be a valid Kubernetes name (lowercase letters,
-digits, `-` and `.`). An invalid key is ignored, with an `InvalidMergeKey` Warning Event on the
+The merged AP is named `merge.{gateway.Name}.{key}.{hash8}` (see
+[AP naming](architecture.md#authorizationpolicy-naming)), so the key must be a valid Kubernetes
+name (lowercase letters, digits, `-` and `.`). An invalid key is ignored, with an `InvalidMergeKey` Warning Event on the
 HTTPRoute: the route keeps its own APs, as without a key, until the key is fixed. When a route
 joins a merge group, its own APs are deleted once the merged AP is written. If the merged AP
 can't be written (an AP with that name exists and isn't the controller's, see the
 `AllowlistPolicyConflict` Event), the route keeps its own APs.
 
-The merged AP lives in the Gateway's namespace, so a key can serve only one Gateway there. If two
-Gateways of the same namespace use the same key, the first one to write the merged AP keeps it;
-routes of the other get an `AllowlistPolicyConflict` Event naming the Gateway it serves, and keep
-their own APs. Use another key for the other Gateway.
+The Gateway is part of the merged AP's name, so the same key on two Gateways of a namespace gives
+two merged APs, one per Gateway. So does the same key used by two controller instances with
+different `--annotation-prefix` (the prefix is part of the hash).
+
+> **A route annotated for two instances** (under both prefixes) gets an Istio AP from each, and
+> Istio combines ALLOW policies with OR: the route allows the union of both allowlists. Annotate a
+> route for one instance only.
 
 ```yaml
 # ns-staging00

@@ -104,10 +104,6 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 	}
 
-	var hostnames []string
-	for _, h := range httproute.Spec.Hostnames {
-		hostnames = append(hostnames, string(h))
-	}
 	granularity := httproute.Annotations[r.granularityAnnotation()]
 
 	// Lazy CIDR resolution: only needed for per-route writers (Traefik always, Istio without mergeKey).
@@ -161,15 +157,17 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 		}
 		controllerName := string(gwClass.Spec.ControllerName)
 
-		// No policy for a route the Gateway doesn't accept (listeners' allowedRoutes): an Istio AP
-		// for it would still apply to the Gateway by host, e.g. to other namespaces' hosts.
-		allowed, err := r.routeAllowedByParentRef(ctx, &httproute, ref, gateway)
+		// Only the hostnames the Gateway routes for the route here, and no policy at all for a route
+		// it doesn't attach: an Istio AP applies to the whole Gateway by host, so one for other
+		// hostnames would allow the route's CIDRs on other routes' hosts, e.g. another tenant's.
+		hostnames, refusal, err := r.routeHostnamesOnParentRef(ctx, &httproute, ref, gateway)
 		if err != nil {
 			return ctrl.Result{}, err
 		}
+		allowed := refusal == ""
 		if !allowed {
-			log.Warnf("HTTPRoute %s/%s is not allowed by the listeners of gateway %s/%s (allowedRoutes): no policy for it on this gateway",
-				httproute.Namespace, httproute.GetName(), gateway.Namespace, gateway.Name)
+			log.Warnf("HTTPRoute %s/%s is not attached to gateway %s/%s, %s: no policy for it on this gateway",
+				httproute.Namespace, httproute.GetName(), gateway.Namespace, gateway.Name, refusal)
 		}
 
 		// Mergeable writers (e.g. Istio) with a merge annotation share one AP across the group.
@@ -473,13 +471,19 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 		if !httproutePointsToGateway(sibling, gateway.Name, gateway.Namespace) {
 			continue
 		}
-		// Siblings the Gateway doesn't accept are left out of the merged AP.
-		allowed, err := r.routeAllowedByGateway(ctx, sibling, gateway)
+		// Siblings the Gateway doesn't attach are left out of the merged AP, and the others enter it
+		// with only the hostnames the Gateway routes for them (see routeHostnamesOnParentRef).
+		hostnames, attached, err := r.routeHostnamesOnGateway(ctx, sibling, gateway)
 		if err != nil {
 			return err
 		}
-		if !allowed {
+		if !attached {
 			continue
+		}
+		sibling = sibling.DeepCopy()
+		sibling.Spec.Hostnames = nil
+		for _, h := range hostnames {
+			sibling.Spec.Hostnames = append(sibling.Spec.Hostnames, gatewayApiv1.Hostname(h))
 		}
 		siblings = append(siblings, sibling)
 	}
@@ -496,11 +500,11 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 				!httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
 				continue
 			}
-			allowed, err := r.routeAllowedByGateway(ctx, &route, gateway)
+			_, attached, err := r.routeHostnamesOnGateway(ctx, &route, gateway)
 			if err != nil {
 				return err
 			}
-			if allowed {
+			if attached {
 				return nil // cache was stale — sibling still exists, skip deletion
 			}
 		}

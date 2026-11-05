@@ -86,7 +86,7 @@ func TestApplyMerged_SameCIDRSet(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), policy)
 	require.NoError(t, err)
 
 	assert.Len(t, policy.Spec.Rules, 1, "same CIDR set must produce exactly one Rule")
@@ -114,7 +114,7 @@ func TestApplyMerged_DifferentCIDRSets(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "multi-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "multi-service"), policy)
 	require.NoError(t, err)
 
 	assert.Len(t, policy.Spec.Rules, 2, "distinct CIDR sets must each produce their own Rule")
@@ -156,7 +156,7 @@ func TestApplyMerged_SameCIDRSameHost(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	require.NoError(t, err)
 
 	assert.Len(t, policy.Spec.Rules, 1)
@@ -184,7 +184,7 @@ func TestApplyMerged_GranularityHost(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	require.NoError(t, err)
 
 	assert.Equal(t, []string{"svc-a.example.com"}, policy.Spec.Rules[0].To[0].Operation.Hosts)
@@ -217,7 +217,7 @@ func TestApplyMerged_SamePathsDifferentHosts(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	require.NoError(t, err)
 
 	require.Len(t, policy.Spec.Rules, 1, "same CIDR set must produce one Rule")
@@ -251,7 +251,7 @@ func TestApplyMerged_MixedGranularity(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	require.NoError(t, err)
 
 	require.Len(t, policy.Spec.Rules, 1)
@@ -273,7 +273,7 @@ func TestApplyMerged_EmptySkipped(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "no policy should be created when no CIDRs are available")
 }
 
@@ -300,7 +300,7 @@ func TestApplyMerged_DeduplicatesPaths(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "my-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "my-service"), policy)
 	require.NoError(t, err)
 
 	assert.Len(t, policy.Spec.Rules, 1)
@@ -358,7 +358,7 @@ func TestApplyMerged_MixedLocalAndClusterCIDRs(t *testing.T) {
 	require.NoError(t, err)
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	err = k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy)
+	err = k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), policy)
 	require.NoError(t, err)
 
 	// Each route resolves to a different CIDR set: cluster + namespace-local.
@@ -442,7 +442,13 @@ func existingPolicy(name string, action istioApiSecurityV1.AuthorizationPolicy_A
 
 // foreignPolicies are APs a merge key must never take over: they share the name, but are not the
 // merged policy of that merge group.
-func foreignPolicies(name string) map[string]*istiosecurityv1.AuthorizationPolicy {
+// merged is the key of the merged AP of the group mergeKey on the Gateway gw of namespace gw-ns.
+func merged(gw, mergeKey string) client.ObjectKey {
+	return client.ObjectKey{Name: MergedPolicyName(resolvers.DefaultPrefix, gw, mergeKey), Namespace: "gw-ns"}
+}
+
+// foreignPolicies are APs named name that aren't the merged policy of the group mergeKey.
+func foreignPolicies(name, mergeKey string) map[string]*istiosecurityv1.AuthorizationPolicy {
 	return map[string]*istiosecurityv1.AuthorizationPolicy{
 		"admin-authored DENY without labels": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_DENY, nil),
 		"per-route AP of this controller": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
@@ -458,7 +464,7 @@ func foreignPolicies(name string) map[string]*istiosecurityv1.AuthorizationPolic
 		"merged AP of another controller instance": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
 			"app.kubernetes.io/managed-by":      "other-ingress-allowlisting-controller",
 			"ipam.adevinta.com/owner-namespace": "MERGED",
-			"ipam.adevinta.com/owner-name":      name,
+			"ipam.adevinta.com/owner-name":      mergeKey,
 		}),
 	}
 }
@@ -468,7 +474,7 @@ func foreignPolicies(name string) map[string]*istiosecurityv1.AuthorizationPolic
 // leaves the AP untouched, instead of turning it into an ALLOW with the route's rules.
 func TestApplyMerged_RefusesForeignPolicy(t *testing.T) {
 	const mergeKey = "protect-gateway-hostnames"
-	for name, existing := range foreignPolicies(mergeKey) {
+	for name, existing := range foreignPolicies(merged("my-gw", mergeKey).Name, mergeKey) {
 		t.Run(name, func(t *testing.T) {
 			cidrs := testCIDRs("allowlist", "ns-c", "0.0.0.0/0")
 			route := testRoute("attacker", "ns-c", "attacker.example.com")
@@ -483,7 +489,7 @@ func TestApplyMerged_RefusesForeignPolicy(t *testing.T) {
 			require.ErrorIs(t, err, ErrPolicyNotManaged)
 
 			policy := &istiosecurityv1.AuthorizationPolicy{}
-			require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergeKey, Namespace: "gw-ns"}, policy))
+			require.NoError(t, k8sClient.Get(context.Background(), merged("my-gw", mergeKey), policy))
 			assert.Equal(t, existing.Spec.Action, policy.Spec.Action, "action must not change")
 			assert.Empty(t, policy.Spec.Rules, "rules must not be written")
 			assert.Equal(t, existing.Labels, policy.Labels, "labels must not change")
@@ -510,7 +516,7 @@ func TestApplyMerged_UpdatesOwnMergedPolicy(t *testing.T) {
 	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route0, route1}, "shared-service"))
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy))
+	require.NoError(t, k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), policy))
 	assert.ElementsMatch(t, []string{"1.2.3.4/32", "5.6.7.8/32"}, allPolicyCIDRs(policy))
 	assert.ElementsMatch(t, []string{"svc-a.example.com", "svc-b.example.com"}, allPolicyHosts(policy))
 }
@@ -530,7 +536,7 @@ func TestDeleteMerged_DeletesOwnMergedPolicy(t *testing.T) {
 	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route}, "shared-service"))
 	require.NoError(t, w.DeleteMerged(context.Background(), gw, "shared-service"))
 
-	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+	err := k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), &istiosecurityv1.AuthorizationPolicy{})
 	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted, got %v", err)
 
 	require.NoError(t, w.DeleteMerged(context.Background(), gw, "shared-service"), "deleting a missing AP is a no-op")
@@ -540,7 +546,7 @@ func TestDeleteMerged_DeletesOwnMergedPolicy(t *testing.T) {
 // foreign AP does not delete that AP.
 func TestDeleteMerged_KeepsForeignPolicy(t *testing.T) {
 	const mergeKey = "protect-gateway-hostnames"
-	for name, existing := range foreignPolicies(mergeKey) {
+	for name, existing := range foreignPolicies(merged("my-gw", mergeKey).Name, mergeKey) {
 		t.Run(name, func(t *testing.T) {
 			k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).
 				WithObjects(existing.DeepCopy()).Build()
@@ -549,15 +555,15 @@ func TestDeleteMerged_KeepsForeignPolicy(t *testing.T) {
 			require.NoError(t, w.DeleteMerged(context.Background(), testGateway("my-gw", "gw-ns"), mergeKey))
 
 			policy := &istiosecurityv1.AuthorizationPolicy{}
-			require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: mergeKey, Namespace: "gw-ns"}, policy), "foreign AP must not be deleted")
+			require.NoError(t, k8sClient.Get(context.Background(), merged("my-gw", mergeKey), policy), "foreign AP must not be deleted")
 			assert.Equal(t, existing.Spec.Action, policy.Spec.Action)
 		})
 	}
 }
 
-// TestMergedPolicy_BelongsToOneGateway verifies that a merged AP serves the Gateway it was written
-// for: the same merge key on another Gateway of the namespace (same AP name) can't take it over,
-// and emptying the group there doesn't delete it.
+// TestMergedPolicy_BelongsToOneGateway verifies that the same merge key on two Gateways of a
+// namespace gives two merged APs (the Gateway is part of the name), each serving its own Gateway:
+// emptying the group on one doesn't touch the other's.
 func TestMergedPolicy_BelongsToOneGateway(t *testing.T) {
 	ctx := context.Background()
 	cidrs := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
@@ -569,21 +575,19 @@ func TestMergedPolicy_BelongsToOneGateway(t *testing.T) {
 	k8sClient := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(cidrs, routeA, routeB, gwA, gwB).Build()
 	w := newIstioL7Writer(k8sClient)
 	require.NoError(t, w.ApplyMerged(ctx, gwA, []*gatewayApiv1.HTTPRoute{routeA}, "shared"))
+	require.NoError(t, w.ApplyMerged(ctx, gwB, []*gatewayApiv1.HTTPRoute{routeB}, "shared"), "gw-b gets its own merged AP")
 
-	err := w.ApplyMerged(ctx, gwB, []*gatewayApiv1.HTTPRoute{routeB}, "shared")
-	assert.ErrorIs(t, err, ErrPolicyNotManaged, "gw-b can't take over gw-a's merged AP")
-	assert.ErrorContains(t, err, "gw-a")
+	for gw, host := range map[string]string{"gw-a": "svc-a.example.com", "gw-b": "svc-b.example.com"} {
+		policy := &istiosecurityv1.AuthorizationPolicy{}
+		require.NoError(t, k8sClient.Get(ctx, merged(gw, "shared"), policy))
+		assert.Equal(t, gw, policy.Spec.TargetRefs[0].Name)
+		assert.Equal(t, []string{host}, allPolicyHosts(policy))
+	}
 
 	require.NoError(t, w.DeleteMerged(ctx, gwB, "shared"))
-
-	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(ctx, client.ObjectKey{Name: "shared", Namespace: "gw-ns"}, policy), "gw-b doesn't delete gw-a's merged AP")
-	assert.Equal(t, "gw-a", policy.Spec.TargetRefs[0].Name)
-	assert.Equal(t, []string{"svc-a.example.com"}, allPolicyHosts(policy))
-
-	require.NoError(t, w.DeleteMerged(ctx, gwA, "shared"))
-	err = k8sClient.Get(ctx, client.ObjectKey{Name: "shared", Namespace: "gw-ns"}, policy)
-	assert.True(t, apierrors.IsNotFound(err), "gw-a still deletes its own, got %v", err)
+	err := k8sClient.Get(ctx, merged("gw-b", "shared"), &istiosecurityv1.AuthorizationPolicy{})
+	assert.True(t, apierrors.IsNotFound(err), "gw-b's merged AP is deleted, got %v", err)
+	require.NoError(t, k8sClient.Get(ctx, merged("gw-a", "shared"), &istiosecurityv1.AuthorizationPolicy{}), "gw-a's stays")
 }
 
 // TestApplyMerged_SkipsSiblingWithoutHostnames verifies that a sibling without hostnames is left
@@ -605,7 +609,7 @@ func TestApplyMerged_SkipsSiblingWithoutHostnames(t *testing.T) {
 	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{route0, hostless}, "shared-service"))
 
 	policy := &istiosecurityv1.AuthorizationPolicy{}
-	require.NoError(t, k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, policy))
+	require.NoError(t, k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), policy))
 	assert.Equal(t, []string{"1.2.3.4/32"}, allPolicyCIDRs(policy), "the hostless sibling's CIDRs must not be in the AP")
 	for _, rule := range policy.Spec.Rules {
 		assert.NotEmpty(t, rule.To, "every rule must be scoped to hosts")
@@ -629,7 +633,7 @@ func TestApplyMerged_DeletesPolicyWhenOnlyHostlessSiblingsLeft(t *testing.T) {
 	hostless.Spec.Hostnames = nil
 	require.NoError(t, w.ApplyMerged(context.Background(), gw, []*gatewayApiv1.HTTPRoute{hostless}, "shared-service"))
 
-	err := k8sClient.Get(context.Background(), client.ObjectKey{Name: "shared-service", Namespace: "gw-ns"}, &istiosecurityv1.AuthorizationPolicy{})
+	err := k8sClient.Get(context.Background(), merged("my-gw", "shared-service"), &istiosecurityv1.AuthorizationPolicy{})
 	assert.True(t, apierrors.IsNotFound(err), "merged AP must be deleted, got %v", err)
 }
 

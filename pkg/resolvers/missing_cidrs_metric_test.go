@@ -20,8 +20,7 @@ import (
 func resetGroupMetrics(t *testing.T) {
 	t.Helper()
 	missingCIDRs.Reset()
-	cidrsNotFound.Reset()
-	t.Cleanup(func() { missingCIDRs.Reset(); cidrsNotFound.Reset() })
+	t.Cleanup(func() { missingCIDRs.Reset() })
 }
 
 // TestMissingCIDRsMetricCountsPerObject verifies the bounded metric: one series per object, the
@@ -50,10 +49,9 @@ func TestMissingCIDRsMetricCountsPerObject(t *testing.T) {
 	assert.Equal(t, 0, testutil.CollectAndCount(missingCIDRs), "deleted with the object")
 }
 
-// TestLegacyMetricIsCapped verifies that the deprecated per-group metric records at most
-// legacyMetricMaxGroups series per object, missing groups first, while the new metric still
-// counts them all.
-func TestLegacyMetricIsCapped(t *testing.T) {
+// TestMissingCIDRsMetricCountsEveryGroup verifies that an annotation naming hundreds of groups
+// still gives one series, counting them all: the group names are never labels.
+func TestMissingCIDRsMetricCountsEveryGroup(t *testing.T) {
 	resetGroupMetrics(t)
 	existing := &ipamv1alpha1.CIDRs{
 		ObjectMeta: metav1.ObjectMeta{Name: "localnet", Namespace: "ns"},
@@ -61,7 +59,7 @@ func TestLegacyMetricIsCapped(t *testing.T) {
 	}
 	c := fake.NewClientBuilder().WithScheme(cacheMetricsTestScheme).WithObjects(existing).Build()
 	resolver := CidrResolver{Client: c, AnnotationPrefix: DefaultPrefix}
-	names := []string{"localnet"} // found, listed first: must not take a slot from a missing group
+	names := []string{"localnet"}
 	for i := range 200 {
 		names = append(names, fmt.Sprintf("missing-%03d", i))
 	}
@@ -72,7 +70,6 @@ func TestLegacyMetricIsCapped(t *testing.T) {
 	_, err := resolver.GetCidrsFromObject(context.Background(), ingress)
 	require.NoError(t, err)
 
-	assert.Equal(t, legacyMetricMaxGroups, testutil.CollectAndCount(cidrsNotFound), "not 201 series")
-	assert.Equal(t, 1.0, testutil.ToFloat64(cidrsNotFound.With(prometheus.Labels{"namespace": "ns", "object": "Ingress", "name": "app", "cidrs_name": "missing-000"})))
+	assert.Equal(t, 1, testutil.CollectAndCount(missingCIDRs), "one series, not one per group")
 	assert.Equal(t, 200.0, testutil.ToFloat64(missingCIDRs.With(prometheus.Labels{"namespace": "ns", "kind": "Ingress", "name": "app"})))
 }
