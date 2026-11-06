@@ -52,11 +52,11 @@ type HTTPRouteAllowlistingReconciler struct {
 // +kubebuilder:rbac:groups=traefik.io,resources=middlewares,verbs=get;list;watch;create;update;delete
 
 func (r *HTTPRouteAllowlistingReconciler) mergeAnnotation() string {
-	return r.CidrResolver.AnnotationPrefix + "/merge"
+	return writers.MergeAnnotation(r.CidrResolver.AnnotationPrefix)
 }
 
 func (r *HTTPRouteAllowlistingReconciler) granularityAnnotation() string {
-	return r.CidrResolver.AnnotationPrefix + "/granularity"
+	return writers.GranularityAnnotation(r.CidrResolver.AnnotationPrefix)
 }
 
 func (r *HTTPRouteAllowlistingReconciler) managedByValue() string {
@@ -284,8 +284,8 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 				return ctrl.Result{}, err
 			}
 			for _, obj := range managed {
-				ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
-				ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+				ownerNS := obj.GetLabels()[writers.OwnerNamespaceLabel(r.CidrResolver.AnnotationPrefix)]
+				ownerName := obj.GetLabels()[writers.OwnerNameLabel(r.CidrResolver.AnnotationPrefix)]
 				if ownerNS != writers.LabelSafe(httproute.Namespace) || ownerName != writers.LabelSafe(httproute.Name) {
 					continue
 				}
@@ -342,8 +342,8 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 			if !shouldDelete {
 				// Also delete if the owning route exists but lost its allowlist annotation —
 				// the runtime DeleteForRoute would have handled this, but a restart may have missed it.
-				ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
-				ownerName := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+				ownerNS := obj.GetLabels()[writers.OwnerNamespaceLabel(r.CidrResolver.AnnotationPrefix)]
+				ownerName := obj.GetLabels()[writers.OwnerNameLabel(r.CidrResolver.AnnotationPrefix)]
 				for i := range allRoutes.Items {
 					route := &allRoutes.Items[i]
 					if writers.LabelSafe(route.Namespace) == ownerNS && writers.LabelSafe(route.Name) == ownerName {
@@ -409,11 +409,11 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 			return err
 		}
 		for _, obj := range managed {
-			ownerNS := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-namespace"]
-			if ownerNS != "MERGED" {
+			ownerNS := obj.GetLabels()[writers.OwnerNamespaceLabel(r.CidrResolver.AnnotationPrefix)]
+			if ownerNS != writers.MergedOwnerNamespace {
 				continue
 			}
-			keyLabel := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+			keyLabel := obj.GetLabels()[writers.OwnerNameLabel(r.CidrResolver.AnnotationPrefix)]
 			// Only the merged policies of this Gateway: another Gateway of the namespace can have a
 			// merge group with members there and none here. Skipped before the sibling checks, which
 			// read the API directly.
@@ -581,9 +581,10 @@ func translatePaths(writer writers.L7PolicyWriter, matches []gatewayApiv1.HTTPRo
 }
 
 func hasAllowlistAnnotation(annotationPrefix string, obj client.Object) bool {
+	keys := resolvers.CidrResolver{AnnotationPrefix: annotationPrefix}
 	a := obj.GetAnnotations()
-	_, hasLocal := a[annotationPrefix+"/allowlist-group"]
-	_, hasCluster := a[annotationPrefix+"/cluster-allowlist-group"]
+	_, hasLocal := a[keys.Annotation()]
+	_, hasCluster := a[keys.ClusterAnnotation()]
 	return hasLocal || hasCluster
 }
 

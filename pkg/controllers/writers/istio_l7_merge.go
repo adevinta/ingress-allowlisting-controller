@@ -62,7 +62,7 @@ type mergedTuple struct {
 //  4. Collect all paths from matching tuples into that Operation.
 //  5. Compact `to` operations sharing the same path set into one (merging their host lists).
 func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.Gateway, siblings []*gatewayApiv1.HTTPRoute, mergeKey string) error {
-	granularityAnnotation := w.annotationPrefix + "/granularity"
+	granularityAnnotation := GranularityAnnotation(w.annotationPrefix)
 
 	cache := resolvers.NewResolutionCache()
 
@@ -222,7 +222,7 @@ func (w *IstioL7Writer) ApplyMerged(ctx context.Context, gateway *gatewayApiv1.G
 				return fmt.Errorf("%w: merged AuthorizationPolicy %s/%s already serves Gateway %s, use another merge key for Gateway %s",
 					ErrPolicyNotManaged, policy.Namespace, policy.Name, targetGateways(policy), gateway.Name)
 			}
-			w.applyLabels(policy, OwnerKindMerged, mergedOwnerNamespace, mergeKey)
+			w.applyLabels(policy, OwnerKindMerged, MergedOwnerNamespace, mergeKey)
 			policy.Spec = istioApiSecurityV1.AuthorizationPolicy{
 				Action: istioApiSecurityV1.AuthorizationPolicy_ALLOW,
 				Rules:  rules,
@@ -314,7 +314,7 @@ func (w *IstioL7Writer) isMergedPolicy(policy *istiosecurityv1.AuthorizationPoli
 	labels := policy.GetLabels()
 	return labels[managedByLabel] == w.managedBy &&
 		ownerKind(policy, w.annotationPrefix) == OwnerKindMerged &&
-		labels[ownerNameLabel(w.annotationPrefix)] == LabelSafe(mergeKey)
+		labels[OwnerNameLabel(w.annotationPrefix)] == LabelSafe(mergeKey)
 }
 
 // mergeTosByPaths compacts `to` operations sharing the same path set into one, merging their host lists.
