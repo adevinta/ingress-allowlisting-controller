@@ -190,7 +190,8 @@ different prefixes don't touch each other's resources. Policies created before `
 existed get it on their next update.
 
 **Names are predictable, so a resource with the same name can already exist:** another
-instance's, or one an admin or a tenant created. The controller only writes or deletes a resource
+instance's, one an admin or a tenant created, or, in one namespace, another route's or Gateway's
+(see [same-namespace names](architecture.md#same-namespace-names-can-collide)). The controller only writes or deletes a resource
 with its labels, for the same owner. Anything else under that name is left as it is: the object
 that needs it gets no allowlist, a Warning Event `AllowlistPolicyConflict` and a log warning, and
 the reconcile is not retried. Once the other resource is removed or renamed, the next reconcile of

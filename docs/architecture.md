@@ -145,6 +145,7 @@ All AP names follow a deterministic pattern derived from the objects involved
 
 | Scenario | Pattern | Example |
 |---|---|---|
+| Gateway (L4) | `{gw}`, in the Gateway's namespace | `my-gateway` |
 | Same-namespace, no paths | `{gw}-{route}` | `my-gateway-my-route` |
 | Same-namespace, with paths | `{gw}-{route}-{fnv32hex}` | `my-gateway-my-route-3d2a1f8c` |
 | Cross-namespace | `{routeNS}.{gw}.{route}.{hash8}` | `app-ns.my-gateway.my-route.61094ef9` |
@@ -173,6 +174,23 @@ hex digits of a SHA-256 over what identifies the AP, the parts separated by `\0`
   readable part is cut; `.{hash8}` stays whole.
 
 Same-namespace names keep their format, `{gw}-{route}-{fnv32hex}` (see below).
+
+### Same-namespace names can collide
+
+Same-namespace names join the parts with `-`, which Gateway and route names may contain, and have
+no hash. They were kept as they are so that upgrading doesn't rename every route's AP. So in one
+namespace:
+
+- Gateway `a-b` with route `c`, and Gateway `a` with route `b-c`, both give `a-b-c`;
+- Gateway `a` with route `b-c` gives `a-b-c`, the name of the L4 AP of a Gateway `a-b-c`;
+- Gateway `a` with route `b`, for a rule with paths, gives `a-b-{fnv32hex}`, the name of the AP of a
+  route `b-{fnv32hex}` on the same Gateway.
+
+It takes two Gateways in the routes' namespace, or a route named like a path hash. Nothing is
+overwritten: the first AP written keeps the name, and the other route or Gateway gets no allowlist
+and a Warning Event `AllowlistPolicyConflict` (see [security.md](security.md)). To fix it, rename
+the route or the Gateway. Cross-namespace and merged APs can't collide this way: their names end
+with the identity hash.
 
 **Upgrading to v0.3.0 renames the cross-namespace and merged APs.** Nothing to do by hand: when a
 route or merge group is reconciled (all are, right after the controller starts), the AP is written
