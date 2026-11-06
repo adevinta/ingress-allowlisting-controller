@@ -17,6 +17,8 @@ Istio and Traefik support is **auto-detected** at startup — no flags needed. T
 
 ## Installation
 
+Requires **Kubernetes 1.32** or later.
+
 ```bash
 git clone --branch v0.1.6 https://github.com/adevinta/ingress-allowlisting-controller.git
 cd ingress-allowlisting-controller/helm-chart/ingress-allowlisting-controller

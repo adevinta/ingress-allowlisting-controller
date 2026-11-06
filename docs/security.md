@@ -339,3 +339,24 @@ privileged operation. See
 
 See
 [CIDRs — Resource limits on remote sources](cidrs.md#resource-limits-on-remote-sources).
+
+---
+
+## What the controller can't check
+
+- **A proxy hides the destination.** With `HTTP_PROXY`/`HTTPS_PROXY` set, the destination guard
+  checks the connection to the proxy, not where the proxy connects: a source URL that resolves to
+  a private address is then reached through the proxy. The origin allowlist is still checked
+  against the URL. See
+  [CIDRs — Restricting where sources can be fetched from](cidrs.md#restricting-where-sources-can-be-fetched-from).
+- **Namespace labels are read with a delay.** For a listener with `allowedRoutes.namespaces:
+  Selector`, the controller reads the route namespace's labels without a watch and keeps them for
+  10 minutes. A label change reaches the allowlists at the route's first reconcile once the kept
+  labels have expired: up to 10 minutes later, or later still if nothing reconciles the route
+  meanwhile. Until then, a namespace that lost the label keeps its routes' allowlists on that
+  Gateway, although the Gateway stops routing for them at once. See
+  [HTTPRoute → Istio AuthorizationPolicy](gateway-api.md#httproute--istio-authorizationpolicy-l7).
+- **`spec.cidrs` is not checked when the object is written.** The API server accepts any string,
+  so `kubectl apply` gives no error for `10.0.0` or `192.0.2.0/33`. The controller leaves such
+  entries out of `status.cidrs` and names them in the `UpToDate` condition, so they never reach a
+  policy (see [Resolved CIDR behaviour](cidrs.md#resolved-cidr-behaviour)).

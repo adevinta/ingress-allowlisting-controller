@@ -184,11 +184,18 @@ namespace:
 - Gateway `a-b` with route `c`, and Gateway `a` with route `b-c`, both give `a-b-c`;
 - Gateway `a` with route `b-c` gives `a-b-c`, the name of the L4 AP of a Gateway `a-b-c`;
 - Gateway `a` with route `b`, for a rule with paths, gives `a-b-{fnv32hex}`, the name of the AP of a
-  route `b-{fnv32hex}` on the same Gateway.
+  route `b-{fnv32hex}` on the same Gateway;
+- two rules of one route with different paths can get the same `{fnv32hex}`: it is a 32-bit hash,
+  so two given path sets collide with a chance of 1 in 2³², and a route has at most 16 rules. Found
+  on purpose, a collision takes about 2¹⁶ tries, but only the route's owner can write its paths.
+  The two rules then share one AP and, being the same route's, overwrite it in turn on every
+  reconcile: only one rule's paths are allowed at a time. Only that route is affected. A longer
+  hash would rename every AP with paths, so it stays.
 
-It takes two Gateways in the routes' namespace, or a route named like a path hash. Nothing is
-overwritten: the first AP written keeps the name, and the other route or Gateway gets no allowlist
-and a Warning Event `AllowlistPolicyConflict` (see [security.md](security.md)). To fix it, rename
+Apart from the last case, it takes two Gateways in the routes' namespace, or a route named like a
+path hash. Nothing is overwritten then: the first AP written keeps the name, and the other route or
+Gateway gets no allowlist and a Warning Event `AllowlistPolicyConflict` (see
+[security.md](security.md)). To fix it, rename
 the route or the Gateway. Cross-namespace and merged APs can't collide this way: their names end
 with the identity hash.
 
