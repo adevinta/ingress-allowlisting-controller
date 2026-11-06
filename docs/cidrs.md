@@ -67,7 +67,8 @@ spec:
   response body into a `[]string` of CIDRs
 - `requeueAfter` — how often to re-fetch (e.g. `30m`, `1h`)
 - `headersFrom` — a list; each entry references a `secretRef` and/or a `configMapRef` whose keys
-  are sent as HTTP request headers (the key is the header name, the value the header value)
+  are sent as HTTP request headers (the key is the header name, the value the header value). A
+  key in both the ConfigMap and the Secret of one entry is sent once, with the **Secret's** value
 - `headersFrom[].keys` — optional: only these keys of the entry's Secret or ConfigMap are sent.
   Without it **every key** is sent. A listed key found in none of the entry's objects fails the
   fetch (the `UpToDate` condition names the key, never a value)

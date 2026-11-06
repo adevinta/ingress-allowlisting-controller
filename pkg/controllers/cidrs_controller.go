@@ -646,17 +646,21 @@ func (r *CIDRReconciler) getObjectFromRef(ctx context.Context, namespace string,
 // what the source needs. A listed key found in none of the entry's objects fails the fetch, rather
 // than fetching without it; the error names the key and the objects, never a value. Values are
 // trimmed: one stored with kubectl --from-file usually ends in a newline, and Go refuses to send a
-// header value containing one, so the whole fetch would fail.
+// header value containing one, so the whole fetch would fail. A key in both the ConfigMap and the
+// Secret of an entry is sent once, with the Secret's value: two values of one header (e.g.
+// Authorization) are refused by many sources.
 func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace string, headers http.Header, headersRef []ipamv1alpha1.HeadersFrom) error {
 	for _, source := range headersRef {
-		var data []map[string]string
+		values := map[string]string{}
 		var objects []string
 		if source.ConfigMapRef.Name != "" {
 			cm := &v1.ConfigMap{}
 			if err := r.getObjectFromRef(ctx, namespace, source.ConfigMapRef, cm); err != nil {
 				return err
 			}
-			data = append(data, cm.Data)
+			for k, v := range cm.Data {
+				values[k] = v
+			}
 			objects = append(objects, "ConfigMap "+cm.Namespace+"/"+cm.Name)
 		}
 		if source.SecretRef.Name != "" {
@@ -664,32 +668,24 @@ func (r *CIDRReconciler) updateClientHeaders(ctx context.Context, namespace stri
 			if err := r.getObjectFromRef(ctx, namespace, source.SecretRef, secret); err != nil {
 				return err
 			}
-			values := make(map[string]string, len(secret.Data))
+			// After the ConfigMap: the Secret's value wins.
 			for k, v := range secret.Data {
 				values[k] = string(v)
 			}
-			data = append(data, values)
 			objects = append(objects, "Secret "+secret.Namespace+"/"+secret.Name)
 		}
 		if len(source.Keys) == 0 {
-			for _, values := range data {
-				for k, v := range values {
-					headers.Add(k, strings.TrimSpace(v))
-				}
+			for k, v := range values {
+				headers.Add(k, strings.TrimSpace(v))
 			}
 			continue
 		}
 		for _, key := range source.Keys {
-			found := false
-			for _, values := range data {
-				if v, ok := values[key]; ok {
-					headers.Add(key, strings.TrimSpace(v))
-					found = true
-				}
-			}
-			if !found {
+			v, ok := values[key]
+			if !ok {
 				return fmt.Errorf("headersFrom: key %q not found in %s", key, strings.Join(objects, " or "))
 			}
+			headers.Add(key, strings.TrimSpace(v))
 		}
 	}
 	return nil

@@ -90,7 +90,8 @@ type HeadersFrom struct {
 	// +kubebuilder:validation:Optional
 	ConfigMapRef ObjectRef `json:"configMapRef,omitempty" yaml:"configMapRef,omitempty"`
 	// Keys, when set, are the only keys of the Secret or ConfigMap sent as headers (the key is the
-	// header name). A key that isn't there fails the fetch. Without it, every key is sent.
+	// header name). A key that isn't there fails the fetch. Without it, every key is sent. A key in
+	// both the ConfigMap and the Secret is sent once, with the Secret's value.
 	// +kubebuilder:validation:Optional
 	// +listType=set
 	Keys []string `json:"keys,omitempty" yaml:"keys,omitempty"`
