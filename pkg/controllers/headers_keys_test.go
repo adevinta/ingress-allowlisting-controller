@@ -31,7 +31,8 @@ func sharedCredentials(ns string) *v1.Secret {
 
 // TestUpdateClientHeadersKeys verifies that headersFrom.keys sends only the listed keys of the
 // Secret or ConfigMap, finds them in either object of an entry, and fails, naming the key but no
-// value, when a listed key is in none of them. Without keys every key is sent, as before.
+// value, when a listed key is in none of them. A key in both objects is sent once, with the
+// Secret's value. Without keys every key is sent, as before.
 func TestUpdateClientHeadersKeys(t *testing.T) {
 	ctx := context.Background()
 	const ns = "team-a"
@@ -39,7 +40,11 @@ func TestUpdateClientHeadersKeys(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{Name: "feed-settings", Namespace: ns},
 		Data:       map[string]string{"X-Client": "allowlisting", "X-Debug": "on"},
 	}
-	r := &CIDRReconciler{Client: fake.NewClientBuilder().WithObjects(sharedCredentials(ns), cm).Build()}
+	defaults := &v1.ConfigMap{
+		ObjectMeta: metav1.ObjectMeta{Name: "feed-defaults", Namespace: ns},
+		Data:       map[string]string{"Authorization": "Bearer default-token"},
+	}
+	r := &CIDRReconciler{Client: fake.NewClientBuilder().WithObjects(sharedCredentials(ns), cm, defaults).Build()}
 	secretRef := ipamv1alpha1.ObjectRef{Name: "shared-credentials"}
 
 	t.Run("only the listed keys", func(t *testing.T) {
@@ -62,6 +67,17 @@ func TestUpdateClientHeadersKeys(t *testing.T) {
 		require.Error(t, err)
 		assert.Contains(t, err.Error(), `key "X-Api-Key" not found in Secret team-a/shared-credentials`)
 		assert.NotContains(t, err.Error(), "feed-token", "no value in the error")
+	})
+
+	// The ConfigMap feed-defaults has an Authorization too: the Secret's wins, sent once.
+	t.Run("a key in both objects: the Secret's value, once", func(t *testing.T) {
+		for name, keys := range map[string][]string{"with keys": {"Authorization"}, "without keys": nil} {
+			headers := http.Header{}
+			require.NoError(t, r.updateClientHeaders(ctx, ns, headers, []ipamv1alpha1.HeadersFrom{{
+				SecretRef: secretRef, ConfigMapRef: ipamv1alpha1.ObjectRef{Name: "feed-defaults"}, Keys: keys,
+			}}))
+			assert.Equal(t, []string{"Bearer feed-token"}, headers.Values("Authorization"), name)
+		}
 	})
 
 	t.Run("without keys every key is sent, as before", func(t *testing.T) {
