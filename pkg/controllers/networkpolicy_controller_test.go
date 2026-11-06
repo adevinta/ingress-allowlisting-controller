@@ -63,7 +63,7 @@ func TestReconcileNetworkPolicy(t *testing.T) {
 	assert.Len(t, result.Spec.Egress[0].To, 6) // 3 from localnet + 2 from dnssource + 1 from globalnet
 
 	// Verify CIDRs are present in egress rules
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.True(t, cidrsFound["10.0.0.0/8"])
@@ -104,7 +104,7 @@ func TestReconcileNetworkPolicyWithClusterCIDR(t *testing.T) {
 	assert.Len(t, result.Spec.Egress, 1)
 	assert.Len(t, result.Spec.Egress[0].To, 4)
 
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.True(t, cidrsFound["10.0.0.0/8"])
@@ -140,7 +140,7 @@ func TestReconcileNetworkPolicyIngressType(t *testing.T) {
 	assert.Len(t, result.Spec.Ingress[0].From, 2)
 	assert.Nil(t, result.Spec.Egress)
 
-	cidrsFound := extractCIDRs(result.Spec.Ingress)
+	cidrsFound := ingressCIDRs(result.Spec.Ingress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 }
@@ -258,7 +258,7 @@ func TestReconcileNetworkPolicyPartialNotFound(t *testing.T) {
 	assert.Len(t, result.Spec.Egress, 1)
 	assert.Len(t, result.Spec.Egress[0].To, 3) // Only the found CIDRs
 
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.True(t, cidrsFound["10.0.0.0/8"])
@@ -296,7 +296,7 @@ func TestReconcileNetworkPolicyWithInvalidCIDRIpsNoError(t *testing.T) {
 	// Should only include valid CIDRs
 	assert.Len(t, result.Spec.Egress[0].To, 4)
 
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.True(t, cidrsFound["10.0.0.0/8"])
 	assert.True(t, cidrsFound["1.1.1.1/32"])
@@ -396,7 +396,7 @@ func TestReconcileNetworkPolicyOverwriteExistingRules(t *testing.T) {
 	assert.Len(t, result.Spec.Egress[0].To, 2)
 
 	// Verify existing rules were overwritten
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.False(t, cidrsFound["1.1.1.1/32"]) // Old rule should be gone
@@ -451,7 +451,7 @@ func TestReconcileNetworkPolicyOverwriteExistingRulesWithPort(t *testing.T) {
 	assert.Len(t, result.Spec.Egress[0].To, 2)
 
 	// Verify existing rules were overwritten
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.False(t, cidrsFound["1.1.1.1/32"]) // Old rule should be gone
@@ -625,7 +625,7 @@ func TestReconcileNetworkPolicyInvalidAnnotationFormat(t *testing.T) {
 	assert.NotNil(t, result.Spec.Egress)
 	assert.Len(t, result.Spec.Egress[0].To, 3)
 
-	cidrsFound := extractCIDRs(result.Spec.Egress)
+	cidrsFound := egressCIDRs(result.Spec.Egress)
 	assert.True(t, cidrsFound["192.168.0.0/16"])
 	assert.True(t, cidrsFound["172.16.0.0/12"])
 	assert.True(t, cidrsFound["1.1.1.1/32"])
@@ -797,4 +797,30 @@ func TestReconcileNetworkPolicySkipsUpdateWhenUnchanged(t *testing.T) {
 	updated := &netv1.NetworkPolicy{}
 	assert.NoError(t, k8sClient.Get(context.Background(), types.NamespacedName{Namespace: "mynamespace", Name: "test-policy"}, updated))
 	assert.Equal(t, "999", updated.ResourceVersion, "Update should not have been called when spec is already correct")
+}
+
+// ingressCIDRs returns the ipBlock CIDRs of the ingress rules' peers.
+func ingressCIDRs(rules []netv1.NetworkPolicyIngressRule) map[string]bool {
+	found := map[string]bool{}
+	for _, rule := range rules {
+		for _, peer := range rule.From {
+			if peer.IPBlock != nil {
+				found[peer.IPBlock.CIDR] = true
+			}
+		}
+	}
+	return found
+}
+
+// egressCIDRs returns the ipBlock CIDRs of the egress rules' peers.
+func egressCIDRs(rules []netv1.NetworkPolicyEgressRule) map[string]bool {
+	found := map[string]bool{}
+	for _, rule := range rules {
+		for _, peer := range rule.To {
+			if peer.IPBlock != nil {
+				found[peer.IPBlock.CIDR] = true
+			}
+		}
+	}
+	return found
 }
