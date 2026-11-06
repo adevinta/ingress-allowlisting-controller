@@ -114,6 +114,8 @@ type CIDRsStatus struct {
 	// +kubebuilder:validation:Optional
 	CIDRs []string `json:"cidrs,omitempty"`
 
+	// LastUpdate is when cidrs last changed. A fetch that returns the same list doesn't change it:
+	// see the UpToDate condition for how the last fetch went.
 	// +kubebuilder:validation:Optional
 	LastUpdate metav1.Time `json:"lastUpdate,omitempty"`
 

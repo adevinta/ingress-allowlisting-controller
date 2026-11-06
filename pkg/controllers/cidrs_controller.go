@@ -116,6 +116,8 @@ type CIDRReconciler struct {
 	// (minimum mask), fetch timeout, response size and CEL cost. Unset fields fall back to the
 	// defaults (see cidr_fetch_limits.go). Inline spec.cidrs authored by an admin is never checked.
 	SourceOptions CIDRSourceOptions
+	// now is the clock for status.lastUpdate; time.Now when unset.
+	now func() time.Time
 }
 
 // +kubebuilder:rbac:groups="",resources=secrets;configmaps,verbs=get;list;watch
@@ -198,6 +200,14 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 		retry = retry || specs.CIDRsSource.Location.URI != ""
 	}
 
+	// lastUpdate is when status.cidrs last changed, not when it was last fetched (the UpToDate
+	// condition says how the last fetch went): an unchanged list doesn't change the status, so it
+	// isn't written again on every fetch. An object with CIDRs but no time yet (written before it
+	// was set) gets the time of this reconcile.
+	if old := cidrs.GetStatus(); !slices.Equal(old.CIDRs, status.CIDRs) || (status.LastUpdate.IsZero() && len(status.CIDRs) > 0) {
+		status.LastUpdate = metav1.NewTime(r.clock())
+	}
+
 	cidrs.SetStatus(status)
 
 	if err := r.Status().Update(ctx, cidrs); err != nil {
@@ -220,6 +230,13 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	}
 
 	return ctrl.Result{}, nil
+}
+
+func (r *CIDRReconciler) clock() time.Time {
+	if r.now != nil {
+		return r.now()
+	}
+	return time.Now()
 }
 
 // minRequeueAfter is the shortest spec.requeueAfter the controller honours. One worker fetches

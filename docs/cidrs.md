@@ -37,6 +37,17 @@ spec:
 The annotation value can be a comma-separated list of object names:
 `ipam.adevinta.com/cluster-allowlist-group: office-ips,cloudfront,partner-cidrs`
 
+## Status
+
+The controller writes the result to the object's status:
+
+- `status.cidrs` — the CIDRs in use, sorted, from `spec.cidrs` and the source;
+- `status.lastUpdate` — when `status.cidrs` last changed. A fetch that returns the same list
+  doesn't change it; an object that had CIDRs before the field was set gets the time of its next
+  reconcile;
+- `status.state` and the `UpToDate` condition — how the last reconcile and fetch went, with the
+  reason when they failed.
+
 ## Remote sources
 
 CIDR objects can fetch their IP list from a remote HTTP endpoint and refresh it periodically.
