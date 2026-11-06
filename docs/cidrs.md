@@ -381,6 +381,11 @@ object instead of duplicating `CIDRs` objects per namespace. This depends on you
 `ClusterCIDRs` is cluster-scoped and requires a `ClusterRole` with write access, so teams that only
 hold namespace-level RBAC cannot create them and must use per-namespace `CIDRs` objects instead.
 
+The chart adds `CIDRs` to the default roles: `edit` and `admin` can manage them, `view` can read
+them. `ClusterCIDRs` are not added to `view`: with `view` bound cluster-wide, every reader of the
+cluster would see the admins' feed URIs and CIDRs. To let someone read them, bind the ClusterRole
+`<release>-clustercidrs-viewer`.
+
 The controller caches CIDR resolutions within a single reconcile. When all routes in a merge group
 share the same `cluster-allowlist-group` value, the cluster object is fetched **once** regardless
 of how many namespaces are involved. Namespace-scoped `CIDRs` objects with the same content but

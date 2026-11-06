@@ -33,18 +33,18 @@ func allWriters() (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 }
 
 // roleRules are the rules of the ClusterRoles (valid everywhere) and Roles (per namespace) of a
-// YAML stream. ClusterRoles aggregated into the default roles (edit, view, ...) are for users, not
-// for the controller: they are kept apart, by name.
+// YAML stream. The user roles (see isUserRole) are not the controller's: they are kept apart, by
+// name.
 type roleRules struct {
 	cluster    []rbacv1.PolicyRule
 	namespaced map[string][]rbacv1.PolicyRule
-	aggregated map[string]rbacv1.ClusterRole
+	users      map[string]rbacv1.ClusterRole
 }
 
 func parseRoles(t *testing.T, stream []byte) roleRules {
 	t.Helper()
 	decoder := utilyaml.NewYAMLOrJSONDecoder(bytes.NewReader(stream), 4096)
-	rr := roleRules{namespaced: map[string][]rbacv1.PolicyRule{}, aggregated: map[string]rbacv1.ClusterRole{}}
+	rr := roleRules{namespaced: map[string][]rbacv1.PolicyRule{}, users: map[string]rbacv1.ClusterRole{}}
 	for {
 		var role rbacv1.ClusterRole // a Role has the same fields
 		err := decoder.Decode(&role)
@@ -53,8 +53,8 @@ func parseRoles(t *testing.T, stream []byte) roleRules {
 		}
 		require.NoError(t, err)
 		switch {
-		case role.Kind == "ClusterRole" && isAggregated(role):
-			rr.aggregated[role.Name] = role
+		case role.Kind == "ClusterRole" && isUserRole(role):
+			rr.users[role.Name] = role
 		case role.Kind == "ClusterRole":
 			rr.cluster = append(rr.cluster, role.Rules...)
 		case role.Kind == "Role":
@@ -126,6 +126,12 @@ func TestRequiredPermissionsGrantedByChart(t *testing.T) {
 }
 
 // isAggregated reports whether a ClusterRole is aggregated into a default role (edit, view, ...).
+// isUserRole reports whether role is one of the chart's roles for users: aggregated into the
+// default roles (edit, view, ...), or the ClusterCIDRs viewer, which is bound explicitly.
+func isUserRole(role rbacv1.ClusterRole) bool {
+	return isAggregated(role) || strings.HasSuffix(role.Name, "-clustercidrs-viewer")
+}
+
 func isAggregated(role rbacv1.ClusterRole) bool {
 	for label := range role.Labels {
 		if strings.HasPrefix(label, "rbac.authorization.k8s.io/aggregate-to-") {
@@ -136,9 +142,9 @@ func isAggregated(role rbacv1.ClusterRole) bool {
 }
 
 // TestChartAggregatesOnlyCIDRsIntoDefaultRoles verifies that, with every feature on, the chart
-// gives the holders of edit/admin only the CIDRs of their namespace and view only read access:
-// none of the controller's own permissions (AuthorizationPolicies, Middlewares, CIDRs status,
-// ClusterCIDRs, Secrets).
+// gives the holders of edit/admin only the CIDRs of their namespace and view only read access to
+// them: none of the controller's own permissions (AuthorizationPolicies, Middlewares, CIDRs status,
+// ClusterCIDRs, Secrets). Reading ClusterCIDRs is a separate role, not aggregated.
 func TestChartAggregatesOnlyCIDRsIntoDefaultRoles(t *testing.T) {
 	if _, err := exec.LookPath("helm"); err != nil {
 		t.Skip("helm not installed")
@@ -147,11 +153,11 @@ func TestChartAggregatesOnlyCIDRsIntoDefaultRoles(t *testing.T) {
 		"--set", "ingress.enabled=true,gateway.enabled=true,httproute.enabled=true,networkpolicy.enabled=true,service.enabled=true,httpHeadersEnabled=true,cidrSource.allowlist={https://a.example.com},leaderElection.enabled=true").Output()
 	require.NoError(t, err)
 
-	aggregated := parseRoles(t, out).aggregated
-	require.ElementsMatch(t, []string{"test-cidrs-editor", "test-cidrs-viewer"}, slices.Collect(maps.Keys(aggregated)),
+	users := parseRoles(t, out).users
+	require.ElementsMatch(t, []string{"test-cidrs-editor", "test-cidrs-viewer", "test-clustercidrs-viewer"}, slices.Collect(maps.Keys(users)),
 		"only the user roles are aggregated, not the controller's")
 
-	editor := aggregated["test-cidrs-editor"]
+	editor := users["test-cidrs-editor"]
 	assert.Equal(t, map[string]string{
 		"rbac.authorization.k8s.io/aggregate-to-admin": "true",
 		"rbac.authorization.k8s.io/aggregate-to-edit":  "true",
@@ -162,13 +168,22 @@ func TestChartAggregatesOnlyCIDRsIntoDefaultRoles(t *testing.T) {
 		Verbs:     []string{"get", "list", "watch", "create", "update", "patch", "delete"},
 	}}, editor.Rules)
 
-	viewer := aggregated["test-cidrs-viewer"]
+	viewer := users["test-cidrs-viewer"]
 	assert.Equal(t, map[string]string{"rbac.authorization.k8s.io/aggregate-to-view": "true"}, viewer.Labels)
 	assert.Equal(t, []rbacv1.PolicyRule{{
 		APIGroups: []string{"ipam.adevinta.com"},
-		Resources: []string{"cidrs", "cidrs/status", "clustercidrs", "clustercidrs/status"},
+		Resources: []string{"cidrs", "cidrs/status"},
 		Verbs:     []string{"get", "list", "watch"},
 	}}, viewer.Rules)
+
+	// The admins' ClusterCIDRs: view bound cluster-wide must not show them to every reader.
+	clusterViewer := users["test-clustercidrs-viewer"]
+	assert.False(t, isAggregated(clusterViewer), "not aggregated, bound explicitly")
+	assert.Equal(t, []rbacv1.PolicyRule{{
+		APIGroups: []string{"ipam.adevinta.com"},
+		Resources: []string{"clustercidrs", "clustercidrs/status"},
+		Verbs:     []string{"get", "list", "watch"},
+	}}, clusterViewer.Rules)
 }
 
 // TestRequiredPermissionsFollowFeatures verifies that disabled features add no permissions, and
