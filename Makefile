@@ -87,6 +87,12 @@ export CONFIRM KEEP IAC_CONTEXT IAC_CONTROLLER IAC_CONTROLLER_ARGS IAC_ANNOTATIO
 functional:
 	go test -tags functional ./test/functional/ -run TestFunctional -v -count=1 -timeout 30m
 
+# Restart check: runs the controller itself, built from this tree, twice, with IAC_CONTROLLER_ARGS,
+# and checks that the startup cleanup keeps the policies still wanted. Dry run without CONFIRM.
+#   make functional-restart CONFIRM=<current-context-name> IAC_CONTROLLER_ARGS="--httproute-support-enabled"
+functional-restart:
+	go test -tags functional ./test/functional/ -run TestRestart -v -count=1 -timeout 30m
+
 # Delete namespaces left behind by interrupted or KEEP=1 functional runs: all runs, or only the
 # run IAC_RUN=<id> (the <id> of iac-functional-<id>-a), e.g. while another run is going on.
 functional-clean:
@@ -99,4 +105,4 @@ functional-clean:
 controller-gen:
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4
 
-.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet lint generate docker-build docker-push controller-gen functional functional-clean
+.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet lint generate docker-build docker-push controller-gen functional functional-restart functional-clean

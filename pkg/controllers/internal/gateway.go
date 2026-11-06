@@ -26,3 +26,23 @@ func GatewayParentRefs(httproute *gatewayApiv1.HTTPRoute) []gatewayApiv1.ParentR
 	}
 	return refs
 }
+
+// RoutePointsToGateway reports whether httproute has a parentRef to the Gateway
+// gatewayNamespace/gatewayName. A parentRef without namespace is in the route's namespace. Used
+// by the merged-policy cleanups (startup and runtime): a route keeps a merged policy only on
+// the Gateways it points to.
+func RoutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
+	for _, ref := range GatewayParentRefs(httproute) {
+		if string(ref.Name) != gatewayName {
+			continue
+		}
+		refNS := httproute.Namespace
+		if ref.Namespace != nil {
+			refNS = string(*ref.Namespace)
+		}
+		if refNS == gatewayNamespace {
+			return true
+		}
+	}
+	return false
+}

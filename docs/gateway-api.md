@@ -201,7 +201,9 @@ can't be written (an AP with that name exists and isn't the controller's, see th
 
 The Gateway is part of the merged AP's name, so the same key on two Gateways of a namespace gives
 two merged APs, one per Gateway. So does the same key used by two controller instances with
-different `--annotation-prefix` (the prefix is part of the hash).
+different `--annotation-prefix` (the prefix is part of the hash). Each lives as long as routes of
+the group point to its Gateway: the startup cleanup deletes a Gateway's merged AP once none do,
+even if the key is still used on another Gateway.
 
 > **A route annotated for two instances** (under both prefixes) gets an Istio AP from each, and
 > Istio combines ALLOW policies with OR: the route allows the union of both allowlists. Annotate a

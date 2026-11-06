@@ -147,6 +147,32 @@ make functional CONFIRM=<context> \
 the controller found runs with another one. While a run is going on, clean up another one with
 `make functional-clean IAC_RUN=<id>`: without `IAC_RUN` it deletes the namespaces of every run.
 
+## Restart: the startup cleanup
+
+When the controller starts, it deletes the HTTPRoute policies whose route or merge group is gone
+(changes it missed while it was down). `make functional-restart` checks that it deletes only those,
+and that the policies still wanted survive **untouched**: same UID, so not deleted and written
+again, which would leave a gap in access.
+
+It runs the controller **itself**: built from this tree, on your machine, with
+`IAC_CONTROLLER_ARGS`, twice. So no other controller with the same annotation prefix may run
+meanwhile: the run is blocked if one runs in the cluster (scale it to 0 first), and you must
+stop your own `go run`. Istio and the Gateway API are needed.
+
+```bash
+make functional-restart IAC_CONTROLLER_ARGS="--httproute-support-enabled --gateway-support-enabled"   # dry run
+make functional-restart CONFIRM=<context> IAC_CONTROLLER_ARGS="--httproute-support-enabled --gateway-support-enabled"
+```
+
+| Step | What happens |
+|---|---|
+| 1. controller up | In `-b`: Gateways `restart-gw-a`, `restart-gw-b` and `restart-gw-c`. In `-a`: Gateway `restart-gw-same`, and routes: merge group `restart-shared` with one route on each of gw-a, gw-b and gw-c (gw-c has no other route), group `restart-two` with two routes on gw-a, a group with a key longer than 63 characters on gw-b, a same-namespace route, one with two rules with paths, and cross-namespace routes. With `--gateway-support-enabled`, also a Gateway with its own allowlist. Plus another instance's policy. Waits for every policy |
+| 2. controller down | Deletes the routes of `restart-shared` on gw-a and gw-c, one route of `restart-two` and a cross-namespace route; removes the allowlist annotation of another; puts a route into `restart-two` |
+| 3. controller up | Deleted: gw-a's and gw-c's policies of `restart-shared` (the key is still used on gw-b; on gw-c, with no route left, only the startup cleanup can), and the own policies of the deleted, unannotated and joining routes. `restart-two`'s policy gets the hosts of its routes now. Every other policy keeps its UID for 30s, and the other instance's is not changed |
+
+The controller's output goes to a log file in the temp directory, printed and kept when the test
+fails.
+
 ## Prerequisites
 
 - The controller is installed and has an available replica. It is found by the Helm chart label
@@ -181,6 +207,7 @@ The objects are harmless:
 | `IAC_ISTIO_GATEWAYCLASS`, `IAC_TRAEFIK_GATEWAYCLASS` | GatewayClass to use when several exist for that controller (default: the first by name) |
 | `IAC_TIMEOUT` | How long each wait may take (default `3m`) |
 | `KEEP` | Any value keeps the test namespaces for inspection; remove it later with `make functional-clean` |
+| `IAC_CONTROLLER_ARGS` (restart) | For `make functional-restart`: the arguments the test runs the controller with; must include `--httproute-support-enabled` |
 
 ## Adding a resource kind
 
