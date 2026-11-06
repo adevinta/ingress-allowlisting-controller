@@ -291,6 +291,7 @@ func TestTraefikL7Writer_ListManaged(t *testing.T) {
 			Name: "managed", Namespace: "mynamespace",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
 				"ipam.adevinta.com/owner-name":      "my-route",
 			},
@@ -325,6 +326,7 @@ func TestTraefikL7Writer_IsOrphaned(t *testing.T) {
 		ObjectMeta: metav1.ObjectMeta{
 			Name: "my-route", Namespace: "mynamespace",
 			Labels: map[string]string{
+				"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
 				"ipam.adevinta.com/owner-name":      "my-route",
 			},

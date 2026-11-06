@@ -41,24 +41,13 @@ func (w *IstioL7Writer) applyLabels(policy *istiosecurityv1.AuthorizationPolicy,
 	setOwnerLabels(policy, w.annotationPrefix, w.managedBy, kind, ownerNamespace, ownerName)
 }
 
-// policyName returns the name and namespace of the policy of route on gateway for a rule with
-// paths (see policy_names.go), and whether it lives in the Gateway's namespace (cross-namespace).
-func (w *IstioL7Writer) policyName(route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, paths []string) (name, namespace string, crossNamespace bool) {
-	t := w.policyTarget(route.Namespace, route.Name, gateway.Namespace, gateway.Name, paths)
-	return t.name, t.namespace, t.namespace != route.Namespace
-}
-
 // policyTarget is the policy of the route routeNS/route on the Gateway gwNS/gw for a rule with
 // paths. The one function that names route policies: Apply and the orphan checks must agree.
 func (w *IstioL7Writer) policyTarget(routeNS, route, gwNS, gw string, paths []string) policyTarget {
 	if gwNS == routeNS {
 		return policyTarget{namespace: routeNS, name: sameNamespacePolicyName(gw, route, paths)}
 	}
-	return policyTarget{
-		namespace:  gwNS,
-		name:       CrossNamespacePolicyName(w.annotationPrefix, routeNS, gw, route, paths),
-		legacyName: legacyCrossNamespacePolicyName(routeNS, gw, route, paths),
-	}
+	return policyTarget{namespace: gwNS, name: CrossNamespacePolicyName(w.annotationPrefix, routeNS, gw, route, paths)}
 }
 
 // RequiredPermissions returns the RBAC permissions needed by this writer.
@@ -74,30 +63,22 @@ func (w *IstioL7Writer) RequiredPermissions() []Permission {
 // alone don't scope it) the AP would allow the CIDRs on every host of the gateway, including hosts
 // of other routes and namespaces.
 func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, ips, hosts, paths []string) error {
-	apName, apNamespace, crossNamespace := w.policyName(route, gateway, paths)
-	legacyName := w.policyTarget(route.Namespace, route.Name, gateway.Namespace, gateway.Name, paths).legacyName
+	target := w.policyTarget(route.Namespace, route.Name, gateway.Namespace, gateway.Name, paths)
+	crossNamespace := target.namespace != route.Namespace
 	if len(ips) == 0 || len(hosts) == 0 {
 		if len(hosts) == 0 {
 			log.DefaultLogger.WithContext(ctx).Warnf("HTTPRoute %s/%s has no hostnames: no AuthorizationPolicy for gateway %s/%s, it would allow its CIDRs on every host of the gateway",
 				route.Namespace, route.Name, gateway.Namespace, gateway.Name)
 		}
-		for _, name := range []string{apName, legacyName} {
-			if name == "" {
-				continue
-			}
-			policy := &istiosecurityv1.AuthorizationPolicy{}
-			policy.Name = name
-			policy.Namespace = apNamespace
-			ours := func(obj client.Object) bool { return w.isOurs(obj, route) }
-			if err := deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": no CIDRs or no hostnames"); err != nil {
-				return err
-			}
-		}
-		return nil
+		policy := &istiosecurityv1.AuthorizationPolicy{}
+		policy.Name = target.name
+		policy.Namespace = target.namespace
+		ours := func(obj client.Object) bool { return w.isOurs(obj, route) }
+		return deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": no CIDRs or no hostnames")
 	}
 
 	policy := &istiosecurityv1.AuthorizationPolicy{
-		ObjectMeta: metav1.ObjectMeta{Name: apName, Namespace: apNamespace},
+		ObjectMeta: metav1.ObjectMeta{Name: target.name, Namespace: target.namespace},
 	}
 	rules := buildAuthorizationRules(ips, hosts, paths)
 	op, err := createOrUpdatePolicy(ctx, w.client, policy, func() error {
@@ -124,26 +105,12 @@ func (w *IstioL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, route
 		return err
 	}
 	logChange(ctx, op, "AuthorizationPolicy", policy, "HTTPRoute "+route.Namespace+"/"+route.Name)
-	return w.deleteLegacy(ctx, route, apNamespace, legacyName, apName)
-}
-
-// deleteLegacy deletes the policy the route had under its pre-v0.3.0 name, now that the one under
-// the new name is written: in this order, so access has no gap. Only ours. Remove with
-// policyTarget.legacyName.
-func (w *IstioL7Writer) deleteLegacy(ctx context.Context, route *gatewayApiv1.HTTPRoute, namespace, legacyName, newName string) error {
-	if legacyName == "" {
-		return nil
-	}
-	policy := &istiosecurityv1.AuthorizationPolicy{}
-	policy.Name = legacyName
-	policy.Namespace = namespace
-	ours := func(obj client.Object) bool { return w.isOurs(obj, route) }
-	return deleteIfOurs(ctx, w.client, policy, ours, "AuthorizationPolicy", "HTTPRoute "+route.Namespace+"/"+route.Name+": renamed to "+newName)
+	return nil
 }
 
 // isOurs reports whether policy is one this writer created for route (see isOurs).
 func (w *IstioL7Writer) isOurs(policy client.Object, route *gatewayApiv1.HTTPRoute) bool {
-	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name, "")
+	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name)
 }
 
 // ListManaged returns all AuthorizationPolicies managed by this controller (identified by managedBy label).
@@ -244,11 +211,6 @@ func (w *IstioL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeName
 type policyTarget struct {
 	namespace string
 	name      string
-	// legacyName is the name a cross-namespace policy had before v0.3.0. Apply deletes it once
-	// the new one is written; until then the orphan checks count it as produced, so the startup
-	// cleanup, which runs alongside the first reconciles, doesn't delete it before its replacement
-	// exists. Remove once no cluster runs an older version.
-	legacyName string
 }
 
 // policyTargetsForRoute returns the exact set of AP (namespace, name) pairs that the
@@ -288,7 +250,7 @@ func (w *IstioL7Writer) policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []p
 // an AuthorizationPolicy at the given {namespace, name}. Uses exact matching only.
 func (w *IstioL7Writer) routeProducesPolicy(route *gatewayApiv1.HTTPRoute, policyNamespace, policyName string) bool {
 	for _, pt := range w.policyTargetsForRoute(route) {
-		if pt.namespace == policyNamespace && (pt.name == policyName || pt.legacyName != "" && pt.legacyName == policyName) {
+		if pt.namespace == policyNamespace && pt.name == policyName {
 			return true
 		}
 	}

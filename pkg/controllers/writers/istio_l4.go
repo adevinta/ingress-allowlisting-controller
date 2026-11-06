@@ -89,5 +89,5 @@ func (w *IstioL4Writer) Delete(ctx context.Context, gateway *gatewayApiv1.Gatewa
 
 // isOurs reports whether policy is the one this writer created for gateway (see isOurs).
 func (w *IstioL4Writer) isOurs(policy client.Object, gateway *gatewayApiv1.Gateway) bool {
-	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name, gateway.UID)
+	return isOurs(policy, w.annotationPrefix, w.managedBy, OwnerKindGateway, gateway.Namespace, gateway.Name)
 }

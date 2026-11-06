@@ -32,6 +32,22 @@ Releases are git tags `vX.Y.Z` with a GitHub release. The `v` is what Go modules
 
   The workflow adds the image tag and the GitHub release; the next `main` commit becomes `v0.2.1`.
 
+## Upgrading
+
+Upgrade one minor version at a time when a release says so. **v0.4.0** drops what moved objects
+written by older versions over: coming from before **v0.3.0**, run a v0.3.x release first, until
+it has reconciled everything (it does right after it starts). Otherwise:
+
+- merged AuthorizationPolicies under their pre-v0.3.0 name (the bare merge key) are left in place,
+  still allowing their group's old CIDRs; delete them by hand;
+- AuthorizationPolicies and Middlewares written before v0.2.11 (without the `owner-kind` label, or
+  Gateway policies without any label) no longer count as the controller's: it refuses to update
+  them, with an `AllowlistPolicyConflict` Event; delete them and the controller writes them again.
+
+Find the labelled ones with
+`kubectl get authorizationpolicies,middlewares -A -l 'app.kubernetes.io/managed-by=ingress-allowlisting-controller,!<prefix>/owner-kind'`;
+a Gateway policy without labels is named after its Gateway and has it as owner.
+
 ## Images
 
 `ghcr.io/adevinta/ingress-allowlisting-controller` has, for every built commit, `:<commit sha>`;

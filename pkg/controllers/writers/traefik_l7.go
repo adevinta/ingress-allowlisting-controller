@@ -163,7 +163,7 @@ func (w *TraefikL7Writer) ListManaged(ctx context.Context, managedBy string) ([]
 // isOurs reports whether middleware is one this writer created for the route
 // routeNamespace/routeName (see isOurs).
 func (w *TraefikL7Writer) isOurs(middleware client.Object, routeNamespace, routeName string) bool {
-	return isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName, "")
+	return isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName)
 }
 
 // IsOrphaned reports whether the given Middleware no longer has a valid owner HTTPRoute.

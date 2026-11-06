@@ -1505,6 +1505,7 @@ func TestStartupOrphanCleanup(t *testing.T) {
 			Name: "deleted-route", Namespace: "mynamespace",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
 				"ipam.adevinta.com/owner-name":      "deleted-route", // HTTPRoute no longer exists
 			},
@@ -1554,6 +1555,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 				Name: "my-gw-my-route", Namespace: "ns",
 				Labels: map[string]string{
 					"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+					"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 					"ipam.adevinta.com/owner-namespace": "ns",
 					"ipam.adevinta.com/owner-name":      "my-route",
 				},
@@ -1587,6 +1589,7 @@ func TestStartupCleanupAnnotationRemoved(t *testing.T) {
 				Name: crossName("ns", "my-gw", "my-route"), Namespace: "gw-ns",
 				Labels: map[string]string{
 					"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+					"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 					"ipam.adevinta.com/owner-namespace": "ns",
 					"ipam.adevinta.com/owner-name":      "my-route",
 				},
@@ -1613,6 +1616,7 @@ func TestStartupCleanupAbortsOnEmptyHTTPRouteList(t *testing.T) {
 			Name: "some-route", Namespace: "mynamespace",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
 				"ipam.adevinta.com/owner-name":      "some-route",
 			},
@@ -1696,6 +1700,7 @@ func TestStartupCleanupRemovesOldAPWhenMergeAdded(t *testing.T) {
 			Name: crossName("mynamespace", "my-gateway", "test"), Namespace: "gw-ns",
 			Labels: map[string]string{
 				"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+				"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 				"ipam.adevinta.com/owner-namespace": "mynamespace",
 				"ipam.adevinta.com/owner-name":      "test",
 			},
@@ -2216,8 +2221,6 @@ func TestReconcileHTTPRouteMultipleGatewayClassesOneUnknown(t *testing.T) {
 	assert.True(t, apierrors.IsNotFound(err), "no AP should be created for the unregistered nginx gateway")
 }
 
-// TestMergedAPUpdatesWhenSiblingCIDRsChange verifies that when a sibling's CIDRs change,
-// re-reconciling any route in the merge group picks up the updated IPs for all siblings.
 // TestReconcileHTTPRouteDualParentIstioAndTraefik verifies that an HTTPRoute with two parent
 // gateways — one Istio and one Traefik — creates both an Istio AuthorizationPolicy and a
 // Traefik Middleware in a single reconcile, without a merge annotation.
@@ -2348,6 +2351,8 @@ func TestReconcileHTTPRouteMergeWithNonMergeWriter(t *testing.T) {
 	assert.ElementsMatch(t, []string{"1.2.3.4/32"}, mw.Spec.IPAllowList.SourceRange)
 }
 
+// TestMergedAPUpdatesWhenSiblingCIDRsChange verifies that when a sibling's CIDRs change,
+// re-reconciling any route in the merge group picks up the updated IPs for all siblings.
 func TestMergedAPUpdatesWhenSiblingCIDRsChange(t *testing.T) {
 	cidr00 := &ipamv1alpha1.CIDRs{
 		ObjectMeta: v1.ObjectMeta{Name: "allowlist", Namespace: "ns-a"},

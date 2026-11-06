@@ -6,11 +6,8 @@ import (
 	"fmt"
 	"hash/fnv"
 	"regexp"
-	"strings"
 
 	log "github.com/adevinta/go-log-toolkit"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
-	"k8s.io/apimachinery/pkg/types"
 	"sigs.k8s.io/controller-runtime/pkg/client"
 )
 
@@ -80,21 +77,9 @@ func setOwnerLabels(obj client.Object, prefix, managedBy, kind, ownerNamespace, 
 	obj.SetLabels(labels)
 }
 
-// ownerKind is the owner-kind of an object of this instance, "" if it isn't one. Objects written
-// before owner-kind existed have only owner-namespace and owner-name: a merged policy (namespace
-// "MERGED") or a route's. Gateway policies had no labels then.
+// ownerKind is the owner-kind of an object of this instance, "" if it isn't one.
 func ownerKind(obj client.Object, prefix string) string {
-	labels := obj.GetLabels()
-	if kind := labels[OwnerKindLabel(prefix)]; kind != "" {
-		return kind
-	}
-	if _, ok := labels[OwnerNameLabel(prefix)]; !ok {
-		return ""
-	}
-	if labels[OwnerNamespaceLabel(prefix)] == LabelSafe(MergedOwnerNamespace) {
-		return OwnerKindMerged
-	}
-	return OwnerKindHTTPRoute
+	return obj.GetLabels()[OwnerKindLabel(prefix)]
 }
 
 // managedByUs selects the objects of this instance: managed-by, and an owner-name under our prefix.
@@ -119,30 +104,10 @@ var ErrPolicyNotManaged = errors.New("existing policy is not managed by this con
 // isOurs reports whether obj, found under the name a writer writes or deletes, is ours: our
 // ownership labels, with this kind and owner. A writer must not touch it otherwise: names are
 // predictable, so another instance, an admin or a tenant can have an object with the same name.
-//
-// legacyOwner is for the transition of Gateway policies, which had no labels before: one is ours
-// when it has no ownership labels of any instance and the Gateway with this UID as controller.
-func isOurs(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerName string, legacyOwner types.UID) bool {
+func isOurs(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerName string) bool {
 	labels := obj.GetLabels()
-	if labels[managedByLabel] == managedBy && ownerKind(obj, prefix) == kind &&
-		labels[OwnerNamespaceLabel(prefix)] == LabelSafe(ownerNamespace) && labels[OwnerNameLabel(prefix)] == LabelSafe(ownerName) {
-		return true
-	}
-	if legacyOwner == "" || hasOwnerLabels(obj) {
-		return false
-	}
-	owner := metav1.GetControllerOf(obj)
-	return owner != nil && owner.UID == legacyOwner
-}
-
-// hasOwnerLabels reports whether obj has the ownership labels of any instance, whatever its prefix.
-func hasOwnerLabels(obj client.Object) bool {
-	for key := range obj.GetLabels() {
-		if strings.HasSuffix(key, OwnerNameLabel("")) {
-			return true
-		}
-	}
-	return false
+	return labels[managedByLabel] == managedBy && ownerKind(obj, prefix) == kind &&
+		labels[OwnerNamespaceLabel(prefix)] == LabelSafe(ownerNamespace) && labels[OwnerNameLabel(prefix)] == LabelSafe(ownerName)
 }
 
 // notOurs is the error for an object that is not ours, for the Warning Event and the log.
