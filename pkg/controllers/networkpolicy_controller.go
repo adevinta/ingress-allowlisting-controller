@@ -7,7 +7,6 @@ import (
 	"reflect"
 
 	netv1 "k8s.io/api/networking/v1"
-	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 
 	log "github.com/adevinta/go-log-toolkit"
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
@@ -33,8 +32,6 @@ var ErrMultipleRulesNotSupported = errors.New("networkpolicy with multiple egres
 func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("networkpolicy", req.NamespacedName)
 
-	var networkPolicyMetadata metav1.ObjectMeta
-
 	networkpolicy := netv1.NetworkPolicy{}
 
 	if err := r.Get(ctx, req.NamespacedName, &networkpolicy); err != nil {
@@ -45,9 +42,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		resolvers.ForgetObject(req.Namespace, "NetworkPolicy", req.Name)
 		return ctrl.Result{}, nil
 	}
-	networkPolicyMetadata = networkpolicy.ObjectMeta
-
-	if !networkPolicyMetadata.DeletionTimestamp.IsZero() { // np being deleted
+	if !networkpolicy.DeletionTimestamp.IsZero() { // np being deleted
 		return ctrl.Result{}, nil
 	}
 
@@ -75,7 +70,7 @@ func (r *NetworkPolicyReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		return ctrl.Result{}, nil
 	}
 
-	log.Infof("Networkpolicy %s allowlist changed; updating ipBlock rules...", networkPolicyMetadata.GetName())
+	log.Infof("Networkpolicy %s allowlist changed; updating ipBlock rules...", networkpolicy.GetName())
 
 	networkpolicy = updatedNetworkPolicy
 	if err := r.Client.Update(ctx, &networkpolicy); err != nil {
