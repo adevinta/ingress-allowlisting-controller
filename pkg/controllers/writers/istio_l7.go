@@ -186,9 +186,10 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 	mergeAnnotation := w.annotationPrefix + "/merge"
 
 	if ownerNS == "MERGED" {
-		// Merge-mode AP: check if any route still has this merge key
+		// Merge-mode AP: check if any route still has this merge key. The label holds LabelSafe of
+		// the key, which differs from it for a key longer than 63 characters.
 		for i := range allRoutes {
-			if allRoutes[i].Annotations[mergeAnnotation] == ownerName {
+			if key := allRoutes[i].Annotations[mergeAnnotation]; key != "" && LabelSafe(key) == ownerName {
 				return false
 			}
 		}

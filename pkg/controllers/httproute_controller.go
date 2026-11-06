@@ -368,8 +368,14 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 // cleanupOrphanedMergedAPs checks whether the route just left a merge group as the last member.
 // For each gateway the route is attached to, it looks for a merged AP whose group now has
 // no remaining siblings in the cache — and confirms via APIReader before deleting.
+//
+// The merged AP's owner-name label holds LabelSafe(mergeKey), which differs from the key when it
+// is longer than 63 characters: routes are matched on LabelSafe of their key, and the AP found is
+// deleted as it is, since its name can't be rebuilt from the label. The routes are listed at most
+// once per call (cache, then API), not once per merged AP.
 func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, parentRefs []gatewayApiv1.ParentReference) error {
 	log := log.DefaultLogger.WithContext(ctx)
+	var cached, confirmed *gatewayApiv1.HTTPRouteList // listed on first need, once per call
 	for _, ref := range parentRefs {
 		gatewayNS := httproute.Namespace
 		if ref.Namespace != nil {
@@ -407,51 +413,52 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 			if ownerNS != "MERGED" {
 				continue
 			}
-			mergeKey := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
+			keyLabel := obj.GetLabels()[r.CidrResolver.AnnotationPrefix+"/owner-name"]
 			// Only the merged policies of this Gateway: another Gateway of the namespace can have a
 			// merge group with members there and none here. Skipped before the sibling checks, which
 			// read the API directly.
-			if mergeKey == "" || !mw.ServesGateway(obj, gateway) {
+			if keyLabel == "" || !mw.ServesGateway(obj, gateway) {
 				continue
 			}
 			// Check cache: any sibling still in this group?
-			allRoutes := &gatewayApiv1.HTTPRouteList{}
-			if err := r.List(ctx, allRoutes); err != nil {
-				return err
-			}
-			hasSibling := false
-			for _, route := range allRoutes.Items {
-				if route.Annotations[r.mergeAnnotation()] == mergeKey &&
-					httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
-					hasSibling = true
-					break
+			if cached == nil {
+				cached = &gatewayApiv1.HTTPRouteList{}
+				if err := r.List(ctx, cached); err != nil {
+					return err
 				}
 			}
-			if hasSibling {
+			if r.hasMergeSibling(cached.Items, keyLabel, gateway) {
 				continue
 			}
 			// Confirm via direct API read before deleting.
-			confirmed := &gatewayApiv1.HTTPRouteList{}
-			if err := r.APIReader.List(ctx, confirmed); err != nil {
-				return err
-			}
-			for _, route := range confirmed.Items {
-				if route.Annotations[r.mergeAnnotation()] == mergeKey &&
-					httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
-					hasSibling = true
-					break
+			if confirmed == nil {
+				confirmed = &gatewayApiv1.HTTPRouteList{}
+				if err := r.APIReader.List(ctx, confirmed); err != nil {
+					return err
 				}
 			}
-			if hasSibling {
+			if r.hasMergeSibling(confirmed.Items, keyLabel, gateway) {
 				continue
 			}
-			if err := mw.DeleteMerged(ctx, gateway, mergeKey); err != nil {
+			if err := mw.Delete(ctx, obj); err != nil {
 				return err
 			}
-			log.Debugf("Deleted orphaned merged AP %q — no siblings remain in group", mergeKey)
+			log.Infof("Deleted orphaned merged AuthorizationPolicy %s/%s: its merge group has no routes left on gateway %s", obj.GetNamespace(), obj.GetName(), gateway.Name)
 		}
 	}
 	return nil
+}
+
+// hasMergeSibling reports whether one of routes is in the merge group whose merged AP has the
+// owner-name label keyLabel (LabelSafe of the key) and points to gateway.
+func (r *HTTPRouteAllowlistingReconciler) hasMergeSibling(routes []gatewayApiv1.HTTPRoute, keyLabel string, gateway *gatewayApiv1.Gateway) bool {
+	for i := range routes {
+		key := routes[i].Annotations[r.mergeAnnotation()]
+		if key != "" && writers.LabelSafe(key) == keyLabel && httproutePointsToGateway(&routes[i], gateway.Name, gateway.Namespace) {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Context, httproute *gatewayApiv1.HTTPRoute, gateway *gatewayApiv1.Gateway, writer writers.MergeableL7PolicyWriter, mergeKey string) error {
