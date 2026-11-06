@@ -83,7 +83,8 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 // reports a change. The patch replaces spec.rules as a whole, so it carries the resourceVersion:
 // if the route changed since the read, the API server refuses it, and it is done again on the new
 // route instead of writing the old rules back over the other change. A route that is gone is no
-// error.
+// error: not in the cache, or deleted after the read (the patch then gets NotFound); its reconcile
+// cleans up.
 func (w *TraefikL7Writer) patchRouteRules(ctx context.Context, key client.ObjectKey, change func(*gatewayApiv1.HTTPRoute) bool, what string) error {
 	return retry.RetryOnConflict(retry.DefaultRetry, func() error {
 		route := &gatewayApiv1.HTTPRoute{}
@@ -95,7 +96,7 @@ func (w *TraefikL7Writer) patchRouteRules(ctx context.Context, key client.Object
 			return nil
 		}
 		if err := w.client.Patch(ctx, route, patch); err != nil {
-			return err
+			return client.IgnoreNotFound(err)
 		}
 		logChange(ctx, controllerutil.OperationResultUpdated, "HTTPRoute", route, what)
 		return nil
