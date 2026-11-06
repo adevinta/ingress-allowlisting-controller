@@ -81,7 +81,7 @@ rules:
   resources: ["cidrs"]
   verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
 ---
-# Read access for view (and so edit and admin, which include view).
+# Read access to CIDRs for view (and so edit and admin, which include view).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
@@ -90,7 +90,18 @@ metadata:
     rbac.authorization.k8s.io/aggregate-to-view: "true"
 rules:
 - apiGroups: ["ipam.adevinta.com"]
-  resources: ["cidrs", "cidrs/status", "clustercidrs", "clustercidrs/status"]
+  resources: ["cidrs", "cidrs/status"]
+  verbs: ["get", "list", "watch"]
+---
+# Read access to ClusterCIDRs, the admins' allowlists (feed URIs, CIDRs). Not aggregated: view
+# bound cluster-wide would give it to every reader of the cluster. Bind it to those who need it.
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: {{ .Release.Name }}-clustercidrs-viewer
+rules:
+- apiGroups: ["ipam.adevinta.com"]
+  resources: ["clustercidrs", "clustercidrs/status"]
   verbs: ["get", "list", "watch"]
 ---
 apiVersion: v1
