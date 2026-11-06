@@ -562,20 +562,7 @@ func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHa
 }
 
 func httproutePointsToGateway(httproute *gatewayApiv1.HTTPRoute, gatewayName, gatewayNamespace string) bool {
-	for _, ref := range gateway.GatewayParentRefs(httproute) {
-		if string(ref.Name) != gatewayName {
-			continue
-		}
-		// nil Namespace means same namespace as the route — resolve it before comparing.
-		refNS := httproute.Namespace
-		if ref.Namespace != nil {
-			refNS = string(*ref.Namespace)
-		}
-		if refNS == gatewayNamespace {
-			return true
-		}
-	}
-	return false
+	return gateway.RoutePointsToGateway(httproute, gatewayName, gatewayNamespace)
 }
 
 // translatePaths delegates path translation to the writer if it implements PathTranslator,

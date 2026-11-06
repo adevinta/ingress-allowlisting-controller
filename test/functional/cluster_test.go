@@ -67,22 +67,9 @@ func detectController(ctx context.Context, c client.Client) (controllerInfo, err
 		return controllerInfo{Location: "outside the cluster (IAC_CONTROLLER_ARGS)", Ready: true, Args: strings.Fields(args)}, nil
 	}
 
-	var candidates []appsv1.Deployment
-	list := &appsv1.DeploymentList{}
-	if err := c.List(ctx, list, client.MatchingLabels{"chart": controllerImageName}); err != nil {
-		return controllerInfo{}, fmt.Errorf("listing deployments: %w", err)
-	}
-	candidates = list.Items
-	if len(candidates) == 0 {
-		// Not installed with the Helm chart: fall back to the image name.
-		if err := c.List(ctx, list); err != nil {
-			return controllerInfo{}, fmt.Errorf("listing deployments: %w", err)
-		}
-		for _, d := range list.Items {
-			if controllerContainerIndex(d) >= 0 {
-				candidates = append(candidates, d)
-			}
-		}
+	candidates, err := controllerDeployments(ctx, c)
+	if err != nil {
+		return controllerInfo{}, err
 	}
 	if pick := os.Getenv("IAC_CONTROLLER"); pick != "" {
 		var picked []appsv1.Deployment
@@ -106,7 +93,33 @@ func detectController(ctx context.Context, c client.Client) (controllerInfo, err
 		return controllerInfo{}, fmt.Errorf("several controller Deployments found (%s); pick one with IAC_CONTROLLER=namespace/name", strings.Join(names, ", "))
 	}
 
-	d := candidates[0]
+	return deploymentInfo(candidates[0]), nil
+}
+
+// controllerDeployments returns the controller's Deployments: by the Helm chart label, or, when it
+// wasn't installed with the chart, by the image name.
+func controllerDeployments(ctx context.Context, c client.Client) ([]appsv1.Deployment, error) {
+	list := &appsv1.DeploymentList{}
+	if err := c.List(ctx, list, client.MatchingLabels{"chart": controllerImageName}); err != nil {
+		return nil, fmt.Errorf("listing deployments: %w", err)
+	}
+	if len(list.Items) > 0 {
+		return list.Items, nil
+	}
+	if err := c.List(ctx, list); err != nil {
+		return nil, fmt.Errorf("listing deployments: %w", err)
+	}
+	var found []appsv1.Deployment
+	for _, d := range list.Items {
+		if controllerContainerIndex(d) >= 0 {
+			found = append(found, d)
+		}
+	}
+	return found, nil
+}
+
+// deploymentInfo describes the controller running as Deployment d.
+func deploymentInfo(d appsv1.Deployment) controllerInfo {
 	i := controllerContainerIndex(d)
 	if i < 0 {
 		i = 0
@@ -116,7 +129,7 @@ func detectController(ctx context.Context, c client.Client) (controllerInfo, err
 		Location: d.Namespace + "/" + d.Name,
 		Ready:    d.Status.AvailableReplicas > 0,
 		Args:     append(append([]string{}, container.Command...), container.Args...),
-	}, nil
+	}
 }
 
 func controllerContainerIndex(d appsv1.Deployment) int {

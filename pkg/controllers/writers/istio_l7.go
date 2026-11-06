@@ -160,6 +160,22 @@ func (w *IstioL7Writer) ListManaged(ctx context.Context, managedBy string) ([]cl
 	return result, nil
 }
 
+// routeOnTargetGateway reports whether route points to one of the Gateways obj, an
+// AuthorizationPolicy, targets (in the policy's namespace).
+func routeOnTargetGateway(route *gatewayApiv1.HTTPRoute, obj client.Object) bool {
+	policy, ok := obj.(*istiosecurityv1.AuthorizationPolicy)
+	if !ok {
+		return false
+	}
+	for _, ref := range policy.Spec.TargetRefs {
+		if ref.GetGroup() == gatewayApiv1.GroupName && ref.GetKind() == "Gateway" &&
+			gateway.RoutePointsToGateway(route, ref.GetName(), policy.Namespace) {
+			return true
+		}
+	}
+	return false
+}
+
 // IsOrphaned reports whether the given AP no longer has a valid owner HTTPRoute.
 func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool {
 	ownerNS := obj.GetLabels()[w.annotationPrefix+"/owner-namespace"]
@@ -167,10 +183,13 @@ func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.H
 	mergeAnnotation := w.annotationPrefix + "/merge"
 
 	if ownerNS == "MERGED" {
-		// Merge-mode AP: check if any route still has this merge key. The label holds LabelSafe of
-		// the key, which differs from it for a key longer than 63 characters.
+		// Merge-mode AP: kept while a route has this merge key and points to a Gateway the AP
+		// targets. The same key can be used on several Gateways, each with its own AP: a route on
+		// another Gateway doesn't keep this one, which nothing would rewrite. The label holds
+		// LabelSafe of the key, which differs from it for a key longer than 63 characters.
 		for i := range allRoutes {
-			if key := allRoutes[i].Annotations[mergeAnnotation]; key != "" && LabelSafe(key) == ownerName {
+			if key := allRoutes[i].Annotations[mergeAnnotation]; key != "" && LabelSafe(key) == ownerName &&
+				routeOnTargetGateway(&allRoutes[i], obj) {
 				return false
 			}
 		}
