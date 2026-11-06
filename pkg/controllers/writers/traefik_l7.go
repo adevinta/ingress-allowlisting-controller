@@ -60,7 +60,7 @@ func (w *TraefikL7Writer) Apply(ctx context.Context, scheme *runtime.Scheme, rou
 	op, err := ctrl.CreateOrUpdate(ctx, w.client, middleware, func() error {
 		// ResourceVersion is set only when the Middleware exists. One that isn't ours is left
 		// alone, and the route doesn't get a filter to it: it would use someone else's allowlist.
-		if middleware.ResourceVersion != "" && !isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, route.Namespace, route.Name, "") {
+		if middleware.ResourceVersion != "" && !w.isOurs(middleware, route.Namespace, route.Name) {
 			return notOurs("Middleware", middleware, "HTTPRoute "+route.Namespace+"/"+route.Name)
 		}
 		if err := ctrl.SetControllerReference(route, middleware, scheme); err != nil {
@@ -160,6 +160,12 @@ func (w *TraefikL7Writer) ListManaged(ctx context.Context, managedBy string) ([]
 	return keepKinds(result, w.annotationPrefix, OwnerKindHTTPRoute), nil
 }
 
+// isOurs reports whether middleware is one this writer created for the route
+// routeNamespace/routeName (see isOurs).
+func (w *TraefikL7Writer) isOurs(middleware client.Object, routeNamespace, routeName string) bool {
+	return isOurs(middleware, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName, "")
+}
+
 // IsOrphaned reports whether the given Middleware no longer has a valid owner HTTPRoute.
 func (w *TraefikL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool {
 	ownerNS := obj.GetLabels()[w.annotationPrefix+"/owner-namespace"]
@@ -203,7 +209,7 @@ func (w *TraefikL7Writer) DeleteForRoute(ctx context.Context, managedBy, routeNa
 	if client.IgnoreNotFound(err) != nil {
 		return err
 	}
-	if err == nil && !isOurs(named, w.annotationPrefix, w.managedBy, OwnerKindHTTPRoute, routeNamespace, routeName, "") {
+	if err == nil && !w.isOurs(named, routeNamespace, routeName) {
 		return nil
 	}
 
