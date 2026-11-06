@@ -72,14 +72,13 @@ func (r *HTTPRouteAllowlistingReconciler) Reconcile(ctx context.Context, req ctr
 			return ctrl.Result{}, err
 		}
 		// Route not found — it was deleted or evicted from the cache (e.g. watch-selector label removed).
-		// Clean up any policies that were created for it, and its metrics series.
-		resolvers.ForgetObject(req.Namespace, "HTTPRoute", req.Name)
-		for _, writer := range r.L7Writers {
-			if err := writer.DeleteForRoute(ctx, r.managedByValue(), req.Namespace, req.Name); err != nil {
-				return ctrl.Result{}, err
-			}
-		}
-		return ctrl.Result{}, nil
+		return ctrl.Result{}, r.forgetRoute(ctx, req.Namespace, req.Name)
+	}
+	if !httproute.DeletionTimestamp.IsZero() {
+		// Being deleted (finalizers, foreground deletion): handled as gone. Writing its policies or
+		// filters again would only fight the garbage collector until it is. Its merge group is
+		// rebuilt without it by the sibling watch (mergeSiblingEnqueuer).
+		return ctrl.Result{}, r.forgetRoute(ctx, req.Namespace, req.Name)
 	}
 	log.Debugf("HTTPRoute %s being reconciled. Creating/updating writers...", httproute.GetName())
 
@@ -365,6 +364,80 @@ func (r *HTTPRouteAllowlistingReconciler) runStartupCleanup(ctx context.Context)
 	}
 }
 
+// forgetRoute deletes the policies written for the route namespace/name, which is gone or being
+// deleted, and its metrics series. The merge group it was in is rebuilt by its other members (see
+// mergeSiblingEnqueuer); a merged policy left without members is deleted here.
+func (r *HTTPRouteAllowlistingReconciler) forgetRoute(ctx context.Context, namespace, name string) error {
+	resolvers.ForgetObject(namespace, "HTTPRoute", name)
+	for _, writer := range r.L7Writers {
+		if err := writer.DeleteForRoute(ctx, r.managedByValue(), namespace, name); err != nil {
+			return err
+		}
+	}
+	return r.deleteEmptyMergedPolicies(ctx)
+}
+
+// deleteEmptyMergedPolicies deletes the merged policies no route keeps any more (see IsOrphaned:
+// a route of the group pointing to the policy's Gateway). The routes are read from the cache, and,
+// only when a policy looks empty, from the API to confirm, as in the startup cleanup. A route being
+// deleted doesn't count.
+func (r *HTTPRouteAllowlistingReconciler) deleteEmptyMergedPolicies(ctx context.Context) error {
+	var cached, confirmed []gatewayApiv1.HTTPRoute
+	routes := func(reader client.Reader, into *[]gatewayApiv1.HTTPRoute) error {
+		if *into != nil {
+			return nil
+		}
+		list := &gatewayApiv1.HTTPRouteList{}
+		if err := reader.List(ctx, list); err != nil {
+			return err
+		}
+		*into = []gatewayApiv1.HTTPRoute{}
+		for _, route := range list.Items {
+			if route.DeletionTimestamp.IsZero() {
+				*into = append(*into, route)
+			}
+		}
+		return nil
+	}
+	for _, writer := range r.L7Writers {
+		if _, ok := writer.(writers.MergeableL7PolicyWriter); !ok {
+			continue
+		}
+		managed, err := writer.ListManaged(ctx, r.managedByValue())
+		if err != nil {
+			return err
+		}
+		for _, obj := range managed {
+			if obj.GetLabels()[writers.OwnerNamespaceLabel(r.CidrResolver.AnnotationPrefix)] != writers.MergedOwnerNamespace {
+				continue
+			}
+			if err := routes(r.Client, &cached); err != nil {
+				return err
+			}
+			if !writer.IsOrphaned(obj, cached) {
+				continue
+			}
+			if err := routes(r.APIReader, &confirmed); err != nil {
+				return err
+			}
+			if !writer.IsOrphaned(obj, confirmed) {
+				continue
+			}
+			if err := writer.Delete(ctx, obj); err != nil {
+				return err
+			}
+			log.DefaultLogger.WithContext(ctx).Infof("Deleted merged AuthorizationPolicy %s/%s: its merge group has no routes left", obj.GetNamespace(), obj.GetName())
+		}
+	}
+	return nil
+}
+
+// inMergeGroup reports whether route is a member of the merge group key: it has the key and isn't
+// being deleted.
+func (r *HTTPRouteAllowlistingReconciler) inMergeGroup(route *gatewayApiv1.HTTPRoute, key string) bool {
+	return route.Annotations[r.mergeAnnotation()] == key && route.DeletionTimestamp.IsZero()
+}
+
 // cleanupOrphanedMergedAPs checks whether the route just left a merge group as the last member.
 // For each gateway the route is attached to, it looks for a merged AP whose group now has
 // no remaining siblings in the cache — and confirms via APIReader before deleting.
@@ -454,7 +527,8 @@ func (r *HTTPRouteAllowlistingReconciler) cleanupOrphanedMergedAPs(ctx context.C
 func (r *HTTPRouteAllowlistingReconciler) hasMergeSibling(routes []gatewayApiv1.HTTPRoute, keyLabel string, gateway *gatewayApiv1.Gateway) bool {
 	for i := range routes {
 		key := routes[i].Annotations[r.mergeAnnotation()]
-		if key != "" && writers.LabelSafe(key) == keyLabel && httproutePointsToGateway(&routes[i], gateway.Name, gateway.Namespace) {
+		if key != "" && writers.LabelSafe(key) == keyLabel && r.inMergeGroup(&routes[i], key) &&
+			httproutePointsToGateway(&routes[i], gateway.Name, gateway.Namespace) {
 			return true
 		}
 	}
@@ -472,7 +546,7 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 	var siblings []*gatewayApiv1.HTTPRoute
 	for idx := range allRoutes.Items {
 		sibling := &allRoutes.Items[idx]
-		if sibling.Annotations[r.mergeAnnotation()] != mergeKey {
+		if !r.inMergeGroup(sibling, mergeKey) {
 			continue
 		}
 		if !httproutePointsToGateway(sibling, gateway.Name, gateway.Namespace) {
@@ -503,7 +577,7 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 			return err
 		}
 		for _, route := range confirmed.Items {
-			if route.Annotations[r.mergeAnnotation()] != mergeKey ||
+			if !r.inMergeGroup(&route, mergeKey) ||
 				!httproutePointsToGateway(&route, gateway.Name, gateway.Namespace) {
 				continue
 			}
@@ -529,35 +603,50 @@ func (r *HTTPRouteAllowlistingReconciler) reconcileMergedGateway(ctx context.Con
 	return nil
 }
 
-// mergeSiblingEnqueuer returns an EventHandler that, when an HTTPRoute's merge annotation
-// changes, enqueues all remaining members of the old merge group so they rebuild their AP
-// without the departed route's stale data.
+// mergeSiblingEnqueuer returns an EventHandler that, when an HTTPRoute leaves its merge group
+// (the merge key changes, the route is being deleted, or it is deleted), enqueues all remaining
+// members of the group so they rebuild the merged AP without the departed route's stale data.
 func (r *HTTPRouteAllowlistingReconciler) mergeSiblingEnqueuer() handler.EventHandler {
 	return handler.Funcs{
 		UpdateFunc: func(ctx context.Context, e event.UpdateEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
-			oldKey := e.ObjectOld.GetAnnotations()[r.mergeAnnotation()]
-			newKey := e.ObjectNew.GetAnnotations()[r.mergeAnnotation()]
-			if oldKey == newKey || oldKey == "" {
-				return // no merge key change — nothing to do
-			}
-			// Route left merge group oldKey — enqueue all current members so they rebuild
-			routes := &gatewayApiv1.HTTPRouteList{}
-			if err := r.List(ctx, routes); err != nil {
-				// Only this requeue rebuilds the old group's merged policy, so until then it still
-				// allows the route that left.
-				log.DefaultLogger.WithContext(ctx).Errorf("dropped merge group change of HTTPRoute %s: listing %T failed, the merged AuthorizationPolicy of group %q keeps the route until a member of the group changes or the resync: %v",
-					client.ObjectKeyFromObject(e.ObjectNew), routes, oldKey, err)
-				return
-			}
-			for _, route := range routes.Items {
-				if route.Annotations[r.mergeAnnotation()] == oldKey {
-					q.Add(reconcile.Request{NamespacedName: types.NamespacedName{
-						Namespace: route.Namespace,
-						Name:      route.Name,
-					}})
-				}
+			if key, left := r.leftMergeGroup(e.ObjectOld, e.ObjectNew); left {
+				r.enqueueMergeGroup(ctx, e.ObjectNew, key, q)
 			}
 		},
+		DeleteFunc: func(ctx context.Context, e event.DeleteEvent, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+			if key := e.Object.GetAnnotations()[r.mergeAnnotation()]; key != "" {
+				r.enqueueMergeGroup(ctx, e.Object, key, q)
+			}
+		},
+	}
+}
+
+// leftMergeGroup reports whether the update of a route from old to new makes it leave its merge
+// group key: the key changed, or the route started being deleted.
+func (r *HTTPRouteAllowlistingReconciler) leftMergeGroup(old, new client.Object) (key string, left bool) {
+	key = old.GetAnnotations()[r.mergeAnnotation()]
+	if key == "" {
+		return "", false
+	}
+	keyChanged := new.GetAnnotations()[r.mergeAnnotation()] != key
+	deleting := old.GetDeletionTimestamp().IsZero() && !new.GetDeletionTimestamp().IsZero()
+	return key, keyChanged || deleting
+}
+
+// enqueueMergeGroup enqueues the members of merge group key other than route, which left it.
+func (r *HTTPRouteAllowlistingReconciler) enqueueMergeGroup(ctx context.Context, route client.Object, key string, q workqueue.TypedRateLimitingInterface[reconcile.Request]) {
+	routes := &gatewayApiv1.HTTPRouteList{}
+	if err := r.List(ctx, routes); err != nil {
+		// Only this requeue rebuilds the old group's merged policy, so until then it still
+		// allows the route that left.
+		log.DefaultLogger.WithContext(ctx).Errorf("dropped merge group change of HTTPRoute %s: listing %T failed, the merged AuthorizationPolicy of group %q keeps the route until a member of the group changes or the resync: %v",
+			client.ObjectKeyFromObject(route), routes, key, err)
+		return
+	}
+	for _, member := range routes.Items {
+		if member.Annotations[r.mergeAnnotation()] == key && (member.Namespace != route.GetNamespace() || member.Name != route.GetName()) {
+			q.Add(reconcile.Request{NamespacedName: types.NamespacedName{Namespace: member.Namespace, Name: member.Name}})
+		}
 	}
 }
 
@@ -641,12 +730,11 @@ func (r *HTTPRouteAllowlistingReconciler) SetupWithManager(mgr ctrl.Manager, nam
 			r.mergeSiblingEnqueuer(),
 			builder.WithPredicates(predicate.Funcs{
 				CreateFunc:  func(e event.CreateEvent) bool { return false },
-				DeleteFunc:  func(e event.DeleteEvent) bool { return false },
+				DeleteFunc:  func(e event.DeleteEvent) bool { return e.Object.GetAnnotations()[r.mergeAnnotation()] != "" },
 				GenericFunc: func(e event.GenericEvent) bool { return false },
 				UpdateFunc: func(e event.UpdateEvent) bool {
-					oldKey := e.ObjectOld.GetAnnotations()[r.mergeAnnotation()]
-					newKey := e.ObjectNew.GetAnnotations()[r.mergeAnnotation()]
-					return oldKey != newKey && oldKey != ""
+					_, left := r.leftMergeGroup(e.ObjectOld, e.ObjectNew)
+					return left
 				},
 			}))
 	if namePrefix != "" {

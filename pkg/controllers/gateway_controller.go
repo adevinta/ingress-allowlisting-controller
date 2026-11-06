@@ -43,6 +43,12 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		resolvers.ForgetObject(req.Namespace, "Gateway", req.Name)
 		return ctrl.Result{}, nil
 	}
+	if !gateway.DeletionTimestamp.IsZero() {
+		// Being deleted (finalizers, foreground deletion): its policy has the Gateway as owner, so
+		// the garbage collector removes it. Writing it again would only fight the collector.
+		log.Debugf("Gateway %s is being deleted, nothing to write", gateway.GetName())
+		return ctrl.Result{}, nil
+	}
 	log.Debugf("Gateway %s being reconciled. Creating/updating writers...", gateway.GetName())
 
 	// Resolve GatewayClass and writer first — needed for both apply and delete paths.
