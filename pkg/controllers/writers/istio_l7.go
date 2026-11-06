@@ -178,11 +178,11 @@ func routeOnTargetGateway(route *gatewayApiv1.HTTPRoute, obj client.Object) bool
 
 // IsOrphaned reports whether the given AP no longer has a valid owner HTTPRoute.
 func (w *IstioL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool {
-	ownerNS := obj.GetLabels()[w.annotationPrefix+"/owner-namespace"]
-	ownerName := obj.GetLabels()[w.annotationPrefix+"/owner-name"]
-	mergeAnnotation := w.annotationPrefix + "/merge"
+	ownerNS := obj.GetLabels()[OwnerNamespaceLabel(w.annotationPrefix)]
+	ownerName := obj.GetLabels()[OwnerNameLabel(w.annotationPrefix)]
+	mergeAnnotation := MergeAnnotation(w.annotationPrefix)
 
-	if ownerNS == "MERGED" {
+	if ownerNS == MergedOwnerNamespace {
 		// Merge-mode AP: kept while a route has this merge key and points to a Gateway the AP
 		// targets. The same key can be used on several Gateways, each with its own AP: a route on
 		// another Gateway doesn't keep this one, which nothing would rewrite. The label holds
@@ -259,7 +259,7 @@ func (w *IstioL7Writer) policyTargetsForRoute(route *gatewayApiv1.HTTPRoute) []p
 	if len(route.Spec.Hostnames) == 0 {
 		return nil
 	}
-	granularity := route.Annotations[w.annotationPrefix+"/granularity"]
+	granularity := route.Annotations[GranularityAnnotation(w.annotationPrefix)]
 
 	var targets []policyTarget
 	for _, ref := range gateway.GatewayParentRefs(route) {

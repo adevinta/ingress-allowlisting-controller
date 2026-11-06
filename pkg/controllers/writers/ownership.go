@@ -32,14 +32,24 @@ const (
 	OwnerKindMerged    = "Merged"
 )
 
-// mergedOwnerNamespace is the owner-namespace of a merged policy, which has no single owner route.
-const mergedOwnerNamespace = "MERGED"
+// MergedOwnerNamespace is the owner-namespace of a merged policy, which has no single owner route.
+const MergedOwnerNamespace = "MERGED"
 
 const managedByLabel = "app.kubernetes.io/managed-by"
 
-func ownerKindLabel(prefix string) string      { return prefix + "/owner-kind" }
-func ownerNamespaceLabel(prefix string) string { return prefix + "/owner-namespace" }
-func ownerNameLabel(prefix string) string      { return prefix + "/owner-name" }
+// OwnerKindLabel, OwnerNamespaceLabel and OwnerNameLabel are the keys of the ownership labels
+// under prefix. Use them, not the keys typed out: a typo would make the controller read an empty
+// label, and treat its own objects as foreign or orphaned.
+func OwnerKindLabel(prefix string) string      { return prefix + "/owner-kind" }
+func OwnerNamespaceLabel(prefix string) string { return prefix + "/owner-namespace" }
+func OwnerNameLabel(prefix string) string      { return prefix + "/owner-name" }
+
+// MergeAnnotation is the key of the HTTPRoute annotation naming its merge group.
+func MergeAnnotation(prefix string) string { return prefix + "/merge" }
+
+// GranularityAnnotation is the key of the HTTPRoute annotation choosing one policy rule per route
+// ("host") or per route rule (the default).
+func GranularityAnnotation(prefix string) string { return prefix + "/granularity" }
 
 // invalidLabelValue matches characters not allowed in k8s label values.
 var invalidLabelValue = regexp.MustCompile(`[^-A-Za-z0-9_.]`)
@@ -64,9 +74,9 @@ func setOwnerLabels(obj client.Object, prefix, managedBy, kind, ownerNamespace, 
 		labels = map[string]string{}
 	}
 	labels[managedByLabel] = managedBy
-	labels[ownerKindLabel(prefix)] = kind
-	labels[ownerNamespaceLabel(prefix)] = LabelSafe(ownerNamespace)
-	labels[ownerNameLabel(prefix)] = LabelSafe(ownerName)
+	labels[OwnerKindLabel(prefix)] = kind
+	labels[OwnerNamespaceLabel(prefix)] = LabelSafe(ownerNamespace)
+	labels[OwnerNameLabel(prefix)] = LabelSafe(ownerName)
 	obj.SetLabels(labels)
 }
 
@@ -75,13 +85,13 @@ func setOwnerLabels(obj client.Object, prefix, managedBy, kind, ownerNamespace, 
 // "MERGED") or a route's. Gateway policies had no labels then.
 func ownerKind(obj client.Object, prefix string) string {
 	labels := obj.GetLabels()
-	if kind := labels[ownerKindLabel(prefix)]; kind != "" {
+	if kind := labels[OwnerKindLabel(prefix)]; kind != "" {
 		return kind
 	}
-	if _, ok := labels[ownerNameLabel(prefix)]; !ok {
+	if _, ok := labels[OwnerNameLabel(prefix)]; !ok {
 		return ""
 	}
-	if labels[ownerNamespaceLabel(prefix)] == LabelSafe(mergedOwnerNamespace) {
+	if labels[OwnerNamespaceLabel(prefix)] == LabelSafe(MergedOwnerNamespace) {
 		return OwnerKindMerged
 	}
 	return OwnerKindHTTPRoute
@@ -89,7 +99,7 @@ func ownerKind(obj client.Object, prefix string) string {
 
 // managedByUs selects the objects of this instance: managed-by, and an owner-name under our prefix.
 func managedByUs(prefix, managedBy string) []client.ListOption {
-	return []client.ListOption{client.MatchingLabels{managedByLabel: managedBy}, client.HasLabels{ownerNameLabel(prefix)}}
+	return []client.ListOption{client.MatchingLabels{managedByLabel: managedBy}, client.HasLabels{OwnerNameLabel(prefix)}}
 }
 
 // ownedBy selects the objects of this instance owned by one namespace/name. Callers still check the
@@ -97,8 +107,8 @@ func managedByUs(prefix, managedBy string) []client.ListOption {
 func ownedBy(prefix, managedBy, ownerNamespace, ownerName string) []client.ListOption {
 	return []client.ListOption{client.MatchingLabels{
 		managedByLabel:              managedBy,
-		ownerNamespaceLabel(prefix): LabelSafe(ownerNamespace),
-		ownerNameLabel(prefix):      LabelSafe(ownerName),
+		OwnerNamespaceLabel(prefix): LabelSafe(ownerNamespace),
+		OwnerNameLabel(prefix):      LabelSafe(ownerName),
 	}}
 }
 
@@ -115,7 +125,7 @@ var ErrPolicyNotManaged = errors.New("existing policy is not managed by this con
 func isOurs(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerName string, legacyOwner types.UID) bool {
 	labels := obj.GetLabels()
 	if labels[managedByLabel] == managedBy && ownerKind(obj, prefix) == kind &&
-		labels[ownerNamespaceLabel(prefix)] == LabelSafe(ownerNamespace) && labels[ownerNameLabel(prefix)] == LabelSafe(ownerName) {
+		labels[OwnerNamespaceLabel(prefix)] == LabelSafe(ownerNamespace) && labels[OwnerNameLabel(prefix)] == LabelSafe(ownerName) {
 		return true
 	}
 	if legacyOwner == "" || hasOwnerLabels(obj) {
@@ -128,7 +138,7 @@ func isOurs(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerNam
 // hasOwnerLabels reports whether obj has the ownership labels of any instance, whatever its prefix.
 func hasOwnerLabels(obj client.Object) bool {
 	for key := range obj.GetLabels() {
-		if strings.HasSuffix(key, "/owner-name") {
+		if strings.HasSuffix(key, OwnerNameLabel("")) {
 			return true
 		}
 	}

@@ -168,8 +168,8 @@ func (w *TraefikL7Writer) isOurs(middleware client.Object, routeNamespace, route
 
 // IsOrphaned reports whether the given Middleware no longer has a valid owner HTTPRoute.
 func (w *TraefikL7Writer) IsOrphaned(obj client.Object, allRoutes []gatewayApiv1.HTTPRoute) bool {
-	ownerNS := obj.GetLabels()[w.annotationPrefix+"/owner-namespace"]
-	ownerName := obj.GetLabels()[w.annotationPrefix+"/owner-name"]
+	ownerNS := obj.GetLabels()[OwnerNamespaceLabel(w.annotationPrefix)]
+	ownerName := obj.GetLabels()[OwnerNameLabel(w.annotationPrefix)]
 
 	// Labels are stored via LabelSafe(), so we must compare using LabelSafe() on both sides.
 	for i := range allRoutes {
