@@ -64,13 +64,6 @@ func sameNamespacePolicyName(gw, route string, paths []string) string {
 	return truncateName(gw + "-" + route + policyNameSuffix(paths))
 }
 
-// legacyCrossNamespacePolicyName is the name a cross-namespace route policy had before
-// CrossNamespacePolicyName: Apply deletes it once the new one is written. Remove with the
-// migration (see policyTarget.legacyName).
-func legacyCrossNamespacePolicyName(routeNS, gw, route string, paths []string) string {
-	return truncateName(gw + "-" + routeNS + "-" + route + legacyPolicyNameSuffix(paths))
-}
-
 // truncateName ensures a Kubernetes resource name stays within the 253-char limit.
 // Names that fit are returned unchanged. Names that overflow are truncated to 244 chars
 // and suffixed with "-{fnv32hex(fullName)}" (9 chars) to keep them collision-resistant.
@@ -97,18 +90,5 @@ func policyNameSuffix(paths []string) string {
 	}
 	h := fnv.New32a()
 	_, _ = h.Write([]byte(strings.Join(util.DedupSorted(paths), "\x00")))
-	return fmt.Sprintf("-%08x", h.Sum32())
-}
-
-// legacyPolicyNameSuffix is policyNameSuffix before the \0 separator, for
-// legacyCrossNamespacePolicyName only: the cross-namespace names it rebuilds were written with it.
-func legacyPolicyNameSuffix(paths []string) string {
-	if len(paths) == 0 {
-		return ""
-	}
-	h := fnv.New32a()
-	for _, p := range util.DedupSorted(paths) {
-		_, _ = h.Write([]byte(p))
-	}
 	return fmt.Sprintf("-%08x", h.Sum32())
 }

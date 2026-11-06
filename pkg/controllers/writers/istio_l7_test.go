@@ -153,6 +153,7 @@ func TestIsOrphaned_GranularityHost(t *testing.T) {
 	liveAP.Name = "gw-my-route"
 	liveAP.Namespace = "ns"
 	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "my-route",
 	}
@@ -164,6 +165,7 @@ func TestIsOrphaned_GranularityHost(t *testing.T) {
 	staleAP.Name = "gw-my-route-api-" // some hash-suffixed name
 	staleAP.Namespace = "ns"
 	staleAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "my-route",
 	}
@@ -180,6 +182,7 @@ func TestIsOrphaned_MergeKey(t *testing.T) {
 	ap.Name = "gw-my-route"
 	ap.Namespace = "ns"
 	ap.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "my-route",
 	}
@@ -232,6 +235,7 @@ func TestIsOrphaned_PathPrefixRoute(t *testing.T) {
 	liveAP.Name = liveAPName
 	liveAP.Namespace = "ns"
 	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "my-route",
 	}
@@ -243,6 +247,7 @@ func TestIsOrphaned_PathPrefixRoute(t *testing.T) {
 	oldAP.Name = "gw-my-route-api" // single-path name, no hash
 	oldAP.Namespace = "ns"
 	oldAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "my-route",
 	}
@@ -260,29 +265,31 @@ func TestPolicyNameHashSuffix(t *testing.T) {
 	route.Name = "r"
 	route.Namespace = "ns"
 	w := newIstioL7Writer(nil)
-	policyName := w.policyName
+	policyName := func(paths []string) string {
+		return w.policyTarget(route.Namespace, route.Name, gw.Namespace, gw.Name, paths).name
+	}
 
 	// Single path: hash suffix, no human-readable path in name.
-	nameSingle, _, _ := policyName(route, gw, []string{"/api"})
+	nameSingle := policyName([]string{"/api"})
 	assert.Regexp(t, `^gw-r-[0-9a-f]{8}$`, nameSingle, "single path must produce {base}-{hash}")
 
 	// Multiple paths: same format.
-	nameMulti, _, _ := policyName(route, gw, []string{"/api", "/health"})
+	nameMulti := policyName([]string{"/api", "/health"})
 	assert.Regexp(t, `^gw-r-[0-9a-f]{8}$`, nameMulti, "multi-path must produce {base}-{hash}")
 
 	// Order must not matter.
-	nameReversed, _, _ := policyName(route, gw, []string{"/health", "/api"})
+	nameReversed := policyName([]string{"/health", "/api"})
 	assert.Equal(t, nameMulti, nameReversed, "path order must not affect the AP name")
 
 	// Different path sets must produce different names.
-	nameOther, _, _ := policyName(route, gw, []string{"/api", "/admin"})
+	nameOther := policyName([]string{"/api", "/admin"})
 	assert.NotEqual(t, nameMulti, nameOther, "different path sets must produce different names")
 
 	// Single-path and multi-path with same first path must differ.
 	assert.NotEqual(t, nameSingle, nameMulti)
 
 	// No paths: base name only.
-	nameBase, _, _ := policyName(route, gw, nil)
+	nameBase := policyName(nil)
 	assert.Equal(t, "gw-r", nameBase)
 }
 
@@ -333,6 +340,7 @@ func TestRoutePolicyPrefixOverlap(t *testing.T) {
 	staleAP.Name = "gw-api-v2"
 	staleAP.Namespace = "ns"
 	staleAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "api",
 	}
@@ -343,6 +351,7 @@ func TestRoutePolicyPrefixOverlap(t *testing.T) {
 	liveAP.Name = "gw-api"
 	liveAP.Namespace = "ns"
 	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns",
 		"ipam.adevinta.com/owner-name":      "api",
 	}
@@ -378,6 +387,7 @@ func TestIsOrphaned_CrossNamespace(t *testing.T) {
 	liveAP.Name = targets[0].name
 	liveAP.Namespace = targets[0].namespace
 	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
 		"ipam.adevinta.com/owner-name":      LabelSafe("my-route"),
 	}
@@ -389,6 +399,7 @@ func TestIsOrphaned_CrossNamespace(t *testing.T) {
 	staleAP.Name = "my-gw-route-ns-deleted-route"
 	staleAP.Namespace = "gw-ns"
 	staleAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
 		"ipam.adevinta.com/owner-name":      LabelSafe("deleted-route"),
 	}
@@ -400,6 +411,7 @@ func TestIsOrphaned_CrossNamespace(t *testing.T) {
 	wrongNameAP.Name = "old-gw-route-ns-my-route"
 	wrongNameAP.Namespace = "gw-ns"
 	wrongNameAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": LabelSafe("route-ns"),
 		"ipam.adevinta.com/owner-name":      LabelSafe("my-route"),
 	}
@@ -432,6 +444,7 @@ func TestIsOrphaned_LongRouteName(t *testing.T) {
 	liveAP.Name = targets[0].name
 	liveAP.Namespace = targets[0].namespace
 	liveAP.Labels = map[string]string{
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": LabelSafe("ns"),
 		"ipam.adevinta.com/owner-name":      LabelSafe(longName),
 	}

@@ -100,34 +100,6 @@ func TestInstancesWithOtherPrefixesDontSeeEachOther(t *testing.T) {
 	assert.Len(t, listed, 1, "we still do")
 }
 
-// TestPoliciesWithoutOwnerKindStillCount verifies the transition: policies written before the
-// owner-kind label still count as ours, a route's or a merge group's, until their next write adds it.
-func TestPoliciesWithoutOwnerKindStillCount(t *testing.T) {
-	ctx := context.Background()
-	old := func(name, ownerNS, ownerName string) *istiosecurityv1.AuthorizationPolicy {
-		return &istiosecurityv1.AuthorizationPolicy{ObjectMeta: metav1.ObjectMeta{Name: name, Namespace: "gw-ns", Labels: map[string]string{
-			"app.kubernetes.io/managed-by":      testManagedBy,
-			"ipam.adevinta.com/owner-namespace": ownerNS,
-			"ipam.adevinta.com/owner-name":      ownerName,
-		}}}
-	}
-	routePolicy, mergedPolicy := old("my-gw-my-route", "gw-ns", "my-route"), old("shared", "MERGED", "shared")
-	c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(routePolicy, mergedPolicy).Build()
-	l7 := newIstioL7Writer(c)
-
-	assert.Equal(t, OwnerKindHTTPRoute, ownerKind(routePolicy, resolvers.DefaultPrefix))
-	assert.Equal(t, OwnerKindMerged, ownerKind(mergedPolicy, resolvers.DefaultPrefix))
-	assert.True(t, l7.isMergedPolicy(mergedPolicy, "shared"))
-
-	listed, err := l7.ListManaged(ctx, testManagedBy)
-	require.NoError(t, err)
-	assert.Len(t, listed, 2)
-
-	require.NoError(t, l7.DeleteForRoute(ctx, testManagedBy, "gw-ns", "my-route"))
-	err = c.Get(ctx, client.ObjectKeyFromObject(routePolicy), &istiosecurityv1.AuthorizationPolicy{})
-	assert.True(t, client.IgnoreNotFound(err) == nil && err != nil, "the old route policy is still found and deleted")
-}
-
 // othersLabels are the ownership labels of another instance, with the prefix other.example.com.
 func othersLabels(kind, ns, name string) map[string]string {
 	return map[string]string{
@@ -216,34 +188,6 @@ func TestWritersLeaveOthersObjectsAlone(t *testing.T) {
 			})
 		})
 	}
-}
-
-// TestGatewayPolicyWithoutLabelsIsAdoptedByItsGateway verifies the transition: a Gateway policy
-// written before the labels, recognised by its Gateway as controller owner, is still ours, and gets
-// the labels on its next write.
-func TestGatewayPolicyWithoutLabelsIsAdoptedByItsGateway(t *testing.T) {
-	ctx := context.Background()
-	gw := testGateway("my-gw", "gw-ns")
-	gw.UID = "gw-uid"
-	old := othersPolicy("gw-ns", "my-gw", nil)
-	isController := true
-	old.OwnerReferences = []metav1.OwnerReference{{APIVersion: "gateway.networking.k8s.io/v1", Kind: "Gateway", Name: "my-gw", UID: "gw-uid", Controller: &isController}}
-	c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw, old).Build()
-	w := NewIstioL4Writer(c, testManagedBy, resolvers.DefaultPrefix)
-
-	require.NoError(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}))
-	got := getPolicy(t, c, "gw-ns", "my-gw")
-	assert.Equal(t, OwnerKindGateway, got.Labels["ipam.adevinta.com/owner-kind"])
-	assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_ALLOW, got.Spec.Action)
-
-	// The same, but another instance's policy (its labels) for the same Gateway: not adopted.
-	theirs := othersPolicy("gw-ns", "my-gw", othersLabels(OwnerKindGateway, "gw-ns", "my-gw"))
-	theirs.OwnerReferences = old.OwnerReferences
-	c = fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw.DeepCopy(), theirs).Build()
-	w = NewIstioL4Writer(c, testManagedBy, resolvers.DefaultPrefix)
-	assert.ErrorIs(t, w.Apply(ctx, istioL7Scheme, gw, []string{"10.0.0.0/8"}), ErrPolicyNotManaged)
-	require.NoError(t, w.Delete(ctx, gw))
-	getPolicy(t, c, "gw-ns", "my-gw") // still there
 }
 
 // TestTraefikKeepsFiltersToOthersMiddlewares verifies that a route without the allowlist

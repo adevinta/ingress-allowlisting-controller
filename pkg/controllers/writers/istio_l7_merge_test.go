@@ -440,8 +440,6 @@ func existingPolicy(name string, action istioApiSecurityV1.AuthorizationPolicy_A
 	}
 }
 
-// foreignPolicies are APs a merge key must never take over: they share the name, but are not the
-// merged policy of that merge group.
 // merged is the key of the merged AP of the group mergeKey on the Gateway gw of namespace gw-ns.
 func merged(gw, mergeKey string) client.ObjectKey {
 	return client.ObjectKey{Name: MergedPolicyName(resolvers.DefaultPrefix, gw, mergeKey), Namespace: "gw-ns"}
@@ -453,16 +451,19 @@ func foreignPolicies(name, mergeKey string) map[string]*istiosecurityv1.Authoriz
 		"admin-authored DENY without labels": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_DENY, nil),
 		"per-route AP of this controller": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
 			"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 			"ipam.adevinta.com/owner-namespace": "ns-a",
 			"ipam.adevinta.com/owner-name":      "svc-a",
 		}),
 		"merged AP of another merge key": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
 			"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-kind":      "Merged",
 			"ipam.adevinta.com/owner-namespace": "MERGED",
 			"ipam.adevinta.com/owner-name":      "other-key",
 		}),
 		"merged AP of another controller instance": existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
 			"app.kubernetes.io/managed-by":      "other-ingress-allowlisting-controller",
+			"ipam.adevinta.com/owner-kind":      "Merged",
 			"ipam.adevinta.com/owner-namespace": "MERGED",
 			"ipam.adevinta.com/owner-name":      mergeKey,
 		}),
@@ -648,6 +649,7 @@ func TestIsOrphaned_RouteWithoutHostnames(t *testing.T) {
 	require.Len(t, targets, 1)
 	ap := existingPolicy(targets[0].name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
 		"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
+		"ipam.adevinta.com/owner-kind":      "HTTPRoute",
 		"ipam.adevinta.com/owner-namespace": "ns-a",
 		"ipam.adevinta.com/owner-name":      "svc-a",
 	})

@@ -186,8 +186,7 @@ creates carries these labels, `<prefix>` being `--annotation-prefix`:
 | `<prefix>/owner-namespace`, `<prefix>/owner-name` | the owner (`MERGED` and the merge key for a merge group) |
 
 The labels under the prefix are what makes a resource the controller's, so two instances with
-different prefixes don't touch each other's resources. Policies created before `owner-kind`
-existed get it on their next update.
+different prefixes don't touch each other's resources.
 
 **Names are predictable, so a resource with the same name can already exist:** another
 instance's, one an admin or a tenant created, or, in one namespace, another route's or Gateway's
@@ -196,9 +195,7 @@ with its labels, for the same owner. Anything else under that name is left as it
 that needs it gets no allowlist, a Warning Event `AllowlistPolicyConflict` and a log warning, and
 the reconcile is not retried. Once the other resource is removed or renamed, the next reconcile of
 the object (a change to it or to its CIDRs) writes the allowlist. For the same reason, a route keeps
-its filter to a Middleware named like the route that isn't the controller's. Gateway policies created before
-the labels existed have none: they still count as the controller's when their Gateway is their
-controller owner, and get the labels on their next update.
+its filter to a Middleware named like the route that isn't the controller's.
 
 **Automatic cleanup on restart:** every time the controller starts it runs a one-time sweep
 over the HTTPRoute resources it owns. Any resource whose owner no longer exists is deleted.
@@ -356,7 +353,9 @@ See
   meanwhile. Until then, a namespace that lost the label keeps its routes' allowlists on that
   Gateway, although the Gateway stops routing for them at once. See
   [HTTPRoute → Istio AuthorizationPolicy](gateway-api.md#httproute--istio-authorizationpolicy-l7).
-- **`spec.cidrs` is not checked when the object is written.** The API server accepts any string,
-  so `kubectl apply` gives no error for `10.0.0` or `192.0.2.0/33`. The controller leaves such
-  entries out of `status.cidrs` and names them in the `UpToDate` condition, so they never reach a
-  policy (see [Resolved CIDR behaviour](cidrs.md#resolved-cidr-behaviour)).
+- **Only `spec.cidrs` is checked when the object is written, and only its form.** The CRD refuses
+  an entry that isn't a CIDR or an IP address (`10.0.0`, `192.0.2.0/33`, `::ffff:10.0.0.1`), so
+  `kubectl apply` fails with the entry's index. Whether a CIDR is the one meant, or too wide, is
+  not checked: inline CIDRs skip the breadth limit, so `0.0.0.0/0` is accepted. CIDRs from a
+  remote source are checked by the controller after the fetch (see
+  [Resolved CIDR behaviour](cidrs.md#resolved-cidr-behaviour)).

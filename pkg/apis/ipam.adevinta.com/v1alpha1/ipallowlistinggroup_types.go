@@ -69,7 +69,14 @@ type CIDRsSource struct {
 	// +kubebuilder:validation:Optional
 	Location CIDRsLocation `json:"location,omitempty" yaml:"location,omitempty"`
 
+	// CIDRs are CIDRs or IP addresses (an IP becomes a /32 or /128), at most 10000 entries of at
+	// most 64 characters. Each entry is checked when the object is written, so a typo is refused
+	// by the API server instead of being ignored later. Surrounding spaces are allowed;
+	// IPv4-mapped IPv6 (::ffff:a.b.c.d) is not: write a.b.c.d. Needs Kubernetes 1.32 or later.
 	// +kubebuilder:validation:Optional
+	// +kubebuilder:validation:MaxItems=10000
+	// +kubebuilder:validation:items:MaxLength=64
+	// +kubebuilder:validation:items:XValidation:rule="isCIDR(self.trim()) || isIP(self.trim())",message="must be a CIDR (e.g. 192.0.2.0/24) or an IP address; write IPv4 addresses as a.b.c.d, not ::ffff:a.b.c.d"
 	CIDRs []string `json:"cidrs,omitempty"`
 }
 

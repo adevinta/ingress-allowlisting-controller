@@ -2,3 +2,5 @@ apiVersion: v2
 description: A Helm chart for managing Ingress Controller Allowlisting in namespaces
 name: ingress-allowlisting-controller
 version: 0.1.5
+# The CRD validation of spec.cidrs uses CEL functions from Kubernetes 1.31; supported from 1.32.
+kubeVersion: ">=1.32.0-0"

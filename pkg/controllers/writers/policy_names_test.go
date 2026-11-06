@@ -7,14 +7,8 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
-	apierrors "k8s.io/apimachinery/pkg/api/errors"
-	"sigs.k8s.io/controller-runtime/pkg/client"
 	"sigs.k8s.io/controller-runtime/pkg/client/fake"
 	gatewayApiv1 "sigs.k8s.io/gateway-api/apis/v1"
-
-	istioApiSecurityV1 "istio.io/api/security/v1"
-	istioApiTypeV1beta1 "istio.io/api/type/v1beta1"
-	istiosecurityv1 "istio.io/client-go/pkg/apis/security/v1"
 
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
@@ -74,112 +68,6 @@ func TestPolicyNamesFitAndStayUnique(t *testing.T) {
 	assert.NotEqual(t, a, b)
 }
 
-// legacyRoutePolicy is a cross-namespace route policy under its pre-v0.3.0 name, as an older
-// version wrote it: ours, owned by route ns-a/svc-a.
-func legacyRoutePolicy(name string) *istiosecurityv1.AuthorizationPolicy {
-	return existingPolicy(name, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
-		"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
-		"ipam.adevinta.com/owner-namespace": "ns-a",
-		"ipam.adevinta.com/owner-name":      "svc-a",
-	})
-}
-
-// TestCrossNamespacePolicyMigration verifies the rename of a cross-namespace route policy: Apply
-// writes the policy under the new name and only then deletes ours under the old one; until then
-// the orphan check counts the old name as produced, so the startup cleanup doesn't delete it
-// before its replacement exists. A foreign policy under the old name is left alone.
-func TestCrossNamespacePolicyMigration(t *testing.T) {
-	ctx := context.Background()
-	gw := testGateway("my-gw", "gw-ns")
-	route := testRoute("svc-a", "ns-a", "svc-a.example.com")
-	ns := gatewayApiv1.Namespace("gw-ns")
-	route.Spec.ParentRefs = []gatewayApiv1.ParentReference{{Name: "my-gw", Namespace: &ns}}
-	oldName := legacyCrossNamespacePolicyName("ns-a", "my-gw", "svc-a", nil)
-	newName := CrossNamespacePolicyName(prefix, "ns-a", "my-gw", "svc-a", nil)
-	require.Equal(t, "my-gw-ns-a-svc-a", oldName)
-
-	t.Run("ours", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw, route.DeepCopy(), legacyRoutePolicy(oldName)).Build()
-		w := newIstioL7Writer(c)
-		assert.False(t, w.IsOrphaned(getPolicy(t, c, "gw-ns", oldName), []gatewayApiv1.HTTPRoute{*route}), "the old name counts as produced until replaced")
-
-		require.NoError(t, w.Apply(ctx, istioL7Scheme, route, gw, []string{"10.0.0.0/8"}, []string{"svc-a.example.com"}, nil))
-		getPolicy(t, c, "gw-ns", newName)
-		err := c.Get(ctx, client.ObjectKey{Namespace: "gw-ns", Name: oldName}, &istiosecurityv1.AuthorizationPolicy{})
-		assert.True(t, apierrors.IsNotFound(err), "the old one is deleted once the new one exists, got %v", err)
-	})
-
-	t.Run("foreign", func(t *testing.T) {
-		foreign := existingPolicy(oldName, istioApiSecurityV1.AuthorizationPolicy_DENY, nil)
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw, route.DeepCopy(), foreign).Build()
-		require.NoError(t, newIstioL7Writer(c).Apply(ctx, istioL7Scheme, route, gw, []string{"10.0.0.0/8"}, []string{"svc-a.example.com"}, nil))
-		assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_DENY, getPolicy(t, c, "gw-ns", oldName).Spec.Action, "not ours: left alone")
-	})
-
-	t.Run("no CIDRs: both names deleted", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gw, route.DeepCopy(), legacyRoutePolicy(oldName)).Build()
-		require.NoError(t, newIstioL7Writer(c).Apply(ctx, istioL7Scheme, route, gw, nil, []string{"svc-a.example.com"}, nil))
-		err := c.Get(ctx, client.ObjectKey{Namespace: "gw-ns", Name: oldName}, &istiosecurityv1.AuthorizationPolicy{})
-		assert.True(t, apierrors.IsNotFound(err), "got %v", err)
-	})
-}
-
-// legacyMergedPolicy is the merged policy of group mergeKey under its pre-v0.3.0 name, the bare
-// key, serving the Gateway gw.
-func legacyMergedPolicy(mergeKey, gw string) *istiosecurityv1.AuthorizationPolicy {
-	policy := existingPolicy(mergeKey, istioApiSecurityV1.AuthorizationPolicy_ALLOW, map[string]string{
-		"app.kubernetes.io/managed-by":      "ingress-allowlisting-controller",
-		"ipam.adevinta.com/owner-namespace": "MERGED",
-		"ipam.adevinta.com/owner-name":      mergeKey,
-	})
-	policy.Spec.TargetRefs = []*istioApiTypeV1beta1.PolicyTargetReference{{Group: gatewayApiv1.GroupName, Kind: "Gateway", Name: gw}}
-	return policy
-}
-
-// TestMergedPolicyMigration verifies the rename of a merged policy: ApplyMerged writes it under
-// the new name and then deletes the old one, if it's this group's and serves this Gateway; a group
-// emptied before the rename loses the old one too. The old one of another Gateway, and a foreign
-// AP under the old name, are left alone.
-func TestMergedPolicyMigration(t *testing.T) {
-	ctx := context.Background()
-	cidrs := testCIDRs("allowlist", "ns-a", "1.2.3.4/32")
-	route := testRoute("svc-a", "ns-a", "svc-a.example.com")
-	route.Annotations["ipam.adevinta.com/allowlist-group"] = "allowlist"
-	gwA, gwB := testGateway("gw-a", "gw-ns"), testGateway("gw-b", "gw-ns")
-	notFound := func(t *testing.T, c client.Client, key client.ObjectKey) {
-		t.Helper()
-		err := c.Get(ctx, key, &istiosecurityv1.AuthorizationPolicy{})
-		assert.True(t, apierrors.IsNotFound(err), "%s: got %v", key.Name, err)
-	}
-
-	t.Run("renamed", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(cidrs, route, gwA, legacyMergedPolicy("shop", "gw-a")).Build()
-		require.NoError(t, newIstioL7Writer(c).ApplyMerged(ctx, gwA, []*gatewayApiv1.HTTPRoute{route}, "shop"))
-		getPolicy(t, c, "gw-ns", MergedPolicyName(prefix, "gw-a", "shop"))
-		notFound(t, c, client.ObjectKey{Namespace: "gw-ns", Name: "shop"})
-	})
-
-	t.Run("another Gateway's old one stays", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(cidrs, route, gwA, gwB, legacyMergedPolicy("shop", "gw-a")).Build()
-		require.NoError(t, newIstioL7Writer(c).ApplyMerged(ctx, gwB, []*gatewayApiv1.HTTPRoute{route}, "shop"))
-		getPolicy(t, c, "gw-ns", MergedPolicyName(prefix, "gw-b", "shop"))
-		assert.Equal(t, "gw-a", getPolicy(t, c, "gw-ns", "shop").Spec.TargetRefs[0].Name, "gw-a's, renamed on gw-a's own reconcile")
-	})
-
-	t.Run("foreign under the old name stays", func(t *testing.T) {
-		foreign := existingPolicy("shop", istioApiSecurityV1.AuthorizationPolicy_DENY, nil)
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(cidrs, route, gwA, foreign).Build()
-		require.NoError(t, newIstioL7Writer(c).ApplyMerged(ctx, gwA, []*gatewayApiv1.HTTPRoute{route}, "shop"))
-		assert.Equal(t, istioApiSecurityV1.AuthorizationPolicy_DENY, getPolicy(t, c, "gw-ns", "shop").Spec.Action)
-	})
-
-	t.Run("group emptied before the rename", func(t *testing.T) {
-		c := fake.NewClientBuilder().WithScheme(istioL7Scheme).WithObjects(gwA, legacyMergedPolicy("shop", "gw-a")).Build()
-		require.NoError(t, newIstioL7Writer(c).DeleteMerged(ctx, gwA, "shop"))
-		notFound(t, c, client.ObjectKey{Namespace: "gw-ns", Name: "shop"})
-	})
-}
-
 // TestTwoInstancesShareAMergeKey verifies that two instances with different annotation prefixes,
 // using the same merge key on a shared Gateway for different groups, each get their merged policy:
 // before the prefix was part of the name, the second was refused as not its own.
@@ -204,8 +92,7 @@ func TestTwoInstancesShareAMergeKey(t *testing.T) {
 
 // TestSameNamespacePathHash verifies the path hash of same-namespace names: the paths are joined
 // with \0, so [/api /v1] and [/api/v1] no longer share a name, while a single path hashes as
-// before (the names of single-path rules don't change), and the legacy cross-namespace names that
-// the v0.3.0 migration looks for keep the old hash.
+// before (the names of single-path rules don't change).
 func TestSameNamespacePathHash(t *testing.T) {
 	assert.Equal(t, "gw-shop-0b81c40a", sameNamespacePolicyName("gw", "shop", []string{"/api"}), "Exact /api: unchanged")
 	assert.Equal(t, "gw-shop-a5d26b9c", sameNamespacePolicyName("gw", "shop", []string{"/*"}), "PathPrefix /: unchanged")
@@ -213,5 +100,4 @@ func TestSameNamespacePathHash(t *testing.T) {
 	assert.NotEqual(t, "gw-shop-64eaeb4c", sameNamespacePolicyName("gw", "shop", []string{"/api", "/api/*"}), "several paths: renamed")
 	assert.NotEqual(t, sameNamespacePolicyName("gw", "shop", []string{"/api", "/v1"}), sameNamespacePolicyName("gw", "shop", []string{"/api/v1"}))
 	assert.Equal(t, sameNamespacePolicyName("gw", "shop", []string{"/v1", "/api"}), sameNamespacePolicyName("gw", "shop", []string{"/api", "/v1", "/api"}), "order and duplicates don't matter")
-	assert.Equal(t, "gw-ns-shop-b581032e", legacyCrossNamespacePolicyName("ns", "gw", "shop", []string{"/api", "/v1"}), "legacy names keep the old hash")
 }

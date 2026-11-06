@@ -199,13 +199,10 @@ Gateway gets no allowlist and a Warning Event `AllowlistPolicyConflict` (see
 the route or the Gateway. Cross-namespace and merged APs can't collide this way: their names end
 with the identity hash.
 
-**Upgrading to v0.3.0 renames the cross-namespace and merged APs.** Nothing to do by hand: when a
-route or merge group is reconciled (all are, right after the controller starts), the AP is written
-under its new name first, then the controller's AP under the old name is deleted, so access has no
-gap. Until then the orphan checks count the old name as the route's, so the startup cleanup
-doesn't delete it early. An AP under the old name that isn't the controller's is left alone.
-Anything that refers to these APs by name (runbooks, dashboards, `kubectl get` scripts) must use
-the new names; select them by their labels instead (see [security.md](security.md)).
+**Coming from a version before v0.3.0, upgrade to a v0.3.x release first.** v0.3.x renamed the
+cross-namespace and merged APs and moved the old ones over; v0.4.0 no longer knows the old names.
+Anything that refers to these APs by name (runbooks, dashboards, `kubectl get` scripts) should
+select them by their labels instead (see [security.md](security.md)).
 
 ### Path-based collision protection
 
