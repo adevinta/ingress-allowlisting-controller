@@ -2,9 +2,6 @@ package writers
 
 import (
 	"context"
-	"fmt"
-	"hash/fnv"
-	"regexp"
 
 	log "github.com/adevinta/go-log-toolkit"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
@@ -20,22 +17,6 @@ import (
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/controllers/internal"
 	"github.com/adevinta/ingress-allowlisting-controller/pkg/resolvers"
 )
-
-// invalidLabelValue matches characters not allowed in k8s label values.
-var invalidLabelValue = regexp.MustCompile(`[^-A-Za-z0-9_.]`)
-
-// LabelSafe sanitizes a string for use as a Kubernetes label value.
-// Names longer than 63 chars are truncated to 54 chars and suffixed with
-// "-{fnv32hex}" to stay collision-resistant (same approach as truncateName).
-func LabelSafe(s string) string {
-	v := invalidLabelValue.ReplaceAllString(s, "_")
-	if len(v) > 63 {
-		h := fnv.New32a()
-		_, _ = h.Write([]byte(s))
-		v = fmt.Sprintf("%s-%08x", v[:54], h.Sum32())
-	}
-	return v
-}
 
 // IstioL7Writer creates/deletes Istio AuthorizationPolicies for HTTPRoute-level (L7) allowlisting.
 type IstioL7Writer struct {

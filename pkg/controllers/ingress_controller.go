@@ -76,11 +76,6 @@ func (r *IngressReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ct
 }
 
 func (r *IngressReconciler) reconcileIngress(ctx context.Context, ingressMeta netv1.Ingress) (netv1.Ingress, error) {
-	//TODO: find annotation: ipam.adevinta.com/allowlist-group
-	// if annotation is present: resolve the name->CIDRs list.
-	// and create/update nginx.ingress-kubernetes.io/whitelist-source-range
-
-	// TODO: check format of the annotation values.
 	allowedIps, err := r.CidrResolver.GetCidrsFromObject(ctx, &ingressMeta)
 	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
 		return ingressMeta, err

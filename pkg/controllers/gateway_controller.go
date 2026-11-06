@@ -22,7 +22,6 @@ import (
 type GatewayAllowlistingReconciler struct {
 	client.Client
 	Scheme       *runtime.Scheme
-	Prefix       string
 	CidrResolver resolvers.CidrResolver
 	L4Writers    writers.L4WriterRegistry
 }

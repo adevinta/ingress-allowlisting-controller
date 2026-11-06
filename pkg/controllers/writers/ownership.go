@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"hash/fnv"
+	"regexp"
 	"strings"
 
 	log "github.com/adevinta/go-log-toolkit"
@@ -38,6 +40,22 @@ const managedByLabel = "app.kubernetes.io/managed-by"
 func ownerKindLabel(prefix string) string      { return prefix + "/owner-kind" }
 func ownerNamespaceLabel(prefix string) string { return prefix + "/owner-namespace" }
 func ownerNameLabel(prefix string) string      { return prefix + "/owner-name" }
+
+// invalidLabelValue matches characters not allowed in k8s label values.
+var invalidLabelValue = regexp.MustCompile(`[^-A-Za-z0-9_.]`)
+
+// LabelSafe sanitizes a string for use as a Kubernetes label value.
+// Names longer than 63 chars are truncated to 54 chars and suffixed with
+// "-{fnv32hex}" to stay collision-resistant (same approach as truncateName).
+func LabelSafe(s string) string {
+	v := invalidLabelValue.ReplaceAllString(s, "_")
+	if len(v) > 63 {
+		h := fnv.New32a()
+		_, _ = h.Write([]byte(s))
+		v = fmt.Sprintf("%s-%08x", v[:54], h.Sum32())
+	}
+	return v
+}
 
 // setOwnerLabels puts the ownership labels on an object a writer creates.
 func setOwnerLabels(obj client.Object, prefix, managedBy, kind, ownerNamespace, ownerName string) {
