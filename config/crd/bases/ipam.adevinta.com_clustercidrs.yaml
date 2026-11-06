@@ -40,8 +40,20 @@ spec:
             description: CIDRsSpec defines the desired state of CIDRs
             properties:
               cidrs:
+                description: |-
+                  CIDRs are CIDRs or IP addresses (an IP becomes a /32 or /128). Each entry is checked when the
+                  object is written, so a typo is refused by the API server instead of being ignored later.
+                  Surrounding spaces are allowed; IPv4-mapped IPv6 (::ffff:a.b.c.d) is not: write a.b.c.d.
+                  The isCIDR and isIP functions need Kubernetes 1.31 or later. At most 10000 entries of at most
+                  64 characters: the API server refuses a CEL rule over a list it can't bound.
                 items:
+                  maxLength: 64
                   type: string
+                  x-kubernetes-validations:
+                  - message: must be a CIDR (e.g. 192.0.2.0/24) or an IP address;
+                      write IPv4 addresses as a.b.c.d, not ::ffff:a.b.c.d
+                    rule: isCIDR(self.trim()) || isIP(self.trim())
+                maxItems: 10000
                 type: array
               location:
                 properties:

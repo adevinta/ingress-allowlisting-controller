@@ -356,8 +356,12 @@ Every key is optional; an unset key keeps the default. Things to know:
 
 - The controller resolves all named objects, merges their `spec.cidrs` lists, deduplicates,
   and sorts the result before writing to any output resource.
-- Invalid inline entries (e.g. `10.0.0` without a mask, or `192.0.2.0/33`) are left out of
-  `status.cidrs`, and the `UpToDate` condition names them (the first five), e.g.
+- Each `spec.cidrs` entry must be a CIDR or an IP address: the CRD refuses anything else when the
+  object is written (e.g. `10.0.0` without a mask, `192.0.2.0/33`, or IPv4-mapped IPv6 like
+  `::ffff:10.0.0.1`, which should be written `10.0.0.1`). Surrounding spaces are allowed. At most
+  10000 entries of at most 64 characters. Objects written before this check, with an invalid
+  entry, keep it until their `spec.cidrs` is edited; the controller leaves it out of
+  `status.cidrs`, and the `UpToDate` condition names it (the first five), e.g.
   `All CIDRs are up to date (invalid entries in spec.cidrs ignored: "10.0.0")`.
 - Values from a remote source that are neither CIDRs nor IP addresses are dropped before they reach
   `status.cidrs`, so the status never holds other parts of the response. The `UpToDate` condition

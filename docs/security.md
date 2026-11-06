@@ -356,7 +356,9 @@ See
   meanwhile. Until then, a namespace that lost the label keeps its routes' allowlists on that
   Gateway, although the Gateway stops routing for them at once. See
   [HTTPRoute → Istio AuthorizationPolicy](gateway-api.md#httproute--istio-authorizationpolicy-l7).
-- **`spec.cidrs` is not checked when the object is written.** The API server accepts any string,
-  so `kubectl apply` gives no error for `10.0.0` or `192.0.2.0/33`. The controller leaves such
-  entries out of `status.cidrs` and names them in the `UpToDate` condition, so they never reach a
-  policy (see [Resolved CIDR behaviour](cidrs.md#resolved-cidr-behaviour)).
+- **Only `spec.cidrs` is checked when the object is written, and only its form.** The CRD refuses
+  an entry that isn't a CIDR or an IP address (`10.0.0`, `192.0.2.0/33`, `::ffff:10.0.0.1`), so
+  `kubectl apply` fails with the entry's index. Whether a CIDR is the one meant, or too wide, is
+  not checked: inline CIDRs skip the breadth limit, so `0.0.0.0/0` is accepted. CIDRs from a
+  remote source are checked by the controller after the fetch (see
+  [Resolved CIDR behaviour](cidrs.md#resolved-cidr-behaviour)).
