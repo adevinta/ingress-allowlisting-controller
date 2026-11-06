@@ -31,6 +31,9 @@ type GatewayAllowlistingReconciler struct {
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gateways,verbs=get;list;watch
 // +kubebuilder:rbac:groups=gateway.networking.k8s.io,resources=gatewayclasses,verbs=get;list;watch
 // +kubebuilder:rbac:groups=security.istio.io,resources=authorizationpolicies,verbs=get;list;watch;create;update;delete
+// The AWS Load Balancer Controller's Gateways: their LoadBalancerConfiguration is read on demand and
+// only its sourceRanges patched (no list or watch).
+// +kubebuilder:rbac:groups=gateway.k8s.aws,resources=loadbalancerconfigurations,verbs=get;patch
 
 func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	log := log.DefaultLogger.WithContext(ctx).WithField("gateway", req.NamespacedName)
@@ -77,7 +80,8 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 	var err error
 	allowedIps, err = r.CidrResolver.GetCidrsFromObject(ctx, &gateway)
 	if errors.Is(err, resolvers.ErrAnnotationNotFound) {
-		// Annotation removed — delete any previously created L4 AP.
+		// No annotation (or removed): delete what the writer created for the Gateway (Istio), or
+		// nothing for a writer that only modifies an object the Gateway references (AWS).
 		if err := writer.Delete(ctx, &gateway); err != nil {
 			return ctrl.Result{}, err
 		}
@@ -87,10 +91,10 @@ func (r *GatewayAllowlistingReconciler) Reconcile(ctx context.Context, req ctrl.
 		return ctrl.Result{}, err
 	}
 
-	if err := notManaged(ctx, r.CidrResolver, "Gateway", &gateway, writer.Apply(ctx, r.Scheme, &gateway, allowedIps)); err != nil {
+	if err := warnWithoutRetry(ctx, r.CidrResolver, "Gateway", &gateway, writer.Apply(ctx, r.Scheme, &gateway, allowedIps)); err != nil {
 		return ctrl.Result{}, err
 	}
-	log.Debugf("AuthorizationPolicy created/updated for gateway %s", gateway.GetName())
+	log.Debugf("allowlist written for gateway %s", gateway.GetName())
 
 	return ctrl.Result{}, nil
 }

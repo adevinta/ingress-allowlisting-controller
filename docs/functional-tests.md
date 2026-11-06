@@ -90,6 +90,7 @@ Resource kinds covered so far:
 | NetworkPolicy | `--networkpolicy-support-enabled` | `spec.ingress[0].from` and `spec.egress[0].to` ipBlocks (must be identical) |
 | Service | `--service-support-enabled` | `spec.loadBalancerSourceRanges` of a `type: LoadBalancer` Service |
 | Istio Gateway | `--gateway-support-enabled` | `remoteIpBlocks` of the AuthorizationPolicy named after the Gateway |
+| AWS ALB / NLB Gateway | `--gateway-support-enabled` | `spec.sourceRanges` of the Gateway's LoadBalancerConfiguration; plus `programmed`: the `inline` Gateway becomes `Programmed` (the AWS controller applied it, up to 10 minutes) |
 | Istio HTTPRoute | `--httproute-support-enabled` | `remoteIpBlocks` of the one AuthorizationPolicy labelled as owned by the route |
 | Traefik HTTPRoute | `--httproute-support-enabled` | `ipAllowList.sourceRange` of the Middleware named after the route, **and** an `ExtensionRef` filter to it on every route rule |
 
@@ -194,6 +195,16 @@ The objects are harmless:
   Service (`networking.istio.io/service-type`), so the auto-deployed gateway gets no cloud load
   balancer either. Istio does deploy a gateway pod for each, removed with the namespace.
 
+**Except the AWS Gateways: they create real load balancers.** For each AWS ALB / NLB Gateway (about
+five per class and run) the AWS Load Balancer Controller provisions a load balancer and a security
+group. They are always **internal** (`scheme: internal` in every test `LoadBalancerConfiguration`,
+also for the Gateway annotated for another instance only), so nothing is reachable from the
+internet, but they cost a little and take minutes. They are deleted with the namespace, by the AWS
+controller's finalizers: keep it running until the namespaces are gone, or they stay
+`Terminating`. The AWS targets need a GatewayClass of `gateway.k8s.aws/alb` / `gateway.k8s.aws/nlb`
+(with the `ALBGatewayAPI` / `NLBGatewayAPI` feature gates of the AWS controller) and the
+`LoadBalancerConfiguration` CRD; otherwise they're skipped.
+
 ## Settings
 
 | Variable | Meaning |
@@ -204,7 +215,7 @@ The objects are harmless:
 | `IAC_CONTROLLER_ARGS` | The controller's arguments, when it runs outside the cluster (e.g. `go run` on your laptop). Replaces Deployment detection |
 | `IAC_ANNOTATION_PREFIX` | The annotation prefix the controller must run with; the run is blocked if it doesn't (default: whatever it runs with) |
 | `IAC_RUN` | For `make functional-clean`: delete only the namespaces of this run |
-| `IAC_ISTIO_GATEWAYCLASS`, `IAC_TRAEFIK_GATEWAYCLASS` | GatewayClass to use when several exist for that controller (default: the first by name) |
+| `IAC_ISTIO_GATEWAYCLASS`, `IAC_TRAEFIK_GATEWAYCLASS`, `IAC_AWS_ALB_GATEWAYCLASS`, `IAC_AWS_NLB_GATEWAYCLASS` | GatewayClass to use when several exist for that controller (default: the first by name) |
 | `IAC_TIMEOUT` | How long each wait may take (default `3m`) |
 | `KEEP` | Any value keeps the test namespaces for inspection; remove it later with `make functional-clean` |
 | `IAC_CONTROLLER_ARGS` (restart) | For `make functional-restart`: the arguments the test runs the controller with; must include `--httproute-support-enabled` |

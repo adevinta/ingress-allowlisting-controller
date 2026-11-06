@@ -62,6 +62,13 @@ func BuildWriterRegistries(c client.Client, mapper meta.RESTMapper, managedBy st
 	if isCRDInstalled(mapper, "traefik.io", "v1alpha1", "Middleware") {
 		l7[writers.TraefikControllerName] = writers.NewTraefikL7Writer(c, managedBy, cidrResolver)
 	}
+	// The AWS Load Balancer Controller: one writer for its ALB and NLB GatewayClasses, both read
+	// sourceRanges from the Gateway's LoadBalancerConfiguration.
+	if isCRDInstalled(mapper, "gateway.k8s.aws", "v1beta1", "LoadBalancerConfiguration") {
+		aws := writers.NewAWSLBL4Writer(c, cidrResolver.AnnotationPrefix)
+		l4[writers.AWSALBControllerName] = aws
+		l4[writers.AWSNLBControllerName] = aws
+	}
 	return l4, l7
 }
 
@@ -180,6 +187,9 @@ func SetupControllersWithManager(mgr ctrl.Manager, opts SetupOptions) error {
 	}
 	if _, ok := l7Writers[writers.TraefikControllerName]; ok {
 		setupLog.Infof("detected Traefik: enabling Traefik writer")
+	}
+	if _, ok := l4Writers[writers.AWSALBControllerName]; ok {
+		setupLog.Infof("detected the AWS Load Balancer Controller: enabling the LoadBalancerConfiguration writer for its ALB and NLB Gateways")
 	}
 
 	if opts.HTTPRouteEnabled && len(l7Writers) == 0 {
