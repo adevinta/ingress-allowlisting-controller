@@ -173,6 +173,48 @@ make functional-restart CONFIRM=<context> IAC_CONTROLLER_ARGS="--httproute-suppo
 The controller's output goes to a log file in the temp directory, printed and kept when the test
 fails.
 
+## Apply delay: a feed that changes
+
+`make functional-apply-delay` checks `--cidr-source-apply-delay` with a feed the test changes: a
+small Python HTTP server on `127.0.0.1`, whose files the test rewrites. The controller can only
+reach it from this machine, so, as for the restart test, the test **runs the controller itself**,
+built from this tree, with `--cidr-source-apply-delay=<IAC_APPLY_DELAY>` (default `60s`, at least
+`20s`) and `--cidr-source-allow-private-destinations`. Extra arguments go in `IAC_CONTROLLER_ARGS`.
+
+```bash
+make functional-apply-delay                        # dry run
+make functional-apply-delay CONFIRM=<context>      # takes about 2-3 minutes with the 60s default
+```
+
+The run is blocked while:
+
+- a controller runs in the cluster, **whatever its annotation prefix**: the CIDRs controller is not
+  tied to a prefix, so it would reconcile the test's object too. Scale it to 0 first;
+- the cluster's CRDs have no `status.pending` and `status.sourceHash`: the API server would drop
+  them. Install this tree's CRDs first (`kubectl apply -f config/crd/bases`);
+- `python3` is not in `PATH`.
+
+While it runs, the controller also reconciles every `CIDRs` and `ClusterCIDRs` already in the
+cluster, as the one in the cluster would: it fetches their sources and writes their status, and
+their new CIDRs wait for the delay too. The dry run says how many there are. Without writer flags in
+`IAC_CONTROLLER_ARGS`, no allowlist is written.
+
+One CIDRs object, `apply-delay`, goes through these steps, each building on the previous one:
+
+| Step | Change | Expectation |
+|---|---|---|
+| `first-list` | object created, feed `[A]` | `status.cidrs` is `[A]` at once (the first list never waits), `status.sourceHash` set |
+| `addition-waits` | feed `[A, B]`, refetch | `cidrs [A]`, `pending [B]` with `applyAfter = firstSeen + delay`, the condition says so; a second refetch keeps `firstSeen`, and `B` is not used until shortly before `applyAfter` |
+| `applied-when-due` | none | `cidrs [A, B]`, nothing pending, not before `applyAfter`: the controller comes back by itself |
+| `removal-immediate` | feed `[B]`, refetch | `cidrs [B]` within half the delay |
+| `redirect-waits` | the same uri now redirects to a list `[C]` | `C` waits, and as the list never goes empty, `B` stays: `cidrs [B]`, `pending [C]`, `state UpdateFailed` |
+| `uri-change-immediate` | `spec.location.uri` and `cel` changed | the new source's `[A]` is used at once, what was pending is dropped |
+| `cel-change-immediate` | `spec.location.cel` changed | `[A, B]` at once |
+| `inline-immediate` | `spec.cidrs` added, then removed | both at once |
+
+A refetch is triggered by changing an annotation of the object (`iac-functional/poke`), not the
+spec, so it is a fetch of the same source.
+
 ## Prerequisites
 
 - The controller is installed and has an available replica. It is found by the Helm chart label
@@ -207,6 +249,7 @@ The objects are harmless:
 | `IAC_ISTIO_GATEWAYCLASS`, `IAC_TRAEFIK_GATEWAYCLASS` | GatewayClass to use when several exist for that controller (default: the first by name) |
 | `IAC_TIMEOUT` | How long each wait may take (default `3m`) |
 | `KEEP` | Any value keeps the test namespaces for inspection; remove it later with `make functional-clean` |
+| `IAC_APPLY_DELAY` | For `make functional-apply-delay`: the `--cidr-source-apply-delay` the controller runs with (default `60s`, at least `20s`) |
 | `IAC_CONTROLLER_ARGS` (restart) | For `make functional-restart`: the arguments the test runs the controller with; must include `--httproute-support-enabled` |
 
 ## Adding a resource kind

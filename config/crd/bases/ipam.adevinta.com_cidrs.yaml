@@ -166,6 +166,45 @@ spec:
                   see the UpToDate condition for how the last fetch went.
                 format: date-time
                 type: string
+              pending:
+                description: |-
+                  Pending are CIDRs the remote source added that are not used yet. With
+                  --cidr-source-apply-delay, a CIDR new to the source is used only once the delay has passed
+                  since it was first seen, and only if the source still returns it then. CIDRs the source
+                  removes are taken out of cidrs right away, never delayed. Grouped by when they were first
+                  seen, oldest first.
+                items:
+                  description: PendingCIDRs are CIDRs first seen in the remote source
+                    at the same time.
+                  properties:
+                    applyAfter:
+                      description: |-
+                        ApplyAfter is when they are used if the source still returns them: firstSeen plus
+                        --cidr-source-apply-delay.
+                      format: date-time
+                      type: string
+                    cidrs:
+                      items:
+                        type: string
+                      type: array
+                    firstSeen:
+                      description: FirstSeen is when the source first returned these
+                        CIDRs.
+                      format: date-time
+                      type: string
+                  required:
+                  - applyAfter
+                  - cidrs
+                  - firstSeen
+                  type: object
+                type: array
+              sourceHash:
+                description: |-
+                  SourceHash is a hash of the spec.location fields that say what is fetched and how it becomes
+                  CIDRs (uri, cel, jsonPath, format), as of the last successful fetch. When they change, the
+                  CIDRs of the new source are used without --cidr-source-apply-delay: the change was made in
+                  the spec. A change only in what the source returns (new content, a redirect) still waits.
+                type: string
               state:
                 type: string
             type: object
