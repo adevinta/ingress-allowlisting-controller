@@ -46,7 +46,12 @@ The controller writes the result to the object's status:
   doesn't change it; an object that had CIDRs before the field was set gets the time of its next
   reconcile;
 - `status.state` and the `UpToDate` condition — how the last reconcile and fetch went, with the
-  reason when they failed.
+  reason when they failed;
+- `status.pending` — with `--cidr-source-apply-delay`, the CIDRs the source added that are not
+  used yet. See [Delaying new CIDRs from a source](#delaying-new-cidrs-from-a-source);
+- `status.sourceHash` — a hash of the source in the spec (`uri`, `cel`, `jsonPath`, `format`) as
+  of the last successful fetch, so a change of the source in the spec can be told apart from a
+  change of what it returns.
 
 ## Remote sources
 
@@ -228,6 +233,92 @@ periodic resync, which can be hours away, leaving the allowlist stale long after
 of the feed. The fixed interval keeps the load on a broken feed to one request per object per
 interval.
 
+### Delaying new CIDRs from a source
+
+`--cidr-source-apply-delay` (Helm: `cidrSource.applyDelay`, off by default) protects against a
+compromised source: a feed whose host, repository or CDN was taken over to add someone else's
+addresses. With it set, a CIDR **new** to the source is not used at once. It waits in
+`status.pending`, and is used only when the delay has passed since it was first seen, and only if
+the source still returns it then. That leaves time to see the change and stop it.
+
+```bash
+--cidr-source-apply-delay=24h   # a new CIDR is used one day after it first appears
+```
+
+The value is a Go duration: `30m`, `1h`, `24h` (there is no `d` unit). `0`, the default, uses new
+CIDRs right away, as before.
+
+**Only additions wait. Removals are never delayed.** A CIDR the source no longer returns is taken
+out of `status.cidrs` at the next fetch, whatever the delay: removing tightens access, and a range
+a provider gives up can soon belong to someone else.
+
+**But the list never goes empty.** If the source drops every CIDR in use and returns only new ones,
+the update is refused as for an empty response, and the last CIDRs stay: the condition is
+`UpToDate=False` with `Refusing to update removing all CIDRs: every CIDR from the source is new, the
+last CIDRs are kept until then`, and the fetch is retried like a failed one. A broken feed that
+returns something else (an error page, a wrong file) must not lock out the traffic it allows, e.g.
+a CDN's. The new CIDRs still wait in `status.pending`, with their clocks running: once the first is
+due, it is used and the old CIDRs are removed.
+
+How it works:
+
+- **Each new CIDR waits from when it was first seen.** A feed that changes often, like AWS
+  `ip-ranges.json`, still moves on: every CIDR has its own clock, a new change doesn't restart the
+  others.
+- **A pending CIDR the source drops is forgotten.** If it comes back later, it waits again from
+  then.
+- **What doesn't wait:** CIDRs already in `status.cidrs`, CIDRs that are also in `spec.cidrs`
+  (written by people, checked by the API server), and the first list of a new object, which has
+  nothing to compare with. Inline `spec.cidrs` is never delayed, neither additions nor removals.
+- **A change of the source in the spec doesn't wait.** Editing `location.uri`, `location.cel`,
+  `location.jsonPath` or `location.format` is a change made by whoever can edit the object, like
+  `spec.cidrs`: the CIDRs of the new source are used at the next fetch, and what was pending for
+  the old one is dropped. Changes to `headersFrom`, or to the Secrets and ConfigMaps it reads, are
+  not part of this: they still wait.
+- **A change behind the same spec waits.** New content, a redirect to somewhere else, a different
+  response from the same `uri`: all of these are changes of the source, not of the spec, and wait
+  for the delay. The controller tells the two apart with `status.sourceHash`; an object from before
+  that field gets it at its next successful fetch, and its additions wait meanwhile.
+- **A failed fetch keeps what is pending.** A pending CIDR is used only by a successful fetch
+  that still returns it, never because time passed.
+- **The object is reconciled again when the first pending CIDR is due**, even without
+  `spec.requeueAfter` or with a longer one.
+- **The state is in the status**, so a restart or a new leader doesn't reset the clocks. Changing
+  the flag applies to what is already pending: `applyAfter` is recomputed from `firstSeen`.
+- **It applies to `CIDRs` and `ClusterCIDRs` alike**, with one value for all of them.
+
+What is waiting:
+
+```yaml
+status:
+  cidrs:
+  - 10.0.0.0/8
+  pending:
+  - firstSeen: "2026-11-10T10:00:00Z"
+    applyAfter: "2026-11-11T10:00:00Z"
+    cidrs:
+    - 203.0.113.0/24
+  conditions:
+  - type: UpToDate
+    status: "True"
+    message: 'All CIDRs are up to date (1 new CIDRs from the source wait for --cidr-source-apply-delay
+      24h0m0s, the first until 2026-11-11T10:00:00Z: see status.pending)'
+```
+
+A delay only helps if someone looks. Watch for it with:
+
+- the metric `ingress_allowlisting_controller_cidr_source_pending_cidrs` (see
+  [Metrics](metrics.md#ingress_allowlisting_controller_cidr_source_pending_cidrs)), for example
+  an alert on `> 0`;
+- the log line `the CIDR source added N CIDRs, held for --cidr-source-apply-delay: …` (warning,
+  with the CIDRs, the object and the source), and `using N CIDRs held for
+  --cidr-source-apply-delay: …` (info) when they are used;
+- `kubectl get cidrs,clustercidrs -A -o yaml` and `status.pending`.
+
+To stop a bad change, fix or remove the source before `applyAfter`: change `location.uri`, or
+take the object out of use. Pending CIDRs are never used without a fetch that still returns them.
+There is no way to approve a pending CIDR early: to use one at once, add it to `spec.cidrs`.
+
 ### Restricting where sources can be fetched from
 
 `location.uri` is supplied by whoever creates the `CIDRs` object, but the request is made from the
@@ -294,7 +385,7 @@ Notes:
 
 ### Configuring the guardrails
 
-The breadth guard, the three resource limits and the retry interval are set with the `--cidr-source-*` flags listed
+The breadth guard, the three resource limits, the retry interval and the apply delay are set with the `--cidr-source-*` flags listed
 under [Controller flags](#controller-flags), or in the Helm chart under `cidrSource`:
 
 ```yaml
@@ -305,6 +396,7 @@ cidrSource:
   maxResponseBytes: 5242880      # raise resources.limits.memory with it (~25-30x)
   celCostLimit: 1000000
   retryInterval: 5m
+  applyDelay: 0s                 # see "Delaying new CIDRs from a source"
   allowlist: []                  # see "Restricting where sources can be fetched from"
   allowPrivateDestinations: false
 ```
@@ -314,9 +406,10 @@ Every key is optional; an unset key keeps the default. Things to know:
 - **They apply only to remote sources.** Inline `spec.cidrs` is never checked, and they do not
   affect how Ingress, Service, NetworkPolicy or Gateway objects consume the result.
 - **Invalid values stop the controller at startup.** A mask outside 1–32 (IPv4) or 1–128 (IPv6),
-  a zero/negative timeout, size, cost limit or retry interval, or an allowlist entry that is not `scheme://host[:port]`
+  a zero/negative timeout, size, cost limit or retry interval, a negative apply delay, or an allowlist entry that is not `scheme://host[:port]`
   (a wildcard, a path, credentials, another scheme) is rejected with a message naming the problem.
   Zero is *not* a way to switch a protection off, and it is not silently replaced by the default.
+  The apply delay is the exception: it is off by default, and `0` keeps it off.
 - **The effective values are logged at startup** as one `remote CIDR source guardrails` line with a field per setting (`minMaskIPv4`, `fetchTimeout`, `allowlist`, …).
 - **A tripped limit is logged.** When the timeout, size cap or CEL cost limit rejects a fetch, the
   controller logs `…; rejecting external CIDR source: limit exceeded, keeping last-known-good
@@ -345,6 +438,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | `--cidr-source-max-response-bytes` | `5242880` | Maximum size of a remote source response body (5 MiB). A larger body fails the fetch; it is never truncated. Needs about 25–30x this in pod memory. |
 | `--cidr-source-cel-cost-limit` | `1000000` | Maximum estimated cost of one CEL expression evaluated on a remote source. |
 | `--cidr-source-retry-interval` | `5m` | How soon a failed remote fetch is retried. An object with a shorter `spec.requeueAfter` is retried at that interval instead. See [Retrying a failed fetch](#retrying-a-failed-fetch). |
+| `--cidr-source-apply-delay` | `0` *(off)* | How long a CIDR new to a remote source waits in `status.pending` before it is used, e.g. `24h`. Only additions from the source's response wait: CIDRs the source removes are taken out right away, and `spec.cidrs`, the first list of a new object, and a source changed in the spec (`uri`, `cel`, `jsonPath`, `format`) are used right away. See [Delaying new CIDRs from a source](#delaying-new-cidrs-from-a-source). |
 | `--cidr-source-allowlist` | *(empty: any host)* | Origin a remote CIDR source may be fetched from, as `scheme://host[:port]`; a bare `host[:port]` means https. Repeat the flag or comma-separate to allow several. See [Restricting where sources can be fetched from](#restricting-where-sources-can-be-fetched-from). |
 | `--cidr-source-allow-private-destinations` | `false` | Allow remote sources to connect to loopback, link-local (cloud metadata), private and other non-public addresses. By default such connections are refused. |
 | `--secret-label-selector` | `<annotation-prefix>/cidr-header-source=true` | Label selector of the Secrets and ConfigMaps the controller caches and may read as headers. Others can't be read. Only used with `--http-headers-enabled`. |

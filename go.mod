@@ -2,7 +2,7 @@ module github.com/adevinta/ingress-allowlisting-controller
 
 go 1.27.0
 
-toolchain go1.27.3
+toolchain go1.27.4
 
 require (
 	github.com/adevinta/go-k8s-toolkit v0.0.0-20240913131011-109953036918

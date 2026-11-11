@@ -93,6 +93,12 @@ functional:
 functional-restart:
 	go test -tags functional ./test/functional/ -run TestRestart -v -count=1 -timeout 30m
 
+# Check --cidr-source-apply-delay with a changing feed: a Python HTTP server on this machine, and the
+# controller built from this tree run here too. Dry run without CONFIRM:
+#   make functional-apply-delay CONFIRM=<current-context-name> [IAC_APPLY_DELAY=60s]
+functional-apply-delay:
+	go test -tags functional ./test/functional/ -run TestApplyDelay -v -count=1 -timeout 30m
+
 # Delete namespaces left behind by interrupted or KEEP=1 functional runs: all runs, or only the
 # run IAC_RUN=<id> (the <id> of iac-functional-<id>-a), e.g. while another run is going on.
 functional-clean:
@@ -105,4 +111,4 @@ functional-clean:
 controller-gen:
 	go install sigs.k8s.io/controller-tools/cmd/controller-gen@v0.16.4
 
-.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet lint generate docker-build docker-push controller-gen functional functional-restart functional-clean
+.PHONY: all test manager run install uninstall manifests verify-manifests fmt vet lint generate docker-build docker-push controller-gen functional functional-restart functional-apply-delay functional-clean

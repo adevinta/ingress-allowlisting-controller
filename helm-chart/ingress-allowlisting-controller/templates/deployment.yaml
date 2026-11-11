@@ -106,6 +106,9 @@ spec:
 {{- with .retryInterval }}
         - "--cidr-source-retry-interval={{ . }}"
 {{- end }}
+{{- with .applyDelay }}
+        - "--cidr-source-apply-delay={{ . }}"
+{{- end }}
 {{- range .allowlist }}
         - "--cidr-source-allowlist={{ . }}"
 {{- end }}
