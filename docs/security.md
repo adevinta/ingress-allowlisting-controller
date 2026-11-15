@@ -57,6 +57,10 @@ spec:
 DENY rules take precedence over all ALLOW rules in Istio — this ensures traffic to unexpected
 hostnames is blocked even if an ALLOW policy is misconfigured or overly broad.
 
+**This protects tenants from each other only if each namespace has its own subdomain**, as in the
+example. With one wildcard domain shared by all namespaces (`notHosts: ['*.example.com']`), it
+blocks hosts outside the domain, but nothing between the tenants inside it. See below.
+
 ---
 
 ## Restricting which namespaces can attach to a cross-namespace Gateway
@@ -88,11 +92,42 @@ Only namespaces with `cross-gateway-access: "true"` can attach HTTPRoutes. All o
 are rejected by the Gateway controller (`Accepted=False`) and no traffic flows regardless of
 any `AuthorizationPolicy` that may exist.
 
+**`allowedRoutes` is the trust boundary for allowlists (Istio).** Every namespace that a listener
+lets attach can open **any hostname of that listener** to **any CIDRs**. Its route lists the
+hostname (or a wildcard such as `*.example.com`), its CIDRs object lists the CIDRs (inline
+`spec.cidrs` skip the breadth limit, so `0.0.0.0/0` is accepted), and the controller writes an
+ALLOW for them on the Gateway. Istio ORs ALLOW policies, so this opens the hostname whatever the
+allowlist of the namespace that serves it says. Gateway API still sends the traffic to that
+namespace's route. Nobody's traffic is taken over, but its allowlist no longer protects it. On a
+listener without `hostname`, or with one wildcard hostname shared by all namespaces, that means
+every hostname of every namespace on it.
+
+This is not something the controller can check: it doesn't know which namespaces trust each other,
+and some clusters share hostnames between namespaces on purpose. So:
+
+- **Namespaces run by the same people as the Gateway** can share a listener: they are trusted like
+  the Gateway owner anyway.
+- **Tenants who don't trust each other** need a listener each, with a `hostname` for their
+  subdomain and `allowedRoutes` for their namespace. The controller then gives each route only the
+  hostnames of its listener (see
+  [Gateway API — HTTPRoute](gateway-api.md#httproute--istio-authorizationpolicy-l7)). Or check
+  HTTPRoute hostnames at admission (e.g. Gatekeeper or a ValidatingAdmissionPolicy, against a
+  hostname list per namespace). A constraint that covers only Ingress doesn't cover HTTPRoutes.
+- **`--httproute-label-selector` is not a boundary.** It only filters what the controller caches.
+  If tenants set the label on their own routes, every tenant can opt in.
+
+Traefik HTTPRoutes are not affected: their Middleware is on the route's own rules, so it can only
+narrow that route's traffic. Ingress, Service and NetworkPolicy allowlists are on the object
+itself.
+
 **Defence in depth — combine all three layers:**
 
-1. **Namespace label selector** on the Gateway listener — controls who can attach
-2. **HTTPRoute-level ALLOW policies** — controls which IPs can reach each service
-3. **Gateway-level DENY policy** on unexpected hostnames — prevents gaps from missing ALLOW policies
+1. **Namespace label selector** on the Gateway listener — controls who can attach, and so who is
+   trusted to open hostnames of that listener (see above)
+2. **HTTPRoute-level ALLOW policies** — add the IPs that can reach each service; on a shared
+   listener, any namespace attached to it can add IPs for any of its hostnames
+3. **Gateway-level DENY policy** on unexpected hostnames — prevents gaps from missing ALLOW
+   policies; between tenants only with a subdomain per namespace
 
 ---
 
