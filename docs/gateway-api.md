@@ -258,6 +258,10 @@ httproute:
 
 Or: `--httproute-label-selector=ipam.adevinta.com/allowlisting=enabled`.
 
+The selector only filters what the controller caches: it is not a security boundary. If tenants
+can set the label on their own routes, every tenant can opt in. See
+[security.md](security.md#restricting-which-namespaces-can-attach-to-a-cross-namespace-gateway).
+
 ---
 
 ## HTTPRoute → Traefik Middleware (IPAllowList)
