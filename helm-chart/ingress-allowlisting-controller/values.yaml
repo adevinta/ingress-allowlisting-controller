@@ -119,6 +119,9 @@ cidrSource: {}
   #                               # Needs ~25-30x in pod memory: raise resources.limits.memory with it
   # celCostLimit: 1000000         # max estimated cost of one CEL evaluation
   # retryInterval: 5m             # how soon a failed fetch is retried (a shorter requeueAfter wins)
+  # applyDelay: 0s                # off by default. E.g. 24h: a CIDR new to a source waits in
+  #                               # status.pending for 24h before it is used, against a compromised
+  #                               # source. Only additions wait; removals apply right away.
   #
   # Where a source may be fetched from. Both are about the SSRF exposure of `location.uri`:
   # allowlist:                      # origins a source may be fetched from, scheme://host[:port]

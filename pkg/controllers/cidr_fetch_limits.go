@@ -70,6 +70,10 @@ type CIDRSourceOptions struct {
 	// RetryInterval is how soon a failed fetch is retried. An object whose spec.requeueAfter is
 	// shorter is retried at that interval instead.
 	RetryInterval time.Duration
+	// ApplyDelay is how long a CIDR new to a remote source waits in status.pending before it is
+	// used. CIDRs the source removes are never delayed. 0, the default, uses new CIDRs right away.
+	// See cidr_apply_delay.go.
+	ApplyDelay time.Duration
 	// Allowlist restricts which origins a remote source may be fetched from. Entries are
 	// `scheme://host[:port]` (bare `host[:port]` means https), matched exactly after parsing.
 	// Empty means any host is allowed. See cidr_source_access.go.
@@ -140,6 +144,9 @@ func (o CIDRSourceOptions) Validate() error {
 	}
 	if o.RetryInterval <= 0 {
 		errs = append(errs, fmt.Errorf("retry-interval must be positive, got %s", o.RetryInterval))
+	}
+	if o.ApplyDelay < 0 {
+		errs = append(errs, fmt.Errorf("apply-delay must not be negative, got %s", o.ApplyDelay))
 	}
 	if _, err := parseAllowlist(o.Allowlist); err != nil {
 		errs = append(errs, fmt.Errorf("allowlist: %w", err))
@@ -230,6 +237,7 @@ func (o CIDRSourceOptions) LogEffective() {
 		"maxResponseBytes":         o.MaxResponseBytes,
 		"celCostLimit":             o.CELCostLimit,
 		"retryInterval":            o.RetryInterval.String(),
+		"applyDelay":               o.ApplyDelay.String(),
 		"allowlist":                o.Allowlist,
 		"allowPrivateDestinations": o.AllowPrivateDestinations,
 		"clusterHeadersNamespace":  o.ClusterHeadersNamespace,

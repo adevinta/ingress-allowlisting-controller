@@ -302,6 +302,47 @@ the full behaviour.
 
 ---
 
+## Delay for new CIDRs from a remote source (supply chain)
+
+**Applies to:** `CIDRs`/`ClusterCIDRs` objects with a remote `location.uri` source, when
+`--cidr-source-apply-delay` is set (off by default).
+
+The breadth limit doesn't help when a trusted source itself is compromised: its host, the
+repository a list is kept in, or the CDN in front of it. A narrow `/32` added by an attacker
+passes every check, and without a delay it is in the allowlists at the next fetch.
+
+With `--cidr-source-apply-delay=24h` (Helm: `cidrSource.applyDelay`), a CIDR new to the source
+waits in `status.pending` for 24 hours from when it was first seen, and is used only if the source
+still returns it then. That leaves a day to see the change and fix or remove the source.
+
+- **Only additions wait.** A CIDR the source removes is taken out right away: delaying a removal
+  would keep access open, possibly for a range that now belongs to someone else.
+- **But the list never goes empty.** If a source replaces all its CIDRs with new ones, the update
+  is refused and the last CIDRs stay until the new ones are due, as when a source returns nothing:
+  a bad response must not lock out the traffic it allows. Removing one CIDR out of many is safe;
+  removing all of them at once is more likely a broken feed than a real change.
+- **Only changes of the response wait, not changes of the spec.** `spec.cidrs` is written by
+  people with RBAC and checked by the API server, and is used at once. So is a source changed in
+  the spec (`location.uri`, `cel`, `jsonPath`, `format`), and the first list of a new object. What
+  the delay covers is a change nobody made in the cluster: new content, or a redirect, behind the
+  same `uri`.
+- **So it doesn't protect against someone who can edit the object.** Whoever can change
+  `location.uri` can point it at their own list and have it used at once, as they could with
+  `spec.cidrs`. Restrict who can write `CIDRs` and `ClusterCIDRs` with RBAC, and the origins with
+  `--cidr-source-allowlist`.
+- **A delay only helps if someone looks.** Alert on the
+  `ingress_allowlisting_controller_cidr_source_pending_cidrs` metric, or on the warning the
+  controller logs for each change, and review the CIDRs in `status.pending`. Unnoticed, the change
+  is used when the delay ends.
+- **Legitimate changes wait too.** A provider adding a range means clients from it are refused
+  until the delay ends. To allow one at once, add it to `spec.cidrs`. Pick the delay to match how
+  quickly you can review a change.
+
+See [CIDRs — Delaying new CIDRs from a source](cidrs.md#delaying-new-cidrs-from-a-source) for the
+full behaviour.
+
+---
+
 ## Resource limits on remote CIDR sources
 
 **Applies to:** `CIDRs`/`ClusterCIDRs` objects with a remote `location.uri` source.

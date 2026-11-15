@@ -131,6 +131,31 @@ type CIDRsStatus struct {
 
 	// +kubebuilder:validation:Optional
 	Conditions []Condition `json:"conditions,omitempty"`
+
+	// Pending are CIDRs the remote source added that are not used yet. With
+	// --cidr-source-apply-delay, a CIDR new to the source is used only once the delay has passed
+	// since it was first seen, and only if the source still returns it then. CIDRs the source
+	// removes are taken out of cidrs right away, never delayed. Grouped by when they were first
+	// seen, oldest first.
+	// +kubebuilder:validation:Optional
+	Pending []PendingCIDRs `json:"pending,omitempty"`
+
+	// SourceHash is a hash of the spec.location fields that say what is fetched and how it becomes
+	// CIDRs (uri, cel, jsonPath, format), as of the last successful fetch. When they change, the
+	// CIDRs of the new source are used without --cidr-source-apply-delay: the change was made in
+	// the spec. A change only in what the source returns (new content, a redirect) still waits.
+	// +kubebuilder:validation:Optional
+	SourceHash string `json:"sourceHash,omitempty"`
+}
+
+// PendingCIDRs are CIDRs first seen in the remote source at the same time.
+type PendingCIDRs struct {
+	// FirstSeen is when the source first returned these CIDRs.
+	FirstSeen metav1.Time `json:"firstSeen"`
+	// ApplyAfter is when they are used if the source still returns them: firstSeen plus
+	// --cidr-source-apply-delay.
+	ApplyAfter metav1.Time `json:"applyAfter"`
+	CIDRs      []string    `json:"cidrs"`
 }
 
 // +kubebuilder:object:root=true

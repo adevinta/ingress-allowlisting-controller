@@ -38,6 +38,29 @@ Resources with a missing group (an alert):
 ingress_allowlisting_controller_missing_cidrs > 0
 ```
 
+## `ingress_allowlisting_controller_cidr_source_pending_cidrs`
+
+```
+# HELP ingress_allowlisting_controller_cidr_source_pending_cidrs Number of CIDRs the remote source of a CIDRs/ClusterCIDRs object added that wait for --cidr-source-apply-delay. status.pending lists them.
+# TYPE ingress_allowlisting_controller_cidr_source_pending_cidrs gauge
+ingress_allowlisting_controller_cidr_source_pending_cidrs{kind="ClusterCIDRs",name="aws",namespace=""} 0
+```
+
+One series per `CIDRs` or `ClusterCIDRs` object with a remote source (`kind`, `namespace`,
+`name`; `namespace` is empty for a `ClusterCIDRs`). The value is how many CIDRs the source added
+that wait for `--cidr-source-apply-delay`; it is always `0` while the delay is off. Which ones is in
+the object's `status.pending`. See
+[CIDRs — Delaying new CIDRs from a source](cidrs.md#delaying-new-cidrs-from-a-source).
+
+Removing the source or deleting the object removes the series.
+
+### Useful queries
+
+Objects whose source added CIDRs that wait (an alert, to review them before they are used):
+```promql
+ingress_allowlisting_controller_cidr_source_pending_cidrs > 0
+```
+
 ## `namespace_ingress_IpAllowlistingGroup_missing` (removed in v0.3.0)
 
 **Removed in v0.3.0**, deprecated since v0.2. Use `ingress_allowlisting_controller_missing_cidrs`

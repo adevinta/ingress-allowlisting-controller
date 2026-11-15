@@ -18,6 +18,7 @@ import (
 	"time"
 
 	v1 "k8s.io/api/core/v1"
+	apierrors "k8s.io/apimachinery/pkg/api/errors"
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 	ctrl "sigs.k8s.io/controller-runtime"
 	"sigs.k8s.io/controller-runtime/pkg/builder"
@@ -121,6 +122,9 @@ type CIDRReconciler struct {
 func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	cidrs := r.CIDRs.DeepCopyCIDRs()
 	if err := r.Get(ctx, req.NamespacedName, cidrs); err != nil {
+		if apierrors.IsNotFound(err) {
+			forgetPending(r.kind(), req.Namespace, req.Name)
+		}
 		return ctrl.Result{}, client.IgnoreNotFound(err)
 	}
 
@@ -132,7 +136,23 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	status.CIDRs, invalidInline = normalizeInlineCIDRs(specs.CIDRsSource.CIDRs)
 	requeue, raised := effectiveRequeueAfter(specs.RequeueAfter)
 
-	dropped, fetchErr := r.addHTTPSource(ctx, cidrs, &status)
+	opts := r.SourceOptions.withDefaults()
+	remote, dropped, fetchErr := r.addHTTPSource(ctx, cidrs)
+	// next is how soon a CIDR held for --cidr-source-apply-delay is due.
+	var next time.Duration
+	if fetchErr == nil {
+		old, location := cidrs.GetStatus(), specs.CIDRsSource.Location
+		held := holdAdditions(remote, status.CIDRs, old.CIDRs, old.Pending, opts.ApplyDelay, r.clock(), sourceChangedInSpec(old, location))
+		logHeld(ctx, map[string]interface{}{
+			"cidrs":     cidrs.GetName(),
+			"namespace": cidrs.GetNamespace(),
+			"uri":       redactURI(specs.CIDRsSource.Location.URI),
+		}, held, opts.ApplyDelay)
+		status.CIDRs = append(status.CIDRs, held.use...)
+		status.Pending = held.pending
+		status.SourceHash = sourceHash(location)
+		next = held.next
+	}
 	// retry is set when a remote source did not produce a usable list, so it is fetched again soon
 	// instead of waiting for the next watch event or resync.
 	retry := fetchErr != nil
@@ -157,6 +177,9 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 			status.CIDRs = []string{resolvers.DenyAllCIDR}
 			message = "spec.cidrs has no valid entry and there is no source: nothing is allowed (" + resolvers.DenyAllCIDR + ")"
 		}
+		if len(status.Pending) > 0 {
+			message = fmt.Sprintf("%s (%s)", message, pendingMessage(status.Pending, opts.ApplyDelay))
+		}
 		if dropped > 0 {
 			// A count, never the values: a misconfigured CEL expression stays visible without
 			// echoing the response.
@@ -179,13 +202,24 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	status.CIDRs = slices.Compact(status.CIDRs)
 
 	if len(cidrs.GetStatus().CIDRs) > 0 && len(status.CIDRs) == 0 {
-		// If the update consists of removing all CIDRs, we refuse to update
+		// If the update consists of removing all CIDRs, we refuse to update: the last CIDRs stay
+		// until the source is fixed or an admin changes the object. A feed that suddenly returns
+		// nothing must not lock out the traffic it allows.
+		pending, hash := status.Pending, status.SourceHash
 		status = cidrs.GetStatus()
+		message := "Refusing to update removing all CIDRs"
+		if len(pending) > 0 {
+			// The source returned only CIDRs new to it, which wait for the delay. That too can be a
+			// bad response, so the last CIDRs stay as for an empty one. The new ones stay pending
+			// with their clocks running: once one is due, it is used and the old ones go.
+			status.Pending, status.SourceHash = pending, hash
+			message = fmt.Sprintf("Refusing to update removing all CIDRs: every CIDR from the source is new, the last CIDRs are kept until then (%s)", pendingMessage(pending, opts.ApplyDelay))
+		}
 		status.State = ipamv1alpha1.CIDRsStateUpdateFailed
 		status.UpsertCondition(ipamv1alpha1.Condition{
 			Type:    ipamv1alpha1.CIDRsStatusConditionTypeUpToDate,
 			Status:  v1.ConditionFalse,
-			Message: "Refusing to update removing all CIDRs",
+			Message: message,
 		})
 		// A feed that briefly returns an empty list is as much a failed fetch as an error. Inline
 		// spec.cidrs needs no retry: editing the object triggers a reconcile anyway.
@@ -205,23 +239,32 @@ func (r *CIDRReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.
 	if err := r.Status().Update(ctx, cidrs); err != nil {
 		return ctrl.Result{}, err
 	}
+	recordPending(r.kind(), cidrs.GetNamespace(), cidrs.GetName(), specs.CIDRsSource.Location.URI != "", status.Pending)
 
+	after := requeue
 	if retry {
 		// A failed fetch would otherwise wait for the next watch event or resync (hours), so retry
 		// it on a fixed interval: quick enough to recover from a short outage, slow enough not to
 		// hammer a broken feed. A shorter spec.requeueAfter wins.
-		after := r.SourceOptions.withDefaults().RetryInterval
+		after = opts.RetryInterval
 		if requeue > 0 && requeue < after {
 			after = requeue
 		}
-		return ctrl.Result{RequeueAfter: after}, nil
 	}
-
-	if requeue > 0 {
-		return ctrl.Result{RequeueAfter: requeue}, nil
+	// A held CIDR is used by the first fetch after it is due: without spec.requeueAfter, or with a
+	// longer one, that fetch would only come with the next watch event or resync.
+	if next > 0 && (after == 0 || next < after) {
+		after = next
 	}
+	return ctrl.Result{RequeueAfter: after}, nil
+}
 
-	return ctrl.Result{}, nil
+// kind is the kind of the reconciled objects, for the metric: CIDRs or ClusterCIDRs.
+func (r *CIDRReconciler) kind() string {
+	if _, ok := r.CIDRs.(*ipamv1alpha1.ClusterCIDRs); ok {
+		return "ClusterCIDRs"
+	}
+	return "CIDRs"
 }
 
 func (r *CIDRReconciler) clock() time.Time {
@@ -249,13 +292,11 @@ func effectiveRequeueAfter(requeueAfter *metav1.Duration) (after time.Duration, 
 	return requeueAfter.Duration, false
 }
 
-func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter, status *ipamv1alpha1.CIDRsStatus) (dropped int, err error) {
-	if status == nil {
-		return 0, nil
-	}
+// addHTTPSource fetches the remote source of cidrs, if it has one, and returns its CIDRs.
+func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.CIDRsGetter) (remote []string, dropped int, err error) {
 	spec := cidrs.GetSpec()
 	if spec.CIDRsSource.Location.URI == "" {
-		return 0, nil
+		return nil, 0, nil
 	}
 	// One deadline covers the whole fetch: connect, headers, reading the body and processing it
 	// (the request context also bounds body reads). Without it a slow or stalled server would hold
@@ -286,16 +327,16 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 
 	req, err := http.NewRequestWithContext(ctx, "GET", spec.CIDRsSource.Location.URI, nil)
 	if err != nil {
-		return 0, redactFetchError(err) // a parse error repeats the raw URI
+		return nil, 0, redactFetchError(err) // a parse error repeats the raw URI
 	}
 	// Refuse a source that is not allowed before anything else happens — in particular before any
 	// Secret is read for headersFrom. Redirects are checked again by the client.
 	origins, err := parseAllowlist(opts.Allowlist)
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	if err := checkAllowed(origins, req.URL); err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 	// The headers read from Secrets and ConfigMaps, kept apart so that a redirect to another
 	// origin can drop them.
@@ -303,7 +344,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if r.HTTPHeadersEnabled {
 		err = r.updateClientHeaders(ctx, cidrs.GetNamespace(), refHeaders, spec.CIDRsSource.Location.HeadersFrom)
 		if err != nil {
-			return 0, err
+			return nil, 0, err
 		}
 		for k, v := range refHeaders {
 			req.Header[k] = append(req.Header[k], v...)
@@ -311,11 +352,11 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	}
 	resp, err := newSourceHTTPClient(opts, origins, slices.Collect(maps.Keys(refHeaders))).Do(req)
 	if err != nil {
-		return 0, redactFetchError(err)
+		return nil, 0, redactFetchError(err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
-		return 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
+		return nil, 0, fmt.Errorf("unexpected status code: %d", resp.StatusCode)
 	}
 
 	// Cap the body before any parser sees it. The overflow is checked after processing whatever the
@@ -326,17 +367,17 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	body, err := getHTTPResponseBody(resp)
 	if err != nil {
 		if overflow := capped.exceeded(); overflow != nil {
-			return 0, overflow
+			return nil, 0, overflow
 		}
-		return 0, err
+		return nil, 0, err
 	}
 
 	cidrValues, err := applyProcessorWithCostLimit(body, spec.CIDRsSource.Location.Processing, opts.CELCostLimit)
 	if overflow := capped.exceeded(); overflow != nil {
-		return 0, overflow
+		return nil, 0, overflow
 	}
 	if err != nil {
-		return 0, err
+		return nil, 0, err
 	}
 
 	// Only CIDRs and IPs reach the status; see normalizeExternalCIDRs.
@@ -358,14 +399,12 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 			WithField("cidrs", cidrs.GetName()).
 			WithField("uri", redactURI(spec.CIDRsSource.Location.URI)).
 			Error(err, "rejecting external CIDR source: coverage too broad, keeping last-known-good allowlist")
-		return 0, err
+		return nil, 0, err
 	}
 
 	logFetchCompleted(logCtx, logFields, capped, time.Since(start), len(cidrValues))
 
-	status.CIDRs = append(status.CIDRs, cidrValues...)
-
-	return dropped, nil
+	return cidrValues, dropped, nil
 }
 
 // resolveNamespace returns the namespace a headersFrom reference reads from: a CIDRs object's own
