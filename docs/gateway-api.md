@@ -166,9 +166,15 @@ merged AP. Things to know:
   policies by host. A Gateway's listener hostnames are checked when the route reconciles, like
   `allowedRoutes`: changing them takes effect on the route's next reconcile.
 - Routes on the **same** listener can still claim the same hostnames as each other, e.g. on a
-  listener without `hostname` shared by tenants. Gateway API leaves hostname ownership to the
-  implementation; give each tenant its own listener with a `hostname` (and `allowedRoutes` for its
-  namespace), or protect the hostnames with a DENY policy (see
+  listener without `hostname` shared by tenants. A wildcard makes it wider: if team-a's route
+  lists `shop.example.com` and team-b's route lists `*.example.com`, Gateway API sends the
+  traffic for `shop.example.com` to team-a (an exact hostname wins over a wildcard), but team-b's
+  AP allows its CIDRs on `shop.example.com` too, since Istio ORs ALLOW policies by host. The
+  controller doesn't decide who owns a hostname: some clusters give each namespace its own
+  subdomain, others let several namespaces share a domain on purpose, and no single rule fits
+  both. Gateway API leaves hostname ownership to the implementation; give each tenant its own
+  listener with a `hostname` (and `allowedRoutes` for its namespace), or protect the hostnames
+  with a DENY policy (see
   [security.md](security.md#protecting-a-cross-namespace-gateway-with-a-deny-policy-istio)).
 
 ### Granularity
