@@ -415,6 +415,36 @@ See
 
 ---
 
+## ClusterCIDRs' CIDRs are readable by every namespace
+
+**Applies to:** every `ClusterCIDRs` object.
+
+A `ClusterCIDRs` can be named in the annotations of any namespace's objects: nothing limits which
+namespaces may reference it. The controller then writes its CIDRs into objects that the users of
+that namespace can read:
+
+| Annotated object | Where the CIDRs show up, in the same namespace |
+|---|---|
+| Ingress | the `nginx.ingress.kubernetes.io/whitelist-source-range` annotation |
+| Service | `spec.loadBalancerSourceRanges` |
+| NetworkPolicy | the `ipBlock` entries |
+| HTTPRoute (Traefik) | the Middleware's `ipAllowList.sourceRange` |
+| HTTPRoute or Gateway (Istio), Gateway in the same namespace | the AuthorizationPolicy's `remoteIpBlocks` |
+
+So anyone who can create one of these objects in some namespace can read the CIDRs of any
+`ClusterCIDRs`: annotate an object with its name, then read the object back. A name that doesn't
+exist gives deny-all and an `AllowlistGroupNotFound` Event, so names can be guessed too.
+
+The `<release>-clustercidrs-viewer` ClusterRole, which the chart doesn't add to `view`, still
+keeps the objects themselves from other users: the feed URI, the CEL or JSONPath, the
+`headersFrom` references, and the status conditions. It doesn't keep the CIDRs from them.
+
+Treat a `ClusterCIDRs`' CIDRs as readable by every namespace allowed to create these objects. For
+CIDRs only some namespaces may see, use `CIDRs` objects in those namespaces: a `CIDRs` object can
+only be referenced from its own namespace.
+
+---
+
 ## What the controller can't check
 
 - **A proxy hides the destination.** With `HTTP_PROXY`/`HTTPS_PROXY` set, the destination guard

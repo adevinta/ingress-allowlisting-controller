@@ -93,8 +93,10 @@ rules:
   resources: ["cidrs", "cidrs/status"]
   verbs: ["get", "list", "watch"]
 ---
-# Read access to ClusterCIDRs, the admins' allowlists (feed URIs, CIDRs). Not aggregated: view
-# bound cluster-wide would give it to every reader of the cluster. Bind it to those who need it.
+# Read access to ClusterCIDRs objects: their spec (feed URIs, CEL, headersFrom references) and
+# status. Not aggregated: view bound cluster-wide would give it to every reader of the cluster.
+# Bind it to those who need it. It doesn't hide the CIDRs: any namespace can reference a
+# ClusterCIDRs and read them back from its own objects (see docs/security.md).
 apiVersion: rbac.authorization.k8s.io/v1
 kind: ClusterRole
 metadata:
