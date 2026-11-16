@@ -374,9 +374,15 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 		return nil, 0, err
 	}
 
-	cidrValues, err := applyProcessorWithCostLimit(body, spec.CIDRsSource.Location.Processing, opts.CELCostLimit)
+	// The size cap bounds the bytes, not what decoding them costs: a body of many tiny values takes
+	// 70-110x its size. The guard stops the decoder when it needs more than the memory budget.
+	guarded := newProcessingMemoryGuard(body, opts.MaxResponseBytes)
+	cidrValues, err := applyProcessorWithCostLimit(guarded, spec.CIDRsSource.Location.Processing, opts.CELCostLimit)
 	if overflow := capped.exceeded(); overflow != nil {
 		return nil, 0, overflow
+	}
+	if overBudget := guarded.exceeded(); overBudget != nil {
+		return nil, 0, overBudget
 	}
 	if err != nil {
 		logCELEvalFailure(logCtx, logFields, err)
