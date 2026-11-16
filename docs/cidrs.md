@@ -327,12 +327,26 @@ cloud metadata endpoint, the kubelet. Two independent controls narrow where a fe
 
 **1. Destination guard — on by default.** A connection is refused if the address it resolves to is
 not a public one: loopback, private (RFC 1918 and IPv6 unique-local), link-local (which includes
-the cloud metadata address `169.254.169.254`), carrier-grade NAT, multicast, reserved ranges, and
-the IPv6 forms that embed such an IPv4 address (v4-mapped, NAT64, 6to4). The check runs on the
-address actually being dialled, *after* name resolution, so a hostname that resolves to an
-internal address, a DNS change between check and connect, and a redirect to an internal address
-are all covered. Feeds that really are internal need `--cidr-source-allow-private-destinations`,
-which is logged as a warning at startup.
+the cloud metadata address `169.254.169.254`), carrier-grade NAT, multicast, reserved ranges, the IPv6
+blocks that are not globally reachable (the local-use NAT64 prefix `64:ff9b:1::/48`, Teredo
+`2001::/32`, benchmarking `2001:2::/48`, and the documentation ranges `2001:db8::/32` and
+`3fff::/20`, and `5f00::/16`), and the IPv6 forms that embed such an IPv4 address (v4-mapped,
+NAT64 `64:ff9b::/96`, 6to4). The check runs on the address actually being dialled, *after* name
+resolution, so a hostname that resolves to an internal address, a DNS change between check and
+connect, and a redirect to an internal address are all covered. Feeds that really are internal
+need `--cidr-source-allow-private-destinations`, which is logged as a warning at startup.
+
+**The guard knows the internet's special ranges, not your cluster's.** An address is refused
+because of what it is, never because of where the controller runs. On a cluster whose pods or
+nodes have **global unicast IPv6 addresses** (for example EKS in IPv6 mode, with addresses from
+the VPC's own prefix, or a dual-stack cluster that hands out public prefixes), those addresses look
+like any public address and pass. So does a name that resolves to them, such as a pod's DNS name.
+Whoever can create a `CIDRs` object can then make the controller send a GET to a pod or node
+address, and read back whether it answered (the connection error or the HTTP status shows in the
+`UpToDate` condition) and any IP addresses or CIDRs in the response. Clusters on IPv4 private or
+CGNAT ranges, and IPv6 clusters with unique-local addresses, are not affected. If your pods or
+nodes use global unicast addresses, set the origin allowlist below: it is the control that covers
+this.
 
 **2. Origin allowlist — optional.** With `--cidr-source-allowlist`, only the listed origins may be
 fetched. When the list is empty, any host is allowed and the controller logs a warning at startup.

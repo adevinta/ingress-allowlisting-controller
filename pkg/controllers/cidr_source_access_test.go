@@ -181,12 +181,41 @@ func TestIsPublicIP(t *testing.T) {
 		"2002:7f00:1::":          "6to4 to 127.0.0.1",
 		"2002:a9fe:a9fe::1":      "6to4 to 169.254.169.254",
 		"fec0::1":                "site-local",
+		// IPv6 blocks that are not globally reachable (IANA special-purpose registry).
+		"64:ff9b:1::1":      "local-use NAT64 (RFC 8215), not unwrapped",
+		"64:ff9b:1::a00:1":  "local-use NAT64 carrying 10.0.0.1",
+		"64:ff9b:1:ffff::1": "local-use NAT64, end of the /48",
+		"2001::1":           "Teredo",
+		"2001:2::1":         "benchmarking v6",
+		"2001:db8::1":       "documentation",
+		"2001:db8:ffff::1":  "documentation, end of the /32",
+		"3fff::1":           "documentation (RFC 9637)",
+		"3fff:fff:ffff::1":  "documentation, end of the /20",
+		"5f00::1":           "segment routing SIDs",
 	}
 	for s, why := range nonPublic {
 		assert.False(t, isPublicIP(net.ParseIP(s)), "%s (%s) must not be public", s, why)
 	}
 
 	assert.False(t, isPublicIP(nil), "an unparsable address is never public")
+
+	// The guard doesn't know the cluster's own address space: on a cluster whose pods or nodes have
+	// global unicast IPv6 addresses (e.g. EKS in IPv6 mode), those pass as public. It is documented
+	// (docs/cidrs.md, "Destination guard"): the origin allowlist is what covers it.
+	t.Run("global unicast addresses next to the refused blocks stay public", func(t *testing.T) {
+		for _, s := range []string{
+			"2600:1f18::1",         // an AWS VPC address
+			"2606:4700:4700::1111", // a public resolver
+			"2001:4860:4860::8888", // a public resolver, next to 2001::/32
+			"2001:1::1",            // next to 2001:2::/48
+			"2001:db9::1",          // next to 2001:db8::/32
+			"3ffe::1",              // next to 3fff::/20
+			"64:ff9b:2::1",         // next to 64:ff9b:1::/48
+			"5e00::1",              // next to 5f00::/16
+		} {
+			assert.True(t, isPublicIP(net.ParseIP(s)), "%s should be public", s)
+		}
+	})
 
 	t.Run("translation forms of a public IPv4 stay public", func(t *testing.T) {
 		assert.True(t, isPublicIP(net.ParseIP("64:ff9b::808:808"))) // NAT64 to 8.8.8.8
