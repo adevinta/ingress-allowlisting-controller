@@ -194,14 +194,16 @@ Key properties:
 The fetch and the processing of its result run inside the controller's single reconcile worker,
 so one source that is slow, huge, or paired with an expensive expression would otherwise stall
 **every** allowlist update in the cluster (and a large enough body would get the pod OOM-killed).
-Three limits turn those cases into an ordinary failed fetch: the object keeps its last-known-good
+These limits turn those cases into an ordinary failed fetch: the object keeps its last-known-good
 status and the reason is reported in its `UpToDate` condition.
 
 | Limit | Default | What it bounds |
 |---|---|---|
-| Fetch timeout | 30 s | The whole fetch: connecting, response headers, reading the body and processing it |
+| Fetch timeout | 30 s | Connecting, response headers and reading the body. It does **not** interrupt the processing of a response that is already read: that is bounded by the limits below |
 | Response size | 5 MiB | Bytes read from the response body |
 | CEL cost | 1,000,000 | Estimated cost (roughly: operations) of one CEL evaluation |
+| Nesting depth | 32 levels | How deeply the decoded response (JSON or YAML) may nest maps and lists. A constant, not a flag |
+| JSONPath expression | one `..`, unions up to 8 | What a `jsonPath` expression may multiply: recursive descent (`..`) at most once, and its unions (`[a,b]`) together at most 8 results per match. Constants, not flags |
 
 Like the breadth guard, these are **guardrails against broken or misbehaving feeds, not a defence
 against a hostile endpoint**. Pointing `location.uri` at a server you do not trust is still a
@@ -216,6 +218,17 @@ Key properties:
   expression (`data.prefixes.filter(...).map(...)`) over ~10,000 prefixes costs about 130,000,
   so the cost limit leaves roughly 7x headroom. A nested comprehension over the same feed is
   aborted in well under a second instead of running for minutes.
+- **Nesting depth and JSONPath.** The YAML decoder accepts 10,000 levels, and JSONPath has no cost
+  limit. client-go's recursive descent returns every descendant of every value the step before it
+  returned, so chained `..` grow with the depth of the document to that power (three of them on a
+  document 80 levels deep return 82,160 values), and a repeated union term (`[0,0,0]`) returns the
+  same value several times. A tiny but deeply nested response could therefore exhaust the pod's
+  memory or keep the single reconcile worker busy long past the fetch timeout. So a response nested
+  more than 32 levels is refused before any expression runs (AWS's `ip-ranges.json` is 3 levels
+  deep, GitHub's `/meta` 4), and so is a `jsonPath` with a second `..` or with unions that multiply
+  the results by more than 8. The condition says which; it names the expression, which is the
+  author's own text, never the response. One `..` still works, e.g. `{..ip_prefix}`. For anything
+  else, use `cel`: it has the cost limit. The depth limit applies to CEL too.
 - **The cost limit measures CPU, not memory.** Memory is bounded by the response size cap, which
   limits the data an expression can work on.
 - **Memory needed is roughly 25–30x the body size.** Decoding and CEL processing peak at about
@@ -461,7 +474,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | `--http-headers-enabled` | `false` | Enable reading Secrets and ConfigMaps as HTTP header sources for remote CIDR fetches (the `headersFrom` field; chart: `httpHeadersEnabled: true`). Requires `--cidr-source-allowlist`; only Secrets and ConfigMaps matching `--secret-label-selector` can be read. While it is off, `headersFrom` is ignored and no Secret or ConfigMap is read or watched. See [Headers from Secrets and ConfigMaps](#headers-from-secrets-and-configmaps-headersfrom). |
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
-| `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching and processing one remote source: connect, response headers, body and processing. See [Resource limits](#resource-limits-on-remote-sources). |
+| `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching one remote source: connect, response headers and reading the body. Processing the response is bounded by the CEL cost limit and the checks on nesting depth and JSONPath, not by this timeout. See [Resource limits](#resource-limits-on-remote-sources). |
 | `--cidr-source-max-response-bytes` | `5242880` | Maximum size of a remote source response body (5 MiB). A larger body fails the fetch; it is never truncated. Needs about 25–30x this in pod memory. |
 | `--cidr-source-cel-cost-limit` | `1000000` | Maximum estimated cost of one CEL expression evaluated on a remote source. |
 | `--cidr-source-retry-interval` | `5m` | How soon a failed remote fetch is retried. An object with a shorter `spec.requeueAfter` is retried at that interval instead. See [Retrying a failed fetch](#retrying-a-failed-fetch). |

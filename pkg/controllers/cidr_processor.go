@@ -23,6 +23,109 @@ import (
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 )
 
+const (
+	// maxDocumentDepth is how deeply a decoded response may nest maps and lists (a scalar is level
+	// 0). Real feeds are shallow (AWS ip-ranges.json is 3 levels deep, GitHub's /meta 4), but the
+	// YAML decoder accepts 10,000, and the work of a JSONPath expression grows with the depth of
+	// the document: client-go's recursive descent copies every descendant up through each level.
+	// A response nested deeper than this is refused before any expression runs on it.
+	maxDocumentDepth = 32
+
+	// maxJSONPathUnionFanout is by how much the unions of a JSONPath expression ([a,b], [0,1,2]) may
+	// multiply the results: the product of their term counts. A union selects each of its terms, so
+	// repeating one ([0,0,0]) returns the same value several times, and chained unions multiply.
+	maxJSONPathUnionFanout = 8
+)
+
+// documentNestedDeeperThan reports whether a decoded document nests maps and lists more than
+// limit levels deep. It walks with an explicit stack and stops at the first value over the limit,
+// so no document can overflow the stack or make it run long.
+func documentNestedDeeperThan(root interface{}, limit int) bool {
+	type item struct {
+		value interface{}
+		depth int
+	}
+	stack := []item{{root, 0}}
+	for len(stack) > 0 {
+		it := stack[len(stack)-1]
+		stack = stack[:len(stack)-1]
+		var children []interface{}
+		switch v := it.value.(type) {
+		case map[string]interface{}:
+			for _, child := range v {
+				children = append(children, child)
+			}
+		case map[interface{}]interface{}:
+			for _, child := range v {
+				children = append(children, child)
+			}
+		case []interface{}:
+			children = v
+		default:
+			continue
+		}
+		if it.depth+1 > limit {
+			return true
+		}
+		for _, child := range children {
+			stack = append(stack, item{child, it.depth + 1})
+		}
+	}
+	return false
+}
+
+// checkJSONPathCost refuses a JSONPath expression whose work can multiply. JSONPath gets neither a
+// cost limit nor the fetch timeout (those only cancel network reads), and client-go's evaluator
+// builds every result in memory, so the expression is checked before it runs:
+//
+//   - recursive descent (..) at most once: each one visits every descendant of every value the
+//     step before returned, so chained ones grow with the depth of the document to that power
+//     (three of them on a document 80 levels deep return 82,160 values);
+//   - the unions at most maxJSONPathUnionFanout together, see there.
+//
+// A document nested deeper than maxDocumentDepth is refused before this, and its size is capped by
+// the response size limit, so what is left is about the size of the document times its depth.
+func checkJSONPathCost(expression string) error {
+	parser, err := jsonpath.Parse("cidrs", expression)
+	if err != nil {
+		return fmt.Errorf("failed to parse jsonpath: %w", err)
+	}
+	recursions, fanout := 0, 1
+	var walk func(node jsonpath.Node)
+	walk = func(node jsonpath.Node) {
+		switch n := node.(type) {
+		case *jsonpath.ListNode:
+			if n == nil {
+				return
+			}
+			for _, child := range n.Nodes {
+				walk(child)
+			}
+		case *jsonpath.FilterNode:
+			walk(n.Left)
+			walk(n.Right)
+		case *jsonpath.UnionNode:
+			if fanout <= maxJSONPathUnionFanout { // once over, stop multiplying: no overflow
+				fanout *= max(len(n.Nodes), 1)
+			}
+			for _, term := range n.Nodes {
+				walk(term)
+			}
+		case *jsonpath.RecursiveNode:
+			recursions++
+		}
+	}
+	walk(parser.Root)
+
+	if recursions > 1 {
+		return fmt.Errorf("jsonpath: the expression uses recursive descent (..) %d times, at most once is accepted: each one multiplies the work by the depth of the response", recursions)
+	}
+	if fanout > maxJSONPathUnionFanout {
+		return fmt.Errorf("jsonpath: the unions of the expression multiply the results by %d or more, at most %d is accepted", fanout, maxJSONPathUnionFanout)
+	}
+	return nil
+}
+
 // celEvalError is a CEL expression that failed while running on a response. Its cause can quote
 // the response: cel-go names the map key it could not find and the value it could not convert. The
 // error text goes into the UpToDate condition, which anyone who can read the object can read, so
@@ -112,6 +215,10 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, cel
 	if err != nil {
 		return nil, fmt.Errorf("failed to decode yaml: %w", err)
 	}
+	// The decoder accepts 10,000 levels; no feed needs more than a few (see maxDocumentDepth).
+	if documentNestedDeeperThan(data, maxDocumentDepth) {
+		return nil, fmt.Errorf("the response is nested more than %d levels deep, which is not accepted", maxDocumentDepth)
+	}
 
 	// Prefer CEL if both are specified
 	if processing.CEL != "" {
@@ -164,6 +271,9 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, cel
 		err := parser.Parse(processing.JSONPath)
 		if err != nil {
 			return nil, fmt.Errorf("failed to parse jsonpath: %w", err)
+		}
+		if err := checkJSONPathCost(processing.JSONPath); err != nil {
+			return nil, err
 		}
 
 		parser.AllowMissingKeys(true)
