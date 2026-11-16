@@ -377,6 +377,7 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 		return nil, 0, overflow
 	}
 	if err != nil {
+		logCELEvalFailure(logCtx, logFields, err)
 		return nil, 0, err
 	}
 
