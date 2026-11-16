@@ -136,6 +136,16 @@ var nonPublicNets = func() []*net.IPNet {
 		"::/96",         // deprecated IPv4-compatible IPv6 (also covers :: and ::1)
 		"100::/64",      // discard-only
 		"fec0::/10",     // deprecated site-local
+		// IANA special-purpose IPv6 blocks that are not globally reachable. None can host a public
+		// feed, and some can point at internal hosts. Unlike 64:ff9b::/96 and 2002::/16, the
+		// local-use NAT64 prefix 64:ff9b:1::/48 is not unwrapped: how the IPv4 address sits in it
+		// depends on the operator's prefix length, so the whole block is refused.
+		"64:ff9b:1::/48", // local-use IPv4/IPv6 translation (RFC 8215)
+		"2001::/32",      // Teredo (RFC 4380), also carries an IPv4 address
+		"2001:2::/48",    // benchmarking (RFC 5180)
+		"2001:db8::/32",  // documentation (RFC 3849)
+		"3fff::/20",      // documentation (RFC 9637)
+		"5f00::/16",      // segment routing SIDs (RFC 9602)
 	} {
 		_, n, err := net.ParseCIDR(c)
 		if err != nil {

@@ -395,9 +395,14 @@ and the reason is shown in the object's condition. The values are configurable w
 controlled separately:
 
 - **Destination guard (on by default).** Connections to non-public addresses — loopback, private,
-  link-local including the cloud metadata address, carrier-grade NAT — are refused, checked on the
-  address actually dialled. Use `--cidr-source-allow-private-destinations` only for feeds that are
-  really internal.
+  link-local including the cloud metadata address, carrier-grade NAT, and the IPv6 blocks that are
+  not globally reachable (local-use NAT64, Teredo, documentation ranges) — are refused, checked on
+  the address actually dialled. Use `--cidr-source-allow-private-destinations` only for feeds that
+  are really internal.
+  **It doesn't know your cluster's own address space.** On a cluster whose pods or nodes have
+  global unicast IPv6 addresses (for example EKS in IPv6 mode), those addresses pass as public, so
+  with an empty origin allowlist anyone who can create a `CIDRs` object can make the controller
+  send a GET to them, and read back whether it answered. Set the origin allowlist there.
 - **Origin allowlist (optional).** `--cidr-source-allowlist` restricts fetches to the listed
   `scheme://host[:port]` origins, with exact host matching and no wildcards. **When it is empty,
   any public host is allowed**, and the controller logs a warning at startup. Set it to the feeds
