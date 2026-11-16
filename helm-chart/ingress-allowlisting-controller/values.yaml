@@ -114,7 +114,7 @@ clusterCIDRsHeadersNamespace: ""
 cidrSource: {}
   # minMaskIPv4: 8                # widest IPv4 prefix accepted (1-32); wider prefixes reject the fetch
   # minMaskIPv6: 20               # widest IPv6 prefix accepted (1-128)
-  # fetchTimeout: 30s             # whole fetch: connect, headers, body and processing
+  # fetchTimeout: 30s             # connect, headers and reading the body (not the processing of it)
   # maxResponseBytes: 5242880     # 5 MiB; a larger body fails the fetch (never truncated).
   #                               # Needs ~25-30x in pod memory: raise resources.limits.memory with it
   # celCostLimit: 1000000         # max estimated cost of one CEL evaluation

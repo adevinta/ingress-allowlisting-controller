@@ -24,8 +24,9 @@ import (
 // hostile endpoint. The defaults sit above what real feeds need (AWS ip-ranges.json is ~2.7 MB;
 // Google's and GitHub's are ~0.1-0.2 MB).
 const (
-	// defaultFetchTimeout bounds the whole fetch: connect, headers, reading the body and
-	// processing it.
+	// defaultFetchTimeout bounds the fetch: connect, headers and reading the body. It cancels the
+	// request, so it does not interrupt the processing of a body that is already read: that is
+	// bounded by the CEL cost limit, maxDocumentDepth and checkJSONPathCost.
 	defaultFetchTimeout = 30 * time.Second
 
 	// defaultMaxResponseBytes caps how much of a response body is read. A larger body is an error
@@ -61,7 +62,7 @@ type CIDRSourceOptions struct {
 	// MinMaskIPv4 / MinMaskIPv6 are the widest mask an externally-fetched prefix may use.
 	MinMaskIPv4 int
 	MinMaskIPv6 int
-	// FetchTimeout bounds the whole fetch, including reading and processing the body.
+	// FetchTimeout bounds connecting and reading the response; see defaultFetchTimeout.
 	FetchTimeout time.Duration
 	// MaxResponseBytes caps the response body; a larger body fails the fetch.
 	MaxResponseBytes int64

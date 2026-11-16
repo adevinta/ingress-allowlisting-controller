@@ -298,9 +298,11 @@ func (r *CIDRReconciler) addHTTPSource(ctx context.Context, cidrs ipamv1alpha1.C
 	if spec.CIDRsSource.Location.URI == "" {
 		return nil, 0, nil
 	}
-	// One deadline covers the whole fetch: connect, headers, reading the body and processing it
-	// (the request context also bounds body reads). Without it a slow or stalled server would hold
-	// the single reconcile worker, and with it every allowlist update, indefinitely.
+	// One deadline covers the request: connect, headers and reading the body (the request context
+	// also bounds body reads). It does not interrupt processing once the body is read: nothing in
+	// that code takes a context, so it is bounded by its own limits (CEL cost, maxDocumentDepth,
+	// checkJSONPathCost). Without the deadline a slow or stalled server would hold the single
+	// reconcile worker, and with it every allowlist update, indefinitely.
 	opts := r.SourceOptions.withDefaults()
 	logCtx := ctx
 	ctx, cancel := context.WithTimeout(ctx, opts.FetchTimeout)

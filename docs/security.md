@@ -385,9 +385,12 @@ full behaviour.
 A remote fetch runs in the controller's single reconcile worker. A source that never answers,
 streams an enormous body, or is combined with a very expensive CEL expression would block every
 allowlist update in the cluster, or exhaust the pod's memory. The controller therefore applies a
-**30 s timeout** to the whole fetch, a **5 MiB cap** on the response body, and a **cost limit**
-on CEL evaluation. When one is hit, the fetch fails, the object keeps its last-known-good status,
-and the reason is shown in the object's condition. The values are configurable with the
+**30 s timeout** to connecting and reading the response, a **5 MiB cap** on the response body, a
+**cost limit** on CEL evaluation, and, because a JSONPath expression has no cost limit and the
+timeout doesn't interrupt processing, a **depth limit of 32** on the response and checks on the
+expression (recursive descent `..` at most once, bounded unions). When one is hit, the fetch fails,
+the object keeps its last-known-good status, and the reason is shown in the object's condition.
+The limits on the timeout, size and CEL cost are configurable with the
 `--cidr-source-*` flags (Helm: `cidrSource`); see
 [CIDRs — Configuring the guardrails](cidrs.md#configuring-the-guardrails).
 
