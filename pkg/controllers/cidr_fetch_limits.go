@@ -261,6 +261,20 @@ func reportLimitTripped(logCtx, fetchCtx context.Context, err error, opts CIDRSo
 	return true
 }
 
+// logCELEvalFailure logs why a CEL expression failed on a response, with the details that the
+// UpToDate condition leaves out (see celEvalError): they can quote the response, so the log of the
+// controller is where they go, not the object. A cost limit is not logged here: reportLimitTripped
+// does, with the configured value. Compile and other errors are in the condition already.
+func logCELEvalFailure(logCtx context.Context, fields map[string]interface{}, err error) {
+	var evalErr *celEvalError
+	if !errors.As(err, &evalErr) || evalErr.costLimitExceeded() {
+		return
+	}
+	log.DefaultLogger.WithContext(logCtx).
+		WithFields(fields).
+		Warnf("the CEL expression failed on the response of the CIDR source (the UpToDate condition doesn't show the details, as they can quote the response): %v", evalErr.cause)
+}
+
 // logFetchCompleted records, at debug level, what one successful fetch cost.
 func logFetchCompleted(logCtx context.Context, fields map[string]interface{}, body *cappedBody, elapsed time.Duration, entries int) {
 	log.DefaultLogger.WithContext(logCtx).

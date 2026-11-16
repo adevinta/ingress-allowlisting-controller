@@ -80,7 +80,13 @@ spec:
 
 - `uri` — the remote URL to fetch
 - `cel` — a [CEL](https://github.com/google/cel-spec) expression that transforms the HTTP
-  response body into a `[]string` of CIDRs
+  response body into a `[]string` of CIDRs. A mistake in the expression itself (a compile error)
+  is shown as it is in the `UpToDate` condition. An expression that fails while running on a
+  response is shown there only as `failed to evaluate CEL expression: it failed on the response
+  (the details are in the controller log)`, or `…: cost limit exceeded`, because the details can
+  quote the response: a key it did not find, a value it could not convert. The controller log has
+  them (a warning, `the CEL expression failed on the response…`), so the log can hold parts of a
+  response: treat it as sensitive. The previous list stays, as for any failed fetch
 - `requeueAfter` — how often to re-fetch (e.g. `30m`, `1h`)
 - `headersFrom` — a list; each entry references a `secretRef` and/or a `configMapRef` whose keys
   are sent as HTTP request headers (the key is the header name, the value the header value). A
@@ -343,7 +349,10 @@ the VPC's own prefix, or a dual-stack cluster that hands out public prefixes), t
 like any public address and pass. So does a name that resolves to them, such as a pod's DNS name.
 Whoever can create a `CIDRs` object can then make the controller send a GET to a pod or node
 address, and read back whether it answered (the connection error or the HTTP status shows in the
-`UpToDate` condition) and any IP addresses or CIDRs in the response. Clusters on IPv4 private or
+`UpToDate` condition) and any IP addresses or CIDRs in the response. That is more than the
+addresses the response lists: the same person writes the CEL expression, which can turn other
+parts of the response into addresses, so a response that reaches the controller is not hidden from
+them (see [Security considerations](security.md#resource-limits-on-remote-cidr-sources)). Clusters on IPv4 private or
 CGNAT ranges, and IPv6 clusters with unique-local addresses, are not affected. If your pods or
 nodes use global unicast addresses, set the origin allowlist below: it is the control that covers
 this.
@@ -430,6 +439,10 @@ Every key is optional; an unset key keeps the default. Things to know:
   allowlist` (preceded by the underlying error) with the fields `cidrs`, `namespace`, `uri`, `limit` (`fetch-timeout`,
   `max-response-bytes` or `cel-cost-limit`) and `configured` (the value that was exceeded). The
   reason is also written to the object's `UpToDate` condition.
+- **A CEL expression that fails on a response is logged.** The condition only says that it failed
+  (see [Remote sources](#remote-sources)); the controller logs a warning `the CEL expression
+  failed on the response of the CIDR source…` with the details and the fields `cidrs`,
+  `namespace` and `uri`. The details can quote the response.
 - **Debug logging shows each fetch.** At `debug` level the controller logs one
   `fetched external CIDR source` line per successful fetch (`bytes`, `entries`, `elapsed`, plus
   the object's `cidrs`, `namespace` and `uri`) and one `external CIDR source redirected` line for
@@ -472,8 +485,11 @@ Every key is optional; an unset key keeps the default. Things to know:
   `status.cidrs`, and the `UpToDate` condition names it (the first five), e.g.
   `All CIDRs are up to date (invalid entries in spec.cidrs ignored: "10.0.0")`.
 - Values from a remote source that are neither CIDRs nor IP addresses are dropped before they reach
-  `status.cidrs`, so the status never holds other parts of the response. The `UpToDate` condition
-  and a log line say how many were dropped, never which. If nothing usable is left, the previous
+  `status.cidrs`, so the status holds no text of the response, only what looks like an address. A
+  CEL expression can still build addresses from other parts of the response, so this keeps the
+  status from being a copy of the response, not the response from being read: see
+  [Security considerations](security.md#resource-limits-on-remote-cidr-sources). The `UpToDate`
+  condition and a log line say how many were dropped, never which. If nothing usable is left, the previous
   list is kept. CIDRs are kept as written (`10.0.0.5/8` is not changed to `10.0.0.0/8`).
 - A bare IP address becomes a host route, `/32` for IPv4 and `/128` for IPv6, in both remote
   (YAML, JSON or CSV) and inline values. Valid inline CIDRs are kept as written.

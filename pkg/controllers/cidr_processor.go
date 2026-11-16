@@ -7,6 +7,7 @@ package controllers
 import (
 	"bufio"
 	"encoding/csv"
+	"errors"
 	"fmt"
 	"io"
 	"strings"
@@ -15,11 +16,40 @@ import (
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 	"github.com/google/cel-go/common/types/traits"
+	"github.com/google/cel-go/interpreter"
 	"gopkg.in/yaml.v3"
 	"k8s.io/client-go/util/jsonpath"
 
 	ipamv1alpha1 "github.com/adevinta/ingress-allowlisting-controller/pkg/apis/ipam.adevinta.com/v1alpha1"
 )
+
+// celEvalError is a CEL expression that failed while running on a response. Its cause can quote
+// the response: cel-go names the map key it could not find and the value it could not convert. The
+// error text goes into the UpToDate condition, which anyone who can read the object can read, so
+// Error() says only that it failed and never the cause. The cause is for the controller's log
+// (see logCELEvalFailure), and is still reachable with errors.As and errors.Is.
+//
+// Errors from compiling the expression are not wrapped: they are computed before any response
+// exists, so they can't hold any of it, and the author needs them to fix the expression.
+type celEvalError struct {
+	cause error
+}
+
+func (e *celEvalError) Error() string {
+	if e.costLimitExceeded() {
+		return "failed to evaluate CEL expression: cost limit exceeded"
+	}
+	return "failed to evaluate CEL expression: it failed on the response (the details are in the controller log)"
+}
+
+func (e *celEvalError) Unwrap() error { return e.cause }
+
+// costLimitExceeded says the evaluation was stopped by --cidr-source-cel-cost-limit. Nothing of the
+// response is in that, and the author needs to know that this is what happened.
+func (e *celEvalError) costLimitExceeded() bool {
+	var cancelled interpreter.EvalCancelledError
+	return errors.As(e.cause, &cancelled) && cancelled.Cause == interpreter.CostLimitExceeded
+}
 
 func applyProcessor(reader io.Reader, processing ipamv1alpha1.Processing) ([]string, error) {
 	return applyProcessorWithCostLimit(reader, processing, defaultCELCostLimit)
@@ -121,7 +151,7 @@ func processYAMLFormat(reader io.Reader, processing ipamv1alpha1.Processing, cel
 			"data": celData,
 		})
 		if err != nil {
-			return nil, fmt.Errorf("failed to evaluate CEL expression: %w", err)
+			return nil, &celEvalError{cause: err}
 		}
 
 		// Convert CEL result to list of strings

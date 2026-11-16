@@ -410,9 +410,19 @@ controlled separately:
 
 Without an allowlist, anyone who can create a `CIDRs` or `ClusterCIDRs` object can still make the
 controller request any public URL. Only the values in the response that are CIDRs or IP addresses
-reach `status.cidrs`, and error messages name types, not fetched values, so the rest of the response
-isn't readable back. The IP addresses it contains still are. Treat creating these objects as a
-privileged operation. See
+reach `status.cidrs`, and the text of an error names a type or a status code, never a fetched
+value. The text of a CEL expression that fails on a response is not shown at all: the condition
+says only that it failed, and the details go to the controller log (they can quote the response,
+so that log can hold parts of one).
+
+**This does not make a response unreadable for whoever writes the object.** The same person writes
+the CEL expression, and an expression can turn other parts of the response into addresses that
+pass the checks and reach `status.cidrs`. So treat everything the controller can reach and fetch
+with a GET as readable by whoever can create a `CIDRs` object: that matters for hosts that trust
+the controller's source address (for example the cluster's NAT egress address), and, with global
+unicast IPv6 pod networks or `--cidr-source-allow-private-destinations`, for internal endpoints.
+The origin allowlist is the control that limits it: with it set, the author can only read the
+hosts the admin listed. Treat creating these objects as a privileged operation. See
 [CIDRs — Restricting where sources can be fetched from](cidrs.md#restricting-where-sources-can-be-fetched-from).
 
 See
