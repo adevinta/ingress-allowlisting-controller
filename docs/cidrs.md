@@ -202,6 +202,7 @@ status and the reason is reported in its `UpToDate` condition.
 | Fetch timeout | 30 s | Connecting, response headers and reading the body. It does **not** interrupt the processing of a response that is already read: that is bounded by the limits below |
 | Response size | 5 MiB | Bytes read from the response body |
 | CEL cost | 1,000,000 | Estimated cost (roughly: operations) of one CEL evaluation |
+| Processing memory | 30x the cap, or half the free memory | How much the heap may grow while a response is decoded. See below. Not a flag |
 | Nesting depth | 32 levels | How deeply the decoded response (JSON or YAML) may nest maps and lists. A constant, not a flag |
 | JSONPath expression | one `..`, unions up to 8 | What a `jsonPath` expression may multiply: recursive descent (`..`) at most once, and its unions (`[a,b]`) together at most 8 results per match. Constants, not flags |
 
@@ -231,10 +232,20 @@ Key properties:
   else, use `cel`: it has the cost limit. The depth limit applies to CEL too.
 - **The cost limit measures CPU, not memory.** Memory is bounded by the response size cap, which
   limits the data an expression can work on.
-- **Memory needed is roughly 25–30x the body size.** Decoding and CEL processing peak at about
-  50 MiB for the AWS feed and about 200 MiB for a 5 MiB body. The chart's 256Mi limit fits the
-  default cap; if you raise `maxResponseBytes`, raise `resources.limits.memory` with it. The chart
-  sets `GOMEMLIMIT` from the container limit so the GC works harder before the pod is OOM-killed.
+- **Memory: a real feed needs about 15x its size, a hostile body 100x.** The AWS feed (2.6 MiB)
+  takes about 40 MiB to decode. A body of many tiny values (`[[],[],…]`) takes 70 to 110 times
+  its size, so a 5 MiB one would take about 500 MiB, kill the pod, and kill it again at every
+  start. So decoding is guarded: if it makes the heap grow by more than the **smaller** of the two
+  below, the fetch fails and the last list stays (never less than 16 MiB):
+  - **30 times `--cidr-source-max-response-bytes`**, and
+  - **half of the free memory under `GOMEMLIMIT`**, so a small pod is protected too. The chart sets
+    `GOMEMLIMIT` from the container's limit. Without it only the first applies, and the controller
+    warns at startup.
+- **What you see when it trips.** Whoever wrote the object sees `Use a smaller source, or ask the
+  cluster admin` in the `UpToDate` condition. The admin sees an error in the controller log
+  (`limit=processing-memory`) that says what to change: more memory, or a higher
+  `--cidr-source-max-response-bytes` together with more memory. A real feed that trips it needs
+  one of those.
 - **Configurable, and validated at startup.** See [Configuring the guardrails](#configuring-the-guardrails).
 
 ### Retrying a failed fetch
@@ -450,7 +461,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 - **A tripped limit is logged.** When the timeout, size cap or CEL cost limit rejects a fetch, the
   controller logs `…; rejecting external CIDR source: limit exceeded, keeping last-known-good
   allowlist` (preceded by the underlying error) with the fields `cidrs`, `namespace`, `uri`, `limit` (`fetch-timeout`,
-  `max-response-bytes` or `cel-cost-limit`) and `configured` (the value that was exceeded). The
+  `max-response-bytes`, `processing-memory` or `cel-cost-limit`) and `configured` (the value that was exceeded). The
   reason is also written to the object's `UpToDate` condition.
 - **A CEL expression that fails on a response is logged.** The condition only says that it failed
   (see [Remote sources](#remote-sources)); the controller logs a warning `the CEL expression
@@ -475,7 +486,7 @@ Every key is optional; an unset key keeps the default. Things to know:
 | `--cidr-source-min-mask-ipv4` | `8` | Widest IPv4 prefix accepted from a remote CIDR source (range 1–32). See [Breadth limit](#breadth-limit-on-remote-sources). |
 | `--cidr-source-min-mask-ipv6` | `20` | Widest IPv6 prefix accepted from a remote CIDR source (range 1–128). |
 | `--cidr-source-fetch-timeout` | `30s` | Maximum time for fetching one remote source: connect, response headers and reading the body. Processing the response is bounded by the CEL cost limit and the checks on nesting depth and JSONPath, not by this timeout. See [Resource limits](#resource-limits-on-remote-sources). |
-| `--cidr-source-max-response-bytes` | `5242880` | Maximum size of a remote source response body (5 MiB). A larger body fails the fetch; it is never truncated. Needs about 25–30x this in pod memory. |
+| `--cidr-source-max-response-bytes` | `5242880` | Maximum size of a remote source response body (5 MiB). A larger body fails the fetch; it is never truncated. Decoding may use up to 30x this in memory (see [Resource limits](#resource-limits-on-remote-sources)). |
 | `--cidr-source-cel-cost-limit` | `1000000` | Maximum estimated cost of one CEL expression evaluated on a remote source. |
 | `--cidr-source-retry-interval` | `5m` | How soon a failed remote fetch is retried. An object with a shorter `spec.requeueAfter` is retried at that interval instead. See [Retrying a failed fetch](#retrying-a-failed-fetch). |
 | `--cidr-source-apply-delay` | `0` *(off)* | How long a CIDR new to a remote source waits in `status.pending` before it is used, e.g. `24h`. Only additions from the source's response wait: CIDRs the source removes are taken out right away, and `spec.cidrs`, the first list of a new object, and a source changed in the spec (`uri`, `cel`, `jsonPath`, `format`) are used right away. See [Delaying new CIDRs from a source](#delaying-new-cidrs-from-a-source). |

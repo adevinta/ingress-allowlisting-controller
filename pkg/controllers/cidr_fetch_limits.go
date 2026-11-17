@@ -217,9 +217,12 @@ func (c *cappedBody) exceeded() error {
 // typed signal rather than by message text, because the parsers wrap and sometimes flatten errors.
 func fetchLimitTripped(fetchCtx context.Context, err error, opts CIDRSourceOptions) (limit string, configured any, ok bool) {
 	var cancelled interpreter.EvalCancelledError
+	var overBudget *processingMemoryError
 	switch {
 	case errors.Is(err, errResponseTooLarge):
 		return "max-response-bytes", opts.MaxResponseBytes, true
+	case errors.As(err, &overBudget):
+		return "processing-memory", overBudget.budget, true
 	case errors.As(err, &cancelled) && cancelled.Cause == interpreter.CostLimitExceeded:
 		return "cel-cost-limit", opts.CELCostLimit, true
 	case errors.Is(fetchCtx.Err(), context.DeadlineExceeded):
@@ -244,6 +247,7 @@ func (o CIDRSourceOptions) LogEffective() {
 		"clusterHeadersNamespace":  o.ClusterHeadersNamespace,
 	}).Info("remote CIDR source guardrails")
 	o.warnIfPermissive()
+	warnIfNoMemoryLimit()
 }
 
 // reportLimitTripped logs a failed fetch that was caused by one of the limits, naming the limit
@@ -254,11 +258,21 @@ func reportLimitTripped(logCtx, fetchCtx context.Context, err error, opts CIDRSo
 	if !tripped {
 		return false
 	}
-	log.DefaultLogger.WithContext(logCtx).
+	logger := log.DefaultLogger.WithContext(logCtx).
 		WithFields(fields).
 		WithField("limit", limit).
-		WithField("configured", configured).
-		Error(err, "; rejecting external CIDR source: limit exceeded, keeping last-known-good allowlist")
+		WithField("configured", configured)
+	message := "; rejecting external CIDR source: limit exceeded, keeping last-known-good allowlist"
+	var overBudget *processingMemoryError
+	if errors.As(err, &overBudget) {
+		// For the admin, who reads this log: what to change. The condition tells the person who
+		// wrote the object to use a smaller source or to ask the admin.
+		logger = logger.
+			WithField("memoryLimit", overBudget.memoryLimitText()).
+			WithField("maxResponseBytes", overBudget.responseCap)
+		message = "; rejecting external CIDR source: " + overBudget.adminHint() + ", keeping last-known-good allowlist"
+	}
+	logger.Error(err, message)
 	return true
 }
 
