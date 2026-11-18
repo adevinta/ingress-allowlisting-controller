@@ -22,10 +22,16 @@ import (
 
 var allFeatures = rbacFeatures{ingress: true, gateway: true, networkPolicy: true, service: true, httpRoute: true, httpHeaders: true, leaderElection: true}
 
-// allWriters is every writer, as registered when both Istio and Traefik are installed.
+// allWriters is every writer, as registered when Istio, Traefik and the AWS Load Balancer
+// Controller are installed.
 func allWriters() (writers.L4WriterRegistry, writers.L7WriterRegistry) {
 	resolver := resolvers.CidrResolver{AnnotationPrefix: resolvers.DefaultPrefix}
-	return writers.L4WriterRegistry{writers.IstioControllerName: writers.NewIstioL4Writer(nil, "ingress-allowlisting-controller", "ipam.adevinta.com")},
+	aws := writers.NewAWSLBL4Writer(nil, resolvers.DefaultPrefix)
+	return writers.L4WriterRegistry{
+			writers.IstioControllerName:  writers.NewIstioL4Writer(nil, "ingress-allowlisting-controller", "ipam.adevinta.com"),
+			writers.AWSALBControllerName: aws,
+			writers.AWSNLBControllerName: aws,
+		},
 		writers.L7WriterRegistry{
 			writers.IstioControllerName:   writers.NewIstioL7Writer(nil, "test", resolver),
 			writers.TraefikControllerName: writers.NewTraefikL7Writer(nil, "test", resolver),

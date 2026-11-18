@@ -29,9 +29,13 @@ type discovery struct {
 	gatewayAPI       bool // Gateway and HTTPRoute CRDs
 	istio            bool // security.istio.io AuthorizationPolicy CRD
 	traefik          bool // traefik.io Middleware CRD
+	awsLBConfig      bool // gateway.k8s.aws LoadBalancerConfiguration CRD (AWS Load Balancer Controller)
 	// istioClass / traefikClass are GatewayClasses handled by Istio / Traefik, empty if none.
 	istioClass   string
 	traefikClass string
+	// awsALBClass / awsNLBClass are GatewayClasses of the AWS Load Balancer Controller, empty if none.
+	awsALBClass string
+	awsNLBClass string
 	// httpRouteLabels must be set on HTTPRoutes when the controller watches only labelled routes
 	// (--httproute-label-selector). httpRouteLabelsErr is set when that selector cannot be met.
 	httpRouteLabels    map[string]string
@@ -48,10 +52,13 @@ func discover(ctx context.Context, c client.Client, ctrl controllerInfo, annotat
 		gatewayAPI:       has(gatewayApiv1.GroupName, "Gateway") && has(gatewayApiv1.GroupName, "HTTPRoute"),
 		istio:            has("security.istio.io", "AuthorizationPolicy"),
 		traefik:          has("traefik.io", "Middleware"),
+		awsLBConfig:      has(lbConfigGVK.Group, lbConfigGVK.Kind),
 	}
 	if d.gatewayAPI {
 		d.istioClass = gatewayClassFor(ctx, c, writers.IstioControllerName, os.Getenv("IAC_ISTIO_GATEWAYCLASS"))
 		d.traefikClass = gatewayClassFor(ctx, c, writers.TraefikControllerName, os.Getenv("IAC_TRAEFIK_GATEWAYCLASS"))
+		d.awsALBClass = gatewayClassFor(ctx, c, writers.AWSALBControllerName, os.Getenv("IAC_AWS_ALB_GATEWAYCLASS"))
+		d.awsNLBClass = gatewayClassFor(ctx, c, writers.AWSNLBControllerName, os.Getenv("IAC_AWS_NLB_GATEWAYCLASS"))
 	}
 	if selector := ctrl.flag("httproute-label-selector", ""); selector != "" {
 		set, err := labels.ConvertSelectorToLabelsMap(selector)

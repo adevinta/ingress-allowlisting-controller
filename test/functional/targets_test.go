@@ -44,6 +44,8 @@ func targets(d discovery) []target {
 		istioGatewayTarget(d),
 		istioHTTPRouteTarget(d),
 		traefikHTTPRouteTarget(d),
+		awsGatewayTarget(d, false),
+		awsGatewayTarget(d, true),
 	}
 }
 

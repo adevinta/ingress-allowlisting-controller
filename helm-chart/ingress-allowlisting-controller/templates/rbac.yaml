@@ -46,6 +46,11 @@ rules:
 - apiGroups: ["security.istio.io"]
   resources: ["authorizationpolicies"]
   verbs: ["list", "get", "watch", "create", "update", "delete"]
+# Gateways of the AWS Load Balancer Controller: the allowlist goes into the sourceRanges of their
+# LoadBalancerConfiguration, read on demand and patched.
+- apiGroups: ["gateway.k8s.aws"]
+  resources: ["loadbalancerconfigurations"]
+  verbs: ["get", "patch"]
 {{- end }}
 {{- if .Values.httproute.enabled }}
 # patch: the Traefik writer adds and removes its Middleware filter on the route with a patch.
